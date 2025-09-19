@@ -1996,6 +1996,7 @@ static INLINE void runner_doself_grav_pp_truncated(
   }
 }
 
+extern void self_pp_offload(int periodic, float rmax_i, double min_trunc, const float *r_s_inv, const int *gcount_i, const int *gcount_padded_i, int ci_active, float *d_h_i, float *d_mass_i, float *d_x_i, float *d_y_i, float *d_z_i, float *d_a_x_i, float *d_a_y_i, float *d_a_z_i, float *d_pot_i, int *d_active_i, int ncells, int max_cell_size, int *gcounts);
 /**
  * @brief Computes the interaction of all the particles in a cell with all the
  * other ones.
@@ -2010,7 +2011,7 @@ static INLINE void runner_doself_grav_pp_truncated(
  * @param r The #runner.
  * @param c The #cell.
  */
-void runner_doself_grav_pp(struct runner *r, struct cell *c) {
+void runner_doself_grav_pp(struct runner *r, struct cell *c, float *d_h_i, float *d_mass_i, float *d_x_i, float *d_y_i, float *d_z_i, float *d_a_x_i, float *d_a_y_i, float *d_a_z_i, float *d_pot_i,int *d_active_i, int ncells, int max_cell_size, int *gcounts){
 
   /* Recover some useful constants */
   const struct engine *e = r->e;
@@ -2029,7 +2030,7 @@ void runner_doself_grav_pp(struct runner *r, struct cell *c) {
   if (!cell_is_active_gravity(c, e)) return;
 
   /* Check that we are not doing something stupid */
-  if (c->split) error("Running P-P on a splitable cell");
+  //if (c->split) error("Running P-P on a splitable cell"); //MYCOMMENT
 
   /* Do we need to start by drifting things ? */
   if (!cell_are_gpart_drifted(c, e)) error("Un-drifted gparts");
@@ -2050,7 +2051,14 @@ void runner_doself_grav_pp(struct runner *r, struct cell *c) {
   gravity_cache_populate_no_mpole(e->max_active_bin, ci_cache, c->grav.parts,
                                   gcount, gcount_padded, loc, c,
                                   e->gravity_properties);
+                                  
+  const float rmax = 2. * c->grav.multipole->r_max;
+  const int ci_active =
+      cell_is_active_gravity(c, e) && (c->nodeID == e->nodeID);
+                                  
+  self_pp_offload(periodic, rmax, min_trunc, &r_s_inv, &gcount, &gcount_padded, ci_active, d_h_i, d_mass_i, d_x_i, d_y_i, d_z_i, d_a_x_i, d_a_y_i, d_a_z_i, d_pot_i, d_active_i, ncells, max_cell_size, gcounts);
 
+  if(2<1){
   /* Can we use the Newtonian version or do we need the truncated one ? */
   if (!periodic) {
 
@@ -2076,6 +2084,7 @@ void runner_doself_grav_pp(struct runner *r, struct cell *c) {
       runner_doself_grav_pp_full(ci_cache, gcount, gcount_padded, e,
                                  c->grav.parts);
     }
+  }
   }
 
   /* Write back to the particles */
@@ -2598,7 +2607,7 @@ void runner_dopair_recursive_grav(struct runner *r, struct cell *ci,
  * @param gettimer Are we timing this ?
  */
 void runner_doself_recursive_grav(struct runner *r, struct cell *c,
-                                  const int gettimer) {
+                                  const int gettimer, float *d_h_i, float *d_h_j, float *d_mass_i, float *d_mass_j, float *d_x_i, float *d_x_j, float *d_y_i, float *d_y_j, float *d_z_i, float *d_z_j, float *d_a_x_i, float *d_a_y_i, float *d_a_z_i, float *d_a_x_j, float *d_a_y_j, float *d_a_z_j, float *d_pot_i, float *d_pot_j, int *d_active_i, int *d_active_j, float *d_CoM_i, float *d_CoM_j, int ncells, int max_cell_size, int *gcounts) {
 
   /* Some constants */
   const struct engine *e = r->e;
@@ -2618,7 +2627,7 @@ void runner_doself_recursive_grav(struct runner *r, struct cell *c,
 
   /* If the cell is split, interact each progeny with itself, and with
      each of its siblings. */
-  if (c->split) {
+  /*if (c->split) {
 
     for (int j = 0; j < 8; j++) {
       if (c->progeny[j] != NULL) {
@@ -2633,13 +2642,13 @@ void runner_doself_recursive_grav(struct runner *r, struct cell *c,
         }
       }
     }
-  }
+  }*/
 
   /* If the cell is not split, then just go for it... */
-  else {
+  //else {
 
-    runner_doself_grav_pp(r, c);
-  }
+    runner_doself_grav_pp(r, c, d_h_i, d_mass_i, d_x_i, d_y_i, d_z_i, d_a_x_i, d_a_y_i, d_a_z_i, d_pot_i, d_active_i, ncells, max_cell_size, gcounts);
+  //}
 
   if (gettimer) TIMER_TOC(timer_dosub_self_grav);
 }

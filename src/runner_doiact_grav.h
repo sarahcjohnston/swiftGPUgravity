@@ -31,7 +31,7 @@ void runner_dopair_grav_pp(struct runner *r, struct cell *ci, struct cell *cj,
                            const int symmetric, const int allow_mpole);
 
 void runner_doself_recursive_grav(struct runner *r, struct cell *c,
-                                  int gettimer);
+                                  int gettimer, float *d_h_i, float *d_h_j, float *d_mass_i, float *d_mass_j, float *d_x_i, float *d_x_j, float *d_y_i, float *d_y_j, float *d_z_i, float *d_z_j, float *d_a_x_i, float *d_a_y_i, float *d_a_z_i, float *d_a_x_j, float *d_a_y_j, float *d_a_z_j, float *d_pot_i, float *d_pot_j, int *d_active_i, int *d_active_j, float *d_CoM_i, float *d_CoM_j, int ncells, int max_cell_size, int *d_gcounts);
 
 void runner_dopair_recursive_grav(struct runner *r, struct cell *ci,
                                   struct cell *cj, int gettimer);
@@ -44,7 +44,7 @@ void runner_do_grav_long_range(struct runner *r, struct cell *ci, int timer);
 
 /* Internal functions (for unit tests and debugging) */
 
-void runner_doself_grav_pp(struct runner *r, struct cell *c);
+void runner_doself_grav_pp(struct runner *r, struct cell *c, float *d_h_i, float *d_mass_i, float *d_x_i, float *d_y_i, float *d_z_i, float *d_a_x_i, float *d_a_y_i, float *d_a_z_i, float *d_pot_i,int *d_active_i, int ncells, int max_cell_size, int *gcounts);
 
 void runner_dopair_grav_pp(struct runner *r, struct cell *ci, struct cell *cj,
                            const int symmetric, const int allow_mpole);

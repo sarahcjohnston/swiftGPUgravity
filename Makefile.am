@@ -81,15 +81,27 @@ else
 ENGINE_POLICY_SETAFFINITY=
 endif
 
+#  CUDA sources.
+cuda_grav.o: grav_pp_offload.cu
+	nvcc -dc grav_pp_offload.cu -o cuda_grav.o -arch=native -I./src -I. -fmad=false
+
+link_grav.o: cuda_grav.o
+	nvcc cuda_grav.o -arch=native -o link_grav.o -lcudadevrt -lcudart -dlink
+	
+CUDALDFLAGS = -L/usr/local/cuda/lib64
+CUDALIBS= -lcudadevrt -lcudart -lcuda -lstdc++
+
 # Sources for swift
 swift_SOURCES = swift.c
 swift_CFLAGS = $(MYFLAGS) $(AM_CFLAGS) -DENGINE_POLICY="engine_policy_keep $(ENGINE_POLICY_SETAFFINITY)"
-swift_LDADD =  src/libswiftsim.la argparse/libargparse.la $(VELOCIRAPTOR_LIBS) $(EXTRA_LIBS) $(LD_CSDS)
+swift_LDFLAGS = $(CUDALDFLAGS)
+swift_LDADD =  cuda_grav.o link_grav.o src/libswiftsim.la argparse/libargparse.la $(VELOCIRAPTOR_LIBS) $(EXTRA_LIBS) $(LD_CSDS)
 
 # Sources for swift_mpi, do we need an affinity policy for MPI?
 swift_mpi_SOURCES = swift.c
 swift_mpi_CFLAGS = $(MYFLAGS) $(AM_CFLAGS) $(MPI_FLAGS) -DENGINE_POLICY="engine_policy_keep $(ENGINE_POLICY_SETAFFINITY)"
-swift_mpi_LDADD =  src/libswiftsim_mpi.la argparse/libargparse.la $(MPI_LIBS) $(VELOCIRAPTOR_MPI_LIBS) $(EXTRA_LIBS) $(LD_CSDS)
+swift_mpi_LDFLAGS = $(CUDALDFLAGS)
+swift_mpi_LDADD =  cuda_grav.o link_grav.o src/libswiftsim_mpi.la argparse/libargparse.la $(MPI_LIBS) $(VELOCIRAPTOR_MPI_LIBS) $(EXTRA_LIBS) $(LD_CSDS)
 
 # Sources for fof
 fof_SOURCES = swift_fof.c
