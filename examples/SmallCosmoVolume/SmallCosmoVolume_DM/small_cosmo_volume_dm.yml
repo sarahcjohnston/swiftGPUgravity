@@ -32,8 +32,8 @@ Gravity:
 # Parameters governing the snapshots
 Snapshots:
   basename:            snap
-  delta_time:          1.0816  # Only every second VELOCIraptor invoke gets a full snapshot dump.
-  scale_factor_first:  0.1     # z = 9
+  delta_time:          1.01  # Only every second VELOCIraptor invoke gets a full snapshot dump.
+  scale_factor_first:  0.02     # z = 9
   compression:         4
   invoke_ps:           1
 

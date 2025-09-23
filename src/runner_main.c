@@ -146,6 +146,9 @@ extern "C" {
 #include "runner_doiact_hydro.h"
 #include "runner_doiact_undef.h"
 
+/* Import the GPU functions needed. */
+#include "gpu_functions.h"
+
 extern void self_pp_offload(int periodic, float rmax_i, double min_trunc, int* active_i, const float *x_i, const float *y_i, const float *z_i, float *pot_i, float *a_x_i, float *a_y_i, float *a_z_i, float *mass_i_arr, const float *r_s_inv, float *h_i, const int *gcount_i, const int *gcount_padded_i, int ci_active, float *d_h_i, float *d_mass_i, float *d_x_i, float *d_y_i, float *d_z_i, float *d_a_x_i, float *d_a_y_i, float *d_a_z_i, float *d_pot_i, int *d_active_i, int *full, int *truncated);
 /**
  * @brief The #runner main thread routine.
@@ -173,109 +176,27 @@ void *runner_main(void *data) {
     struct task *t = NULL;
     struct task *prev = NULL;
     
-    /* floats needed for GPU calculations */
-	float *h_i;
-	float *h_j;
-	float *mass_i;
-	float *mass_j;
-	float *x_i;
-	float *x_j;
-	float *y_i;
-	float *y_j;
-	float *z_i;
-	float *z_j;
-	float *a_x_i;
-	float *a_y_i;
-	float *a_z_i;
-	float *a_x_j;
-	float *a_y_j;
-	float *a_z_j;
-	float *pot_i;
-	float *pot_j;
-	int *active_i;
-	int *active_j;
-	float *CoM_i;
-	float *CoM_j;
-	int *gcounts;
-	
-	float *d_h_i;
-	float *d_h_j;
-	float *d_mass_i;
-	float *d_mass_j;
-	float *d_x_i;
-	float *d_x_j;
-	float *d_y_i;
-	float *d_y_j;
-	float *d_z_i;
-	float *d_z_j;
-	float *d_a_x_i;
-	float *d_a_y_i;
-	float *d_a_z_i;
-	float *d_a_x_j;
-	float *d_a_y_j;
-	float *d_a_z_j;
-	float *d_pot_i;
-	float *d_pot_j;
-	int *d_active_i;
-	int *d_active_j;
-	float *d_CoM_i;
-	float *d_CoM_j;
-	int * d_gcounts;
+    	//allocating floats for GPU calculations
+    	struct gravity_gpu_values_host *gravity_gpu_values_h;
+    	struct gravity_gpu_values_device *gravity_gpu_values_d;
 	
 	//define number of cells to transfer
 	int ncells = 1;
-
-	//allocate memory on host
-	cudaMallocHost((void **)&h_i, ncells * max_cell_size * sizeof(float));
-	cudaMallocHost((void **)&h_j, ncells * max_cell_size * sizeof(float));
-	cudaMallocHost((void **)&mass_i, ncells * max_cell_size * sizeof(float));
-	cudaMallocHost((void **)&mass_j, ncells * max_cell_size * sizeof(float));
-	cudaMallocHost((void **)&x_i, ncells * max_cell_size * sizeof(float));
-	cudaMallocHost((void **)&x_j, ncells * max_cell_size * sizeof(float));
-	cudaMallocHost((void **)&y_i, ncells * max_cell_size * sizeof(float));
-	cudaMallocHost((void **)&y_j, ncells * max_cell_size * sizeof(float));
-	cudaMallocHost((void **)&z_i, ncells * max_cell_size * sizeof(float));
-	cudaMallocHost((void **)&z_j, ncells * max_cell_size * sizeof(float));
-	cudaMallocHost((void **)&a_x_i, ncells * max_cell_size * sizeof(float));
-	cudaMallocHost((void **)&a_y_i, ncells * max_cell_size * sizeof(float));
-	cudaMallocHost((void **)&a_z_i, ncells * max_cell_size * sizeof(float));
-	cudaMallocHost((void **)&a_x_j, ncells * max_cell_size * sizeof(float));
-	cudaMallocHost((void **)&a_y_j, ncells * max_cell_size * sizeof(float));
-	cudaMallocHost((void **)&a_z_j, ncells * max_cell_size * sizeof(float));
-	cudaMallocHost((void **)&pot_i, ncells * max_cell_size * sizeof(float));
-	cudaMallocHost((void **)&pot_j, ncells * max_cell_size * sizeof(float));
-	cudaMallocHost((void **)&active_i, ncells * max_cell_size * sizeof(int));
-	cudaMallocHost((void **)&active_j, ncells * max_cell_size * sizeof(int));
-	cudaMallocHost((void **)&CoM_i, ncells * 3 * sizeof(float));
-	cudaMallocHost((void **)&CoM_j, ncells * 3 * sizeof(float));
-	cudaMallocHost((void **)&gcounts, ncells * sizeof(int));
-
-	//allocate memory on device
-	cudaMalloc((void **)&d_h_i, ncells * max_cell_size * sizeof(float));
-	cudaMalloc((void **)&d_h_j, ncells * max_cell_size * sizeof(float));
-	cudaMalloc((void **)&d_mass_i, ncells * max_cell_size * sizeof(float));
-	cudaMalloc((void **)&d_mass_j, ncells * max_cell_size * sizeof(float));
-	cudaMalloc((void **)&d_x_i, ncells * max_cell_size * sizeof(float));
-	cudaMalloc((void **)&d_x_j, ncells * max_cell_size * sizeof(float));
-	cudaMalloc((void **)&d_y_i, ncells * max_cell_size * sizeof(float));
-	cudaMalloc((void **)&d_y_j, ncells * max_cell_size * sizeof(float));
-	cudaMalloc((void **)&d_z_i, ncells * max_cell_size * sizeof(float));
-	cudaMalloc((void **)&d_z_j, ncells * max_cell_size * sizeof(float));
-	cudaMalloc((void **)&d_a_x_i, ncells * max_cell_size * sizeof(float));
-	cudaMalloc((void **)&d_a_y_i, ncells * max_cell_size * sizeof(float));
-	cudaMalloc((void **)&d_a_z_i, ncells * max_cell_size * sizeof(float));
-	cudaMalloc((void **)&d_a_x_j, ncells * max_cell_size * sizeof(float));
-	cudaMalloc((void **)&d_a_y_j, ncells * max_cell_size * sizeof(float));
-	cudaMalloc((void **)&d_a_z_j, ncells * max_cell_size * sizeof(float));
-	cudaMalloc((void **)&d_pot_i, ncells * max_cell_size * sizeof(float));
-	cudaMalloc((void **)&d_pot_j, ncells * max_cell_size * sizeof(float));
-	cudaMalloc((void **)&d_active_i, ncells * max_cell_size * sizeof(int));
-	cudaMalloc((void **)&d_active_j, ncells * max_cell_size * sizeof(int));
-	cudaMalloc((void **)&d_CoM_i, ncells * 3 * sizeof(float));
-	cudaMalloc((void **)&d_CoM_j, ncells * 3 * sizeof(float));
-	cudaMalloc((void **)&d_gcounts, ncells * sizeof(int));
 	
+	//allocate memory for GPU operations
+	gravity_gpu_values_h = malloc(sizeof(struct gravity_gpu_values_host));
+	gravity_gpu_allocate_mem_host(gravity_gpu_values_h, ncells, max_cell_size);
+	
+	gravity_gpu_values_d = malloc(sizeof(struct gravity_gpu_values_device));
+	gravity_gpu_allocate_mem_device(gravity_gpu_values_d, ncells, max_cell_size);
+	
+	//start counting packing operations
 	int pack_count = 0;
+	int packed = 0;
+	
+	//struct cell* grav_cells[1];
+      	struct cell** grav_cells;
+      	grav_cells = malloc(ncells * sizeof(struct cell*));
 	
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) 
@@ -299,8 +220,6 @@ void *runner_main(void *data) {
       /* Get the cells. */
       struct cell *ci = t->ci;
       struct cell *cj = t->cj;
-	
-      struct cell* grav_cells[1];
 
 #ifdef SWIFT_DEBUG_TASKS
       /* Mark the thread we run on */
@@ -343,97 +262,46 @@ void *runner_main(void *data) {
   	    
   	    gravity_cache_populate_no_mpole(e->max_active_bin, ci_cache, ci->grav.parts, gcount, gcount_padded, loc, ci, e->gravity_properties);
   
-  	    //put values into long arrays
-  	    for (int i = 0; i < gcount; i++){
-            	h_i[i + pack_count*max_cell_size] = ci_cache->epsilon[i];
-            	h_j[i + pack_count*max_cell_size] = ci_cache->epsilon[i];
-            	mass_i[i + pack_count*max_cell_size] = ci_cache->m[i];
-            	mass_j[i + pack_count*max_cell_size] = ci_cache->m[i];
-            	x_i[i + pack_count*max_cell_size] = ci_cache->x[i];
-            	x_j[i + pack_count*max_cell_size] = ci_cache->x[i];
-            	y_i[i + pack_count*max_cell_size] = ci_cache->y[i];
-            	y_j[i + pack_count*max_cell_size] = ci_cache->y[i];
-            	z_i[i + pack_count*max_cell_size] = ci_cache->z[i];
-            	z_j[i + pack_count*max_cell_size] = ci_cache->z[i];
-            	a_x_i[i + pack_count*max_cell_size] = ci_cache->a_x[i];
-            	a_x_j[i + pack_count*max_cell_size] = ci_cache->a_x[i];
-            	a_y_i[i + pack_count*max_cell_size] = ci_cache->a_y[i];
-            	a_y_j[i + pack_count*max_cell_size] = ci_cache->a_y[i];
-            	a_z_i[i + pack_count*max_cell_size] = ci_cache->a_z[i];
-            	a_z_j[i + pack_count*max_cell_size] = ci_cache->a_z[i];
-            	pot_i[i + pack_count*max_cell_size] = ci_cache->pot[i];
-            	pot_j[i + pack_count*max_cell_size] = ci_cache->pot[i];
-            	active_i[i + pack_count*max_cell_size] = ci_cache->active[i];
-            	active_j[i + pack_count*max_cell_size] = ci_cache->active[i];
-            	//add two arrays for each particle to idenify where cj starts and ends
-            }
-            
-            /*for (int i =0; i < 3; i++){
-            	CoM_i[pack_count*max_cell_size + i] = ci_cache->x[i];
-            	CoM_j[pack_count*max_cell_size + i] = cj_cache->x[i];
-            	}*/
+  	    //fill the GPU arrays
+	    gravity_gpu_fill_arrays(gravity_gpu_values_h, ci_cache, pack_count, max_cell_size, gcount);
             	
+            //store the address of the cells we are working on and the number of particles in each cell	
             grav_cells[pack_count] = ci;
-            gcounts[pack_count] = gcount;
             
+            gravity_gpu_values_h->gcounts[pack_count] = gcount;
+            
+            //update that we packed a cell into our array
             pack_count += 1;
             //Here we need to unlock the cell(s)
             //if arrays have been filled
             if (pack_count == ncells){
+            	for (int j = 0; j < ncells; j++) {
+    		if (grav_cells[j] == NULL) {
+        		printf(stderr, "ERROR: grav_cells[%d] is NULL!\n", j);
+        		abort();
+    		}
+
+    		if (grav_cells[j]->grav.parts == NULL) {
+        		printf(stderr, "ERROR: grav_cells[%d]->grav.parts is NULL!\n", j);
+        		abort();
+    		}
+    		}
             
-            	/*for (int i = 0; i < ncells; i++) {
-        		printf("Address of cell%d: %p\n", i + 1, grav_cache[i]);
-    		}*/
-              
-            	//printf("Outbound! GPU: %f CPU: %f \n", a_x_i[(pack_count-1)*max_cell_size+1], ci_cache->a_x[1]);
-            	
+            
             	//now copy all the arrays to the device
-            	cudaMemcpyAsync(d_h_i, h_i, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, 0);
-            	cudaMemcpyAsync(d_h_j, h_j, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_mass_i, mass_i, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_mass_j, mass_j, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_x_i, x_i, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_y_i, y_i, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_z_i, z_i, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_x_j, x_j, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_y_j, y_j, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_z_j, z_j, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_a_x_i, a_x_i, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_a_y_i, a_y_i, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_a_z_i, a_z_i, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_a_x_j, a_x_j, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_a_y_j, a_y_j, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_a_z_j, a_z_j, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_pot_i, pot_i, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_pot_j, pot_j, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_active_i, active_i, ncells * max_cell_size * sizeof(int), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_active_j, active_j, ncells * max_cell_size * sizeof(int), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_CoM_i, CoM_i, ncells * 3 * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_CoM_j, CoM_j, ncells * 3 * sizeof(float), cudaMemcpyHostToDevice, 0);
-		cudaMemcpyAsync(d_gcounts, gcounts, ncells * sizeof(int), cudaMemcpyHostToDevice, 0);
+        	gravity_gpu_H2D(gravity_gpu_values_h, gravity_gpu_values_d, ncells, max_cell_size);
 		
 		cudaError_t err2 = cudaGetLastError();
     		if (err2 != cudaSuccess) 
     			printf("Error2: %s\n", cudaGetErrorString(err2));
     			
-    		//cudaDeviceSynchronize();
     			
-    		runner_doself_recursive_grav(r, ci, 1, d_h_i, d_h_j, d_mass_i, d_mass_j, d_x_i, d_x_j, d_y_i, d_y_j, d_z_i, d_z_j, d_a_x_i, d_a_y_i, d_a_z_i, d_a_x_j, d_a_y_j, d_a_z_j, d_pot_i, d_pot_j, d_active_i, d_active_j, d_CoM_i, d_CoM_j, ncells, max_cell_size, d_gcounts);
+    		runner_doself_recursive_grav(r, ci, 1, gravity_gpu_values_d->d_h_i, gravity_gpu_values_d->d_h_j, gravity_gpu_values_d->d_mass_i, gravity_gpu_values_d->d_mass_j, gravity_gpu_values_d->d_x_i, gravity_gpu_values_d->d_x_j, gravity_gpu_values_d->d_y_i, gravity_gpu_values_d->d_y_j, gravity_gpu_values_d->d_z_i, gravity_gpu_values_d->d_z_j, gravity_gpu_values_d->d_a_x_i, gravity_gpu_values_d->d_a_y_i, gravity_gpu_values_d->d_a_z_i, gravity_gpu_values_d->d_a_x_j, gravity_gpu_values_d->d_a_y_j, gravity_gpu_values_d->d_a_z_j, gravity_gpu_values_d->d_pot_i, gravity_gpu_values_d->d_pot_j, gravity_gpu_values_d->d_active_i, gravity_gpu_values_d->d_active_j, gravity_gpu_values_d->d_CoM_i, gravity_gpu_values_d->d_CoM_j, ncells, max_cell_size, gravity_gpu_values_d->d_gcounts);
     		
-    		//cudaDeviceSynchronize();
+    		cudaDeviceSynchronize();
 		
-		//a_x_i[1] = 0.f;
-		//printf("Reset to 0: %f \n", a_x_i[(pack_count-1)*max_cell_size+1]);
-	
-		cudaMemcpyAsync(a_x_i, d_a_x_i, ncells * max_cell_size * sizeof(float), cudaMemcpyDeviceToHost, 0);
-		cudaMemcpyAsync(a_y_i, d_a_y_i, ncells * max_cell_size * sizeof(float), cudaMemcpyDeviceToHost, 0);
-		cudaMemcpyAsync(a_z_i, d_a_z_i, ncells * max_cell_size * sizeof(float), cudaMemcpyDeviceToHost, 0);
-		cudaMemcpyAsync(a_x_j, d_a_x_j, ncells * max_cell_size * sizeof(float), cudaMemcpyDeviceToHost, 0);
-		cudaMemcpyAsync(a_y_j, d_a_y_j, ncells * max_cell_size * sizeof(float), cudaMemcpyDeviceToHost, 0);
-		cudaMemcpyAsync(a_z_j, d_a_z_j, ncells * max_cell_size * sizeof(float), cudaMemcpyDeviceToHost, 0);
-		cudaMemcpyAsync(pot_i, d_pot_i, ncells * max_cell_size * sizeof(float), cudaMemcpyDeviceToHost, 0);
-		cudaMemcpyAsync(pot_j, d_pot_j, ncells * max_cell_size * sizeof(float), cudaMemcpyDeviceToHost, 0);
-		
+		gravity_gpu_D2H(gravity_gpu_values_h, gravity_gpu_values_d, ncells, max_cell_size);
+
 		cudaDeviceSynchronize();
 		cudaError_t err3 = cudaGetLastError();
     		if (err != cudaSuccess) 
@@ -442,14 +310,14 @@ void *runner_main(void *data) {
     		/*send results back to relevant gravity caches*/
     		for (int j = 0; j < ncells; j++) {
     			//printf("gcount: %i \n", gcounts[j]);
-	    		for (int i =0; i < gcounts[j]; i++){
+	    		for (int i =0; i < gravity_gpu_values_h->gcounts[j]; i++){
 	    			/*if (j==1){
 	    				printf("initial: %f ", grav_cells[j]->grav.parts[i].a_grav[0]);
 	    				printf("value: %f ", a_x_i[i + j*max_cell_size]);}*/
-	    			grav_cells[j]->grav.parts[i].a_grav[0] += a_x_i[i + j*max_cell_size];
-	    			grav_cells[j]->grav.parts[i].a_grav[1] += a_y_i[i + j*max_cell_size];
-	    			grav_cells[j]->grav.parts[i].a_grav[2] += a_z_i[i + j*max_cell_size];
-	    			grav_cells[j]->grav.parts[i].potential += pot_i[i + j*max_cell_size];
+	    			grav_cells[j]->grav.parts[i].a_grav[0] += gravity_gpu_values_h->a_x_i[i + j*max_cell_size];
+	    			grav_cells[j]->grav.parts[i].a_grav[1] += gravity_gpu_values_h->a_y_i[i + j*max_cell_size];
+	    			grav_cells[j]->grav.parts[i].a_grav[2] += gravity_gpu_values_h->a_z_i[i + j*max_cell_size];
+	    			grav_cells[j]->grav.parts[i].potential += gravity_gpu_values_h->pot_i[i + j*max_cell_size];
 	    			/*if (j==1){
 	    				printf("updated: %f ", grav_cells[j]->grav.parts[i].a_grav[0]);
 	    				printf("check: %f \n", ci->grav.parts[i].a_grav[0]);}*/
@@ -476,13 +344,11 @@ void *runner_main(void *data) {
 		  //UNPACK
 		  //unlock cells i and j
 		  //enqueue_dependencies(); //Line 3296 in Abou repo
-		///}
+		//}
 		//reset counter for next pack
             	pack_count = 0;
-            	/*for (int i = 0; i < ncells; i++) {
-    			free(grav_cells[i]->grav.parts); 
-    			free(grav_cells[i]);             
-			}*/
+            	packed = 1;
+
             	}
             	}
             
@@ -856,13 +722,77 @@ void *runner_main(void *data) {
 
       /* We're done with this task, see if we get a next one. */
       prev = t;
+      //printf("pack_count= %i \n", pack_count);
+      //Here we need an if statement that checks if I am a self gravity task that is not finished packing
+      /*if(t->subtype == task_subtype_grav && t->type == task_type_self && packed==0){
+      	//printf("Holding task! \n");
+        t=NULL;  
+      }
+      else{*/
       t = scheduler_done(sched, t);
-
+      	//printf("Next task! \n");
+	//}
     } /* main loop. */
+    
+    cudaFreeHost(gravity_gpu_values_h->h_i);
+  cudaFreeHost(gravity_gpu_values_h->h_j);
+  cudaFreeHost(gravity_gpu_values_h->mass_i);
+  cudaFreeHost(gravity_gpu_values_h->mass_j);
+  cudaFreeHost(gravity_gpu_values_h->x_i);
+  cudaFreeHost(gravity_gpu_values_h->x_j);
+  cudaFreeHost(gravity_gpu_values_h->y_i);
+  cudaFreeHost(gravity_gpu_values_h->y_j);
+  cudaFreeHost(gravity_gpu_values_h->z_i);
+  cudaFreeHost(gravity_gpu_values_h->z_j);
+  cudaFreeHost(gravity_gpu_values_h->a_x_i);
+  cudaFreeHost(gravity_gpu_values_h->a_y_i);
+  cudaFreeHost(gravity_gpu_values_h->a_z_i);
+  cudaFreeHost(gravity_gpu_values_h->a_x_j);
+  cudaFreeHost(gravity_gpu_values_h->a_y_j);
+  cudaFreeHost(gravity_gpu_values_h->a_z_j);
+  cudaFreeHost(gravity_gpu_values_h->pot_i);
+  cudaFreeHost(gravity_gpu_values_h->pot_j);
+  cudaFreeHost(gravity_gpu_values_h->active_i);
+  cudaFreeHost(gravity_gpu_values_h->active_j);
+  cudaFreeHost(gravity_gpu_values_h->CoM_i);
+  cudaFreeHost(gravity_gpu_values_h->CoM_j);
+  cudaFreeHost(gravity_gpu_values_h->gcounts);
+  free(gravity_gpu_values_h);
+
+  cudaFree(gravity_gpu_values_d->d_h_i);
+  cudaFree(gravity_gpu_values_d->d_h_j);
+  cudaFree(gravity_gpu_values_d->d_mass_i);
+  cudaFree(gravity_gpu_values_d->d_mass_j);
+  cudaFree(gravity_gpu_values_d->d_x_i);
+  cudaFree(gravity_gpu_values_d->d_x_j);
+  cudaFree(gravity_gpu_values_d->d_y_i);
+  cudaFree(gravity_gpu_values_d->d_y_j);
+  cudaFree(gravity_gpu_values_d->d_z_i);
+  cudaFree(gravity_gpu_values_d->d_z_j);
+  cudaFree(gravity_gpu_values_d->d_a_x_i);
+  cudaFree(gravity_gpu_values_d->d_a_y_i);
+  cudaFree(gravity_gpu_values_d->d_a_z_i);
+  cudaFree(gravity_gpu_values_d->d_a_x_j);
+  cudaFree(gravity_gpu_values_d->d_a_y_j);
+  cudaFree(gravity_gpu_values_d->d_a_z_j);
+  cudaFree(gravity_gpu_values_d->d_pot_i);
+  cudaFree(gravity_gpu_values_d->d_pot_j);
+  cudaFree(gravity_gpu_values_d->d_active_i);
+  cudaFree(gravity_gpu_values_d->d_active_j);
+  cudaFree(gravity_gpu_values_d->d_CoM_i);
+  cudaFree(gravity_gpu_values_d->d_CoM_j);
+  cudaFree(gravity_gpu_values_d->d_gcounts);
+  free(gravity_gpu_values_d);
+  
+  free(grav_cells);
+
   }
 
   /* Be kind, rewind. */
   return NULL;
+  
+
+  
 }
 
 ticks runner_get_active_time(const struct runner *restrict r) {
