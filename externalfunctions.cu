@@ -371,7 +371,7 @@ __device__ void doself_grav_pp_full(int* active, float *h_i, float *mass_i_arr, 
 	  /* Loop over all particles in ci... */
 	  for (int pid = t; pid < gcount_i; pid+=T) {
 	  
-	    if (pid > gcount_i)
+	    if (pid >= gcount_i)
 	    	continue;
 
 	    /* Local accumulators for the acceleration */
@@ -436,7 +436,7 @@ __device__ void doself_grav_pp_truncated(int* active, float *h_i, float *mass_i_
 	  /* Loop over all particles in ci... */
 	  for (int pid = t; pid < gcounts[cell]; pid+=T) {
 	  
-	    if (pid > gcounts[cell])
+	    if (pid >= gcounts[cell])
 	    	continue;
 
 	    /* Local accumulators for the acceleration and potential */
@@ -480,16 +480,18 @@ __device__ void doself_grav_pp_truncated(int* active, float *h_i, float *mass_i_
 	    int act = 0;
 	    if (active[pid] > 0)
 	    	act = 1;
+	    /*if (active[pid] == 0)
+	    	printf("active: %i \n", active[pid]);*/
 	    	
 	    int per = 0;
 	    if (periodic > 0)
 	    	per = 1;
 
 	    /* Store everything back into values */   
-	    atomicAdd(&a_x_i[pid+cell*max_cell_size], a_x*act*ci_active*per*abs(max_r_decision-1));
-	    atomicAdd(&a_y_i[pid+cell*max_cell_size], a_y*act*ci_active*per*abs(max_r_decision-1));
-	    atomicAdd(&a_z_i[pid+cell*max_cell_size], a_z*act*ci_active*per*abs(max_r_decision-1));
-	    atomicAdd(&pot_i[pid+cell*max_cell_size], pot*act*ci_active*per*abs(max_r_decision-1));
+	    atomicAdd(&a_x_i[pid+cell*max_cell_size], a_x*per*abs(max_r_decision-1));//*act*ci_active
+	    atomicAdd(&a_y_i[pid+cell*max_cell_size], a_y*per*abs(max_r_decision-1));//*act*ci_active
+	    atomicAdd(&a_z_i[pid+cell*max_cell_size], a_z*per*abs(max_r_decision-1));//*act*ci_active
+	    atomicAdd(&pot_i[pid+cell*max_cell_size], pot*per*abs(max_r_decision-1));//*act*ci_active
 	  }
      }
 }

@@ -2027,7 +2027,7 @@ void runner_doself_grav_pp(struct runner *r, struct cell *c, float *d_h_i, float
 #endif
 
   /* Anything to do here? */
-  if (!cell_is_active_gravity(c, e)) return;
+  ///if (!cell_is_active_gravity(c, e)) return;
 
   /* Check that we are not doing something stupid */
   //if (c->split) error("Running P-P on a splitable cell"); //MYCOMMENT
@@ -2087,14 +2087,17 @@ void runner_doself_grav_pp(struct runner *r, struct cell *c, float *d_h_i, float
   }
   }
 
+  //MY COMMENT - commenting this out so it doesn't do the lock/unlock here
   /* Write back to the particles */
-#ifndef SWIFT_TASKS_WITHOUT_ATOMICS
+/*#ifndef SWIFT_TASKS_WITHOUT_ATOMICS
   lock_lock(&c->grav.plock);
 #endif
+  printf("Before cache! \n"); 
   gravity_cache_write_back(ci_cache, c, c->grav.parts, gcount);
+  printf("After cache! \n"); 
 #ifndef SWIFT_TASKS_WITHOUT_ATOMICS
   if (lock_unlock(&c->grav.plock) != 0) error("Error unlocking cell");
-#endif
+#endif*/
 
   TIMER_TOC(timer_doself_grav_pp);
 }
@@ -2623,7 +2626,9 @@ void runner_doself_recursive_grav(struct runner *r, struct cell *c,
   TIMER_TIC;
 
   /* Anything to do here? */
-  if (!cell_is_active_gravity(c, e)) return;
+  //if (!cell_is_active_gravity(c, e)) return;
+  
+  //printf("gravity is on \n");
 
   /* If the cell is split, interact each progeny with itself, and with
      each of its siblings. */
@@ -2646,6 +2651,8 @@ void runner_doself_recursive_grav(struct runner *r, struct cell *c,
 
   /* If the cell is not split, then just go for it... */
   //else {
+  
+  
 
     runner_doself_grav_pp(r, c, d_h_i, d_mass_i, d_x_i, d_y_i, d_z_i, d_a_x_i, d_a_y_i, d_a_z_i, d_pot_i, d_active_i, ncells, max_cell_size, gcounts);
   //}

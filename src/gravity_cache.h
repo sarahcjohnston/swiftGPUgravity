@@ -444,9 +444,12 @@ INLINE static void gravity_cache_populate_no_mpole(
     if (gparts[i].time_bin == time_bin_inhibited) {
       m[i] = 0.f;
       active[i] = 0;
+      printf("dummy particle \n");
     } else {
       m[i] = gparts[i].mass;
       active[i] = (int)(gparts[i].time_bin <= max_active_bin);
+      //if (active[i] == 0)
+      	//printf("active: %i time_bin: %i  max_active_bin: %i \n", active[i], gparts[i].time_bin, max_active_bin);
     }
   }
 

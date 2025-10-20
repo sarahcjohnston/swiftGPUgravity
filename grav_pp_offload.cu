@@ -14,6 +14,8 @@
 //PP ALL INTERACTIONS
 __global__ void self_grav_pp(int periodic, float rmax_i, double min_trunc, int *active_i, float *h_i, float *mass_i_arr, float r_s_inv, const float *x_i, const float *y_i, const float *z_i, float *a_x_i, float *a_y_i, float *a_z_i, float *pot_i, int gcount_i, int gcount_padded_i, int ci_active, int ncells, int max_cell_size, int *gcounts) {
 
+  //printf("ON GPU 1: %f %f %f %f %f %f %f \n", h_i[0], mass_i_arr[0], x_i[0], y_i[0], z_i[0], a_x_i[0], a_y_i[0]);
+
   int max_r_decision = 0;
   
   if (!periodic) {
@@ -38,6 +40,8 @@ __global__ void self_grav_pp(int periodic, float rmax_i, double min_trunc, int *
       doself_grav_pp_full(active_i, h_i, mass_i_arr, x_i, y_i, z_i, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size, gcounts);
     }
   }
+  
+  //printf("ON GPU 2: %f %f %f %f %f %f %f \n", h_i[0], mass_i_arr[0], x_i[0], y_i[0], z_i[0], a_x_i[0], a_y_i[0]);
 }
 
 

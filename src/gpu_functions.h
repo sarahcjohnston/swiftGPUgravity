@@ -175,3 +175,19 @@ void gravity_gpu_D2H(struct gravity_gpu_values_host *gravity_gpu_values_h, struc
 	cudaMemcpyAsync(gravity_gpu_values_h->pot_i, gravity_gpu_values_d->d_pot_i, ncells * max_cell_size * sizeof(float), cudaMemcpyDeviceToHost, 0);
 	cudaMemcpyAsync(gravity_gpu_values_h->pot_j, gravity_gpu_values_d->d_pot_j, ncells * max_cell_size * sizeof(float), cudaMemcpyDeviceToHost, 0);
 	}
+	
+struct task *enqueue_dependencies(struct scheduler *s, struct task *t) {
+  /* Loop through the dependencies and add them to a queue if
+         they are ready. */
+  for (int k = 0; k < t->nr_unlock_tasks; k++) {
+    struct task *t2 = t->unlock_tasks[k];
+    if (t2->skip) continue;
+    const int res = atomic_dec(&t2->wait);
+    if (res < 1) {
+      error("Negative wait!");
+    } else if (res == 1) {
+      scheduler_enqueue(s, t2);
+    }
+  }
+  return NULL;
+}

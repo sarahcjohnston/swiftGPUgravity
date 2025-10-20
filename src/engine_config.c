@@ -915,7 +915,7 @@ void engine_config(int restart, int fof, struct engine *e,
 
   /* Init the scheduler. */
   scheduler_init(&e->sched, e->s, maxtasks, nr_queues,
-                 (e->policy & scheduler_flag_steal), e->nodeID, &e->threadpool);
+                 0, e->nodeID, &e->threadpool); //scheduler_init(&e->sched, e->s, maxtasks, nr_queues,(e->policy & scheduler_flag_steal), e->nodeID, &e->threadpool);
 
   /* Maximum size of MPI task messages, in KB, that should not be buffered,
    * that is sent using MPI_Issend, not MPI_Isend. 4Mb by default. Can be

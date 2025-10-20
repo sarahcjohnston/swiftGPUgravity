@@ -44,7 +44,7 @@ Statistics:
   
 Scheduler:
   max_top_level_cells: 8
-  cell_split_size:     50
+  cell_split_size:     500
   
 # Parameters related to the initial conditions
 InitialConditions:
