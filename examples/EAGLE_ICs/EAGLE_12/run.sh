@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # Generate the initial conditions if they are not present.
-if [ ! -e EAGLE_L0012N0188_ICs.hdf5 ]
-then
-    echo "Fetching initial conditions for the EAGLE 12Mpc example..."
-    ./getIC.sh
-fi
+#if [ ! -e EAGLE_L0012N0188_ICs.hdf5 ]
+#then
+#    echo "Fetching initial conditions for the EAGLE 12Mpc example..."
+#    ./getIC.sh
+#fi
 
 # Grab the cooling, yield, and photometry tables if they are not present.
 if [ ! -e yieldtables ]

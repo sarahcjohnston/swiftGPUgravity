@@ -43,8 +43,10 @@ Statistics:
   scale_factor_first:  0.02
   
 Scheduler:
-  max_top_level_cells: 8
+  max_top_level_cells: 4
   cell_split_size:     500
+  cell_subdepth_diff_grav: -1
+  cell_sub_size_self_grav: 100000
   
 # Parameters related to the initial conditions
 InitialConditions:

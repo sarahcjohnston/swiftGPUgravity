@@ -149,6 +149,7 @@ extern "C" {
 /* Import the GPU functions needed. */
 #include "gpu_functions.h"
 #include <stdatomic.h>
+#include "active.h"
 
 extern void self_pp_offload(int periodic, float rmax_i, double min_trunc, int* active_i, const float *x_i, const float *y_i, const float *z_i, float *pot_i, float *a_x_i, float *a_y_i, float *a_z_i, float *mass_i_arr, const float *r_s_inv, float *h_i, const int *gcount_i, const int *gcount_padded_i, int ci_active, float *d_h_i, float *d_mass_i, float *d_x_i, float *d_y_i, float *d_z_i, float *d_a_x_i, float *d_a_y_i, float *d_a_z_i, float *d_pot_i, int *d_active_i, int *full, int *truncated);
 /**
@@ -158,13 +159,50 @@ extern void self_pp_offload(int periodic, float rmax_i, double min_trunc, int* a
  */
 void *runner_main(void *data) {
 
-  int max_cell_size = 10000;
-
   struct runner *r = (struct runner *)data;
   struct engine *e = r->e;
   struct scheduler *sched = &e->sched;
+
+  cudaSetDevice(0);
+  
+  struct cudaDeviceProp prop;
+  cudaGetDeviceProperties(&prop, 0);
+  
+  float totGPUmem = (float)prop.totalGlobalMem; //total memory available
+  float availGPUmem = 0.8*totGPUmem; //use up to 80% of the GPU memory to leave some free
+  int max_cell_size = space_subsize_self_grav; //pull max cell size from max interactions set by user
+  float allarray = 4*max_cell_size*24; //24 arrays of length max_cell_size containing 4 byte values
+  int ncells_tot = availGPUmem/allarray;
+  int n_threads = e->nr_threads;
+  int ncells_queue = ncells_tot/n_threads; // dividing by threads
+  int ncells = ncells_queue/50; //choose to pack e.g. 50 times
+  
+  ncells = 4;
+  
+  if (ncells == 0){
+  //if too few to pack well then pick arbitrary pack number
+  	ncells = 8;}
+
+  if (r->qid == 0){
+	  printf("Total GPU memory: %.2f B\n", (float)prop.totalGlobalMem);
+	  printf("Max cell size: %i\n", max_cell_size);
+	  printf("Array size: %f B\n", allarray);
+	  printf("ncells total: %i \n", ncells_tot);
+	  printf("nthreads total: %i \n", n_threads);
+	  printf("ncells per queue: %i \n", ncells_queue);
+	  printf("ncells per pack: %i \n", ncells);
+	  }
+  
+  //define number of cells to transfer
+  //int ncells = 10;
+  
+  cudaStream_t stream;
+  cudaStreamCreate(&stream);
+
+  //int max_cell_size = 10000;
   
   int selfgravs = 0;
+
 
   /* Main loop. */
   while (1) {
@@ -183,9 +221,6 @@ void *runner_main(void *data) {
     	struct gravity_gpu_values_host *gravity_gpu_values_h;
     	struct gravity_gpu_values_device *gravity_gpu_values_d;
 	
-	//define number of cells to transfer
-	int ncells = 50;
-	
 	//allocate memory for GPU operations
 	gravity_gpu_values_h = malloc(sizeof(struct gravity_gpu_values_host));
 	gravity_gpu_allocate_mem_host(gravity_gpu_values_h, ncells, max_cell_size);
@@ -196,7 +231,7 @@ void *runner_main(void *data) {
 	//start counting packing operations
 	int pack_count = 0; //how many packed in each operation
 	int packed = 0; //how many tasks packed
-	//int pack_done = 0; //flag for ready to send
+	int send_pack = 0; //flag for ready to send
 	
 	//struct cell* grav_cells[1];
       	struct cell** grav_cells;
@@ -205,7 +240,7 @@ void *runner_main(void *data) {
       	struct task** grav_tasks;
       	grav_tasks = malloc(ncells * sizeof(struct task*));
       	
-      	int cell_active;
+      	int *cell_active;
       	cell_active = malloc(ncells * sizeof(int));
 	
     	cudaError_t err = cudaGetLastError();
@@ -279,6 +314,7 @@ void *runner_main(void *data) {
 
         case task_type_self:
           if (t->subtype == task_subtype_grav){
+            //printf("self grav \n");
             selfgravs++;
             //printf("qid: %i selfgravs %i\n", r->qid, selfgravs);
             
@@ -294,6 +330,10 @@ void *runner_main(void *data) {
   	    const int gcount = ci->grav.count;
   	    const int gcount_padded = gcount - (gcount % VEC_SIZE) + VEC_SIZE;
   	    
+  	    if (gcount > max_cell_size)
+  	    	error("More particles than allocated memory! %i particles in cell and only %i slots in memory available. Increase the number of top level cells!", gcount, max_cell_size);
+  	    //printf("gcount: %i\n", gcount);
+  	    
   	    const double loc[3] = {ci->loc[0] + 0.5 * ci->width[0],
                          ci->loc[1] + 0.5 * ci->width[1],
                          ci->loc[2] + 0.5 * ci->width[2]};
@@ -308,6 +348,12 @@ void *runner_main(void *data) {
   	    while (cell_glocktree(ci)) {
       			; /* spin until we acquire the lock */
 			}
+			
+	    cudaEvent_t startpack, stoppack;
+	    cudaEventCreate(&startpack);
+	    cudaEventCreate(&stoppack);
+
+	    cudaEventRecord(startpack, stream);
   
   	    //fill the GPU arrays
 	    gravity_gpu_fill_arrays(gravity_gpu_values_h, ci_cache, pack_count, max_cell_size, gcount);
@@ -315,8 +361,10 @@ void *runner_main(void *data) {
             //store the address of the cells and tasks we are working on	
             grav_cells[pack_count] = ci;
             grav_tasks[pack_count] = t;
-            //cell_active[pack_count] = cell_is_active_gravity(ci, e);
             
+            gravity_gpu_values_h->cell_active[pack_count] = cell_is_active_gravity(ci, e);
+            if (gravity_gpu_values_h->cell_active[pack_count] == 0)	
+            	printf("active: %i\n", gravity_gpu_values_h->cell_active[pack_count]);
             gravity_gpu_values_h->gcounts[pack_count] = gcount;
             
             //update that we packed a cell into our array
@@ -325,32 +373,88 @@ void *runner_main(void *data) {
             
             gravity_cache_zero_output(ci_cache, gcount_padded); //ADDED HERE?
             
-            //unlock here
 	    cell_gunlocktree(ci);
             
             //printf("qid: %i pack count: %i packed: %i gtasks: %i tottasks: %i\n", r->qid, pack_count, packed, ntasks_grav, ntasks);
+           
+           int acc = 0;
+             #ifdef SWIFT_DEBUG_CHECKS
+      	     /* Update the interaction counter if it's not a padded gpart */
+    		for (int j = 0; j < gcount; j++){
+    			for (int i =0; i < gcount; i++){
+    				if (i == j)
+    					continue;
+     			//if (!gpart_is_inhibited(&grav_cells[j]->grav.parts[i], e))
+     			        acc++;
+				accumulate_inc_ll(&ci->grav.parts[j].num_interacted);
+			}
+		}
+  	     #endif
+  	     
+  	     cudaEventRecord(stoppack, stream);
+	     cudaEventSynchronize(stoppack);
+	     float packtime = 0;
+	     cudaEventElapsedTime(&packtime, startpack, stoppack);
+	     printf("Pack Time: %f ms\n", packtime);
+	     
+	     FILE *f1 = fopen("packtime_v100.txt", "a");
+    	     fprintf(f1, "%f\n", packtime);
+             fclose(f1);
             
             //set what happens when the pack count is reached
             if (pack_count == ncells){
+            	//printf("send to GPU \n");
             	//printf("qid: %i Cells packed. GPU time\n", r->qid);
-            	int ncells_orig = ncells;      
+            	int ncells_orig = ncells;   
+            	
+            	cudaEvent_t startcopy, stopcopy;
+	    	cudaEventCreate(&startcopy);
+	    	cudaEventCreate(&stopcopy);
+
+	    	cudaEventRecord(startcopy, stream);
             
             	//now copy all the arrays to the device
-        	gravity_gpu_H2D(gravity_gpu_values_h, gravity_gpu_values_d, ncells, max_cell_size);
+        	gravity_gpu_H2D(gravity_gpu_values_h, gravity_gpu_values_d, ncells, max_cell_size, stream);
+        	
+        	cudaEventRecord(stopcopy, stream);
+	     	cudaEventSynchronize(stopcopy);
+	     	float copytime = 0;
+	     	cudaEventElapsedTime(&copytime, startcopy, stopcopy);
+	     	printf("Copy Time: %f ms\n", copytime);
+	     	FILE *f2 = fopen("copytime_v100.txt", "a");
+    	        fprintf(f2, "%f\n", copytime);
+                fclose(f2);
 		
 		cudaError_t err2 = cudaGetLastError();
     		if (err2 != cudaSuccess) 
     			printf("Error2: %s\n", cudaGetErrorString(err2));
     			
+    		cudaEvent_t startker, stopker;
+	    	cudaEventCreate(&startker);
+	    	cudaEventCreate(&stopker);
+
+	    	cudaEventRecord(startker, stream);
+    			
     		//run the GPU function	
-    		runner_doself_recursive_grav(r, ci, 1, gravity_gpu_values_d->d_h_i, gravity_gpu_values_d->d_h_j, gravity_gpu_values_d->d_mass_i, gravity_gpu_values_d->d_mass_j, gravity_gpu_values_d->d_x_i, gravity_gpu_values_d->d_x_j, gravity_gpu_values_d->d_y_i, gravity_gpu_values_d->d_y_j, gravity_gpu_values_d->d_z_i, gravity_gpu_values_d->d_z_j, gravity_gpu_values_d->d_a_x_i, gravity_gpu_values_d->d_a_y_i, gravity_gpu_values_d->d_a_z_i, gravity_gpu_values_d->d_a_x_j, gravity_gpu_values_d->d_a_y_j, gravity_gpu_values_d->d_a_z_j, gravity_gpu_values_d->d_pot_i, gravity_gpu_values_d->d_pot_j, gravity_gpu_values_d->d_active_i, gravity_gpu_values_d->d_active_j, gravity_gpu_values_d->d_CoM_i, gravity_gpu_values_d->d_CoM_j, ncells, max_cell_size, gravity_gpu_values_d->d_gcounts);
+    		runner_doself_recursive_grav(r, ci, 1, gravity_gpu_values_d->d_h_i, gravity_gpu_values_d->d_h_j, gravity_gpu_values_d->d_mass_i, gravity_gpu_values_d->d_mass_j, gravity_gpu_values_d->d_x_i, gravity_gpu_values_d->d_x_j, gravity_gpu_values_d->d_y_i, gravity_gpu_values_d->d_y_j, gravity_gpu_values_d->d_z_i, gravity_gpu_values_d->d_z_j, gravity_gpu_values_d->d_a_x_i, gravity_gpu_values_d->d_a_y_i, gravity_gpu_values_d->d_a_z_i, gravity_gpu_values_d->d_a_x_j, gravity_gpu_values_d->d_a_y_j, gravity_gpu_values_d->d_a_z_j, gravity_gpu_values_d->d_pot_i, gravity_gpu_values_d->d_pot_j, gravity_gpu_values_d->d_active_i, gravity_gpu_values_d->d_active_j, gravity_gpu_values_d->d_CoM_i, gravity_gpu_values_d->d_CoM_j, ncells, max_cell_size, gravity_gpu_values_d->d_gcounts, gravity_gpu_values_d->d_cell_active, stream);
     		
-    		cudaDeviceSynchronize();
+    		//cudaDeviceSynchronize();
 		
 		//copy the arrays from device to host
-		gravity_gpu_D2H(gravity_gpu_values_h, gravity_gpu_values_d, ncells, max_cell_size);
+		gravity_gpu_D2H(gravity_gpu_values_h, gravity_gpu_values_d, ncells, max_cell_size, stream);
 
-		cudaDeviceSynchronize();
+		cudaStreamSynchronize(stream); //THIS ONE IS NEEDED!
+		
+		cudaEventRecord(stopker, stream);
+	     	cudaEventSynchronize(stopker);
+	     	float kerneltime = 0;
+	     	cudaEventElapsedTime(&kerneltime, startker, stopker);
+	     	printf("Kernel Time: %f ms\n", kerneltime);
+	     	FILE *f3 = fopen("kerneltime_v100.txt", "a");
+    	        fprintf(f3, "%f\n", kerneltime);
+                fclose(f3);
+	     	
+		//cudaDeviceSynchronize();
 		cudaError_t err3 = cudaGetLastError();
     		if (err3 != cudaSuccess) 
     			printf("Error3: %s\n", cudaGetErrorString(err3));
@@ -370,7 +474,7 @@ void *runner_main(void *data) {
 	    			}
 	    			
     		
-    		cudaDeviceSynchronize();
+    		//cudaDeviceSynchronize();
 		
 		for(int i=0; i<ncells; i++){
 		  	cell_gunlocktree(grav_cells[i]);
@@ -389,7 +493,12 @@ void *runner_main(void *data) {
             	pack_count = 0;
 
             	}
+            	
+            	
+            	
             	}
+            	
+            	
             
           else if (t->subtype == task_subtype_external_grav)
             runner_do_grav_external(r, ci, 1);
@@ -576,6 +685,7 @@ void *runner_main(void *data) {
           runner_do_end_hydro_force(r, ci, 1);
           break;
         case task_type_end_grav_force:
+          //printf("end grav \n");
           runner_do_end_grav_force(r, ci, 1);
           break;
         case task_type_csds:
@@ -746,6 +856,7 @@ void *runner_main(void *data) {
       //printf("ntasks_g: %i\n", ntasks_g);
       //printf("ndrifts_g: %i\n", ndrifts_g);
       if (ntasks_g == 0 && pack_count != 0){
+      		//printf("flush \n");
             	//printf("qid: %i Time to flush\n", r->qid);
             	int ncells_orig = ncells;
             
@@ -756,23 +867,24 @@ void *runner_main(void *data) {
            	//printf("at flush: %f %f %f %f %f %f %f\n", gravity_gpu_values_h->h_i[0], gravity_gpu_values_h->mass_i[0], gravity_gpu_values_h->x_i[0], gravity_gpu_values_h->y_i[0], gravity_gpu_values_h->z_i[0], gravity_gpu_values_h->pot_i[0], gravity_gpu_values_h->active_i[0]);
             
             	//now copy all the arrays to the device
-        	gravity_gpu_H2D(gravity_gpu_values_h, gravity_gpu_values_d, ncells, max_cell_size);
+        	gravity_gpu_H2D(gravity_gpu_values_h, gravity_gpu_values_d, ncells, max_cell_size, stream);
         	
 		cudaError_t err4 = cudaGetLastError();
     		if (err4 != cudaSuccess) 
     			printf("Error4: %s\n", cudaGetErrorString(err4));
     			
     		//run the GPU function	
-    		runner_doself_recursive_grav(r, ci, 1, gravity_gpu_values_d->d_h_i, gravity_gpu_values_d->d_h_j, gravity_gpu_values_d->d_mass_i, gravity_gpu_values_d->d_mass_j, gravity_gpu_values_d->d_x_i, gravity_gpu_values_d->d_x_j, gravity_gpu_values_d->d_y_i, gravity_gpu_values_d->d_y_j, gravity_gpu_values_d->d_z_i, gravity_gpu_values_d->d_z_j, gravity_gpu_values_d->d_a_x_i, gravity_gpu_values_d->d_a_y_i, gravity_gpu_values_d->d_a_z_i, gravity_gpu_values_d->d_a_x_j, gravity_gpu_values_d->d_a_y_j, gravity_gpu_values_d->d_a_z_j, gravity_gpu_values_d->d_pot_i, gravity_gpu_values_d->d_pot_j, gravity_gpu_values_d->d_active_i, gravity_gpu_values_d->d_active_j, gravity_gpu_values_d->d_CoM_i, gravity_gpu_values_d->d_CoM_j, pack_count, max_cell_size, gravity_gpu_values_d->d_gcounts);
+    		runner_doself_recursive_grav(r, ci, 1, gravity_gpu_values_d->d_h_i, gravity_gpu_values_d->d_h_j, gravity_gpu_values_d->d_mass_i, gravity_gpu_values_d->d_mass_j, gravity_gpu_values_d->d_x_i, gravity_gpu_values_d->d_x_j, gravity_gpu_values_d->d_y_i, gravity_gpu_values_d->d_y_j, gravity_gpu_values_d->d_z_i, gravity_gpu_values_d->d_z_j, gravity_gpu_values_d->d_a_x_i, gravity_gpu_values_d->d_a_y_i, gravity_gpu_values_d->d_a_z_i, gravity_gpu_values_d->d_a_x_j, gravity_gpu_values_d->d_a_y_j, gravity_gpu_values_d->d_a_z_j, gravity_gpu_values_d->d_pot_i, gravity_gpu_values_d->d_pot_j, gravity_gpu_values_d->d_active_i, gravity_gpu_values_d->d_active_j, gravity_gpu_values_d->d_CoM_i, gravity_gpu_values_d->d_CoM_j, pack_count, max_cell_size, gravity_gpu_values_d->d_gcounts, gravity_gpu_values_d->d_cell_active, stream);
     		
-    		cudaDeviceSynchronize();
+    		//cudaDeviceSynchronize();
 		
 		//copy the arrays from device to host
-		gravity_gpu_D2H(gravity_gpu_values_h, gravity_gpu_values_d, ncells, max_cell_size);
+		gravity_gpu_D2H(gravity_gpu_values_h, gravity_gpu_values_d, ncells, max_cell_size, stream);
 		
 		//printf("after kernel: %f %f %f %f\n", gravity_gpu_values_h->a_x_i[0], gravity_gpu_values_h->a_y_i[0], gravity_gpu_values_h->a_z_i[0], gravity_gpu_values_h->pot_i[0]);
 
-		cudaDeviceSynchronize();
+		cudaStreamSynchronize(stream); //THIS ONE IS NEEDED!
+		//cudaDeviceSynchronize();
 		cudaError_t err5 = cudaGetLastError();
     		if (err5 != cudaSuccess) 
     			printf("Error5: %s\n", cudaGetErrorString(err5));
@@ -794,7 +906,7 @@ void *runner_main(void *data) {
 	    	}
 	    			
     		
-    		cudaDeviceSynchronize();
+    		//cudaDeviceSynchronize();
 		
 		for(int i=0; i<ncells; i++){
 		  //if (grav_cells[i] != NULL) { //skip if grav_cells[i] not filled in final batch
@@ -909,7 +1021,7 @@ void *runner_main(void *data) {
   /* Be kind, rewind. */
   return NULL;
   
-
+  cudaStreamDestroy(stream);
   
 }
 

@@ -359,7 +359,7 @@ __device__ void grav_pp_truncated(int* active, float dim_0, float dim_1, float d
 }
 
 //SELF PP FULL INTERACTIONS
-__device__ void doself_grav_pp_full(int* active, float *h_i, float *mass_i_arr, const float *x_i, const float *y_i, const float *z_i, float *a_x_i, float *a_y_i, float *a_z_i, float *pot_i, const int gcount_i, const int gcount_padded_i, const int periodic, int ci_active, int max_r_decision, int ncells, int max_cell_size, int *gcounts) {
+__device__ void doself_grav_pp_full(int* active, float *h_i, float *mass_i_arr, const float *x_i, const float *y_i, const float *z_i, float *a_x_i, float *a_y_i, float *a_z_i, float *pot_i, const int gcount_i, const int gcount_padded_i, const int periodic, int ci_active, int max_r_decision, int ncells, int max_cell_size, int *gcounts, int *cell_active) {
     
      for (int cell=0; cell < ncells; cell++) {
      
@@ -414,17 +414,17 @@ __device__ void doself_grav_pp_full(int* active, float *h_i, float *mass_i_arr, 
 	    	act = 1;
 
 	    /* Store everything back into values */
-	    atomicAdd(&a_x_i[pid+cell*max_cell_size], a_x*act*ci_active*abs(periodic-1) + a_x*act*ci_active*periodic*max_r_decision);
-	    atomicAdd(&a_y_i[pid+cell*max_cell_size], a_y*act*ci_active*abs(periodic-1) + a_y*act*ci_active*periodic*max_r_decision);
-	    atomicAdd(&a_z_i[pid+cell*max_cell_size], a_z*act*ci_active*abs(periodic-1) + a_z*act*ci_active*periodic*max_r_decision);
-	    atomicAdd(&pot_i[pid+cell*max_cell_size], pot*act*ci_active*abs(periodic-1) + pot*act*ci_active*periodic*max_r_decision);
+	    atomicAdd(&a_x_i[pid+cell*max_cell_size], a_x*act*cell_active[cell]*abs(periodic-1) + a_x*act*cell_active[cell]*periodic*max_r_decision);
+	    atomicAdd(&a_y_i[pid+cell*max_cell_size], a_y*act*cell_active[cell]*abs(periodic-1) + a_y*act*cell_active[cell]*periodic*max_r_decision);
+	    atomicAdd(&a_z_i[pid+cell*max_cell_size], a_z*act*cell_active[cell]*abs(periodic-1) + a_z*act*cell_active[cell]*periodic*max_r_decision);
+	    atomicAdd(&pot_i[pid+cell*max_cell_size], pot*act*cell_active[cell]*abs(periodic-1) + pot*act*cell_active[cell]*periodic*max_r_decision);
 	  }
     }
 }
 
 
 //SELF PP TRUNCATED INTERACTIONS
-__device__ void doself_grav_pp_truncated(int* active, float *h_i, float *mass_i_arr, float r_s_inv, const float *x_i, const float *y_i, const float *z_i, float *a_x_i, float *a_y_i, float *a_z_i, float *pot_i, const int gcount_i, const int gcount_padded_i, const int periodic, int ci_active, int max_r_decision, int ncells, int max_cell_size, int *gcounts) {
+__device__ void doself_grav_pp_truncated(int* active, float *h_i, float *mass_i_arr, float r_s_inv, const float *x_i, const float *y_i, const float *z_i, float *a_x_i, float *a_y_i, float *a_z_i, float *pot_i, const int gcount_i, const int gcount_padded_i, const int periodic, int ci_active, int max_r_decision, int ncells, int max_cell_size, int *gcounts, int *cell_active) {
 
      for (int cell=0; cell < ncells; cell++) {	
 
@@ -488,10 +488,11 @@ __device__ void doself_grav_pp_truncated(int* active, float *h_i, float *mass_i_
 	    	per = 1;
 
 	    /* Store everything back into values */   
-	    atomicAdd(&a_x_i[pid+cell*max_cell_size], a_x*per*abs(max_r_decision-1));//*act*ci_active
-	    atomicAdd(&a_y_i[pid+cell*max_cell_size], a_y*per*abs(max_r_decision-1));//*act*ci_active
-	    atomicAdd(&a_z_i[pid+cell*max_cell_size], a_z*per*abs(max_r_decision-1));//*act*ci_active
-	    atomicAdd(&pot_i[pid+cell*max_cell_size], pot*per*abs(max_r_decision-1));//*act*ci_active
+	    //printf("cell active: %i\n", cell_active[cell]);
+	    atomicAdd(&a_x_i[pid+cell*max_cell_size], a_x*cell_active[cell]*per*abs(max_r_decision-1));//*act*ci_active
+	    atomicAdd(&a_y_i[pid+cell*max_cell_size], a_y*cell_active[cell]*per*abs(max_r_decision-1));//*act*ci_active
+	    atomicAdd(&a_z_i[pid+cell*max_cell_size], a_z*cell_active[cell]*per*abs(max_r_decision-1));//*act*ci_active
+	    atomicAdd(&pot_i[pid+cell*max_cell_size], pot*cell_active[cell]*per*abs(max_r_decision-1));//*act*ci_active
 	  }
      }
 }

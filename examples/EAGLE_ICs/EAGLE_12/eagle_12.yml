@@ -82,6 +82,8 @@ FOF:
 Scheduler:
   max_top_level_cells:   8
   cell_split_size:       200
+  cell_subdepth_diff_grav: -1
+  cell_sub_size_self_grav: 1000
   
 Restarts:
   onexit:       1

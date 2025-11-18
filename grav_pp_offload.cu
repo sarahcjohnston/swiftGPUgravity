@@ -12,7 +12,7 @@
 
 /* Pair gravity kernel. This is called by the pp_offload function */
 //PP ALL INTERACTIONS
-__global__ void self_grav_pp(int periodic, float rmax_i, double min_trunc, int *active_i, float *h_i, float *mass_i_arr, float r_s_inv, const float *x_i, const float *y_i, const float *z_i, float *a_x_i, float *a_y_i, float *a_z_i, float *pot_i, int gcount_i, int gcount_padded_i, int ci_active, int ncells, int max_cell_size, int *gcounts) {
+__global__ void self_grav_pp(int periodic, float rmax_i, double min_trunc, int *active_i, float *h_i, float *mass_i_arr, float r_s_inv, const float *x_i, const float *y_i, const float *z_i, float *a_x_i, float *a_y_i, float *a_z_i, float *pot_i, int gcount_i, int gcount_padded_i, int ci_active, int ncells, int max_cell_size, int *gcounts, int *cell_active) {
 
   //printf("ON GPU 1: %f %f %f %f %f %f %f \n", h_i[0], mass_i_arr[0], x_i[0], y_i[0], z_i[0], a_x_i[0], a_y_i[0]);
 
@@ -21,7 +21,7 @@ __global__ void self_grav_pp(int periodic, float rmax_i, double min_trunc, int *
   if (!periodic) {
 
     /* Not periodic -> Can always use Newtonian potential */
-    doself_grav_pp_full(active_i, h_i, mass_i_arr, x_i, y_i, z_i, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size, gcounts);
+    doself_grav_pp_full(active_i, h_i, mass_i_arr, x_i, y_i, z_i, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size, gcounts, cell_active);
 
   } else {
 
@@ -29,7 +29,7 @@ __global__ void self_grav_pp(int periodic, float rmax_i, double min_trunc, int *
     if (rmax_i > min_trunc) {
 
       /* Periodic but far-away cells must use the truncated potential */
-      doself_grav_pp_truncated(active_i, h_i, mass_i_arr, r_s_inv, x_i, y_i, z_i, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size, gcounts);
+      doself_grav_pp_truncated(active_i, h_i, mass_i_arr, r_s_inv, x_i, y_i, z_i, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size, gcounts, cell_active);
                                     
 
     } else {
@@ -37,7 +37,7 @@ __global__ void self_grav_pp(int periodic, float rmax_i, double min_trunc, int *
     max_r_decision = 1;
 
       /* Periodic but close-by cells can use the full Newtonian potential */
-      doself_grav_pp_full(active_i, h_i, mass_i_arr, x_i, y_i, z_i, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size, gcounts);
+      doself_grav_pp_full(active_i, h_i, mass_i_arr, x_i, y_i, z_i, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size, gcounts, cell_active);
     }
   }
   
@@ -136,16 +136,16 @@ extern "C" void pair_pp_offload(int periodic, const float *CoM_i, const float *C
 
 
 //self grav pp offload
-extern "C" void self_pp_offload(int periodic, float rmax_i, double min_trunc, const float *r_s_inv, const int *gcount_i, const int *gcount_padded_i, int ci_active, float *d_h_i, float *d_mass_i, float *d_x_i, float *d_y_i, float *d_z_i, float *d_a_x_i, float *d_a_y_i, float *d_a_z_i, float *d_pot_i, int *d_active_i, int ncells, int max_cell_size, int *gcounts){
+extern "C" void self_pp_offload(int periodic, float rmax_i, double min_trunc, const float *r_s_inv, const int *gcount_i, const int *gcount_padded_i, int ci_active, float *d_h_i, float *d_mass_i, float *d_x_i, float *d_y_i, float *d_z_i, float *d_a_x_i, float *d_a_y_i, float *d_a_z_i, float *d_pot_i, int *d_active_i, int ncells, int max_cell_size, int *gcounts, int *cell_active, cudaStream_t stream){
 
 	/* memory allocation was here - this is all done in runner_main now */
 
 	//call kernel function 
 	//int nblocks = gcount_i/256;
-	self_grav_pp<<<32,256>>>(periodic, rmax_i, min_trunc, d_active_i, d_h_i, d_mass_i, *r_s_inv, d_x_i, d_y_i, d_z_i, d_a_x_i, d_a_y_i, d_a_z_i, d_pot_i, *gcount_i, *gcount_padded_i, ci_active, ncells, max_cell_size, gcounts);
+	self_grav_pp<<<32,256, 0, stream>>>(periodic, rmax_i, min_trunc, d_active_i, d_h_i, d_mass_i, *r_s_inv, d_x_i, d_y_i, d_z_i, d_a_x_i, d_a_y_i, d_a_z_i, d_pot_i, *gcount_i, *gcount_padded_i, ci_active, ncells, max_cell_size, gcounts, cell_active);
 	//check if thread idx has a particle
 	
-	cudaDeviceSynchronize();
+	//cudaDeviceSynchronize();
 
 	cudaError_t err2 = cudaGetLastError();
     	if (err2 != cudaSuccess)
