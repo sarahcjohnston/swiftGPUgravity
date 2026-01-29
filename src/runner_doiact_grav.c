@@ -43,6 +43,8 @@ extern "C" {
 }
 #endif
 
+#include "gpu_functions.h"
+
 /**
  * @brief Clear the unskip flags of this cell.
  *
@@ -2067,7 +2069,8 @@ void runner_doself_grav_pp(struct runner *r, struct cell *c, float *d_h_i, float
       cell_is_active_gravity(c, e) && (c->nodeID == e->nodeID);
       
   //printf("runner active: %i\n", cell_active[0]);
-                                  
+  TIMER_TOC(timer_doself_grav_pp);
+
   self_pp_offload(periodic, rmax, min_trunc, &r_s_inv, &gcount, &gcount_padded, ci_active, d_h_i, d_mass_i, d_x_i, d_y_i, d_z_i, d_a_x_i, d_a_y_i, d_a_z_i, d_pot_i, d_active_i, ncells, max_cell_size, gcounts, cell_active, stream);
 
   if(2<1){
@@ -2111,8 +2114,69 @@ void runner_doself_grav_pp(struct runner *r, struct cell *c, float *d_h_i, float
   if (lock_unlock(&c->grav.plock) != 0) error("Error unlocking cell");
 #endif*/
 
-  TIMER_TOC(timer_doself_grav_pp);
+  //TIMER_TOC(timer_doself_grav_pp);
 }
+
+
+extern void self_pp_offload_new(int periodic, float rmax_i, double min_trunc, const float *r_s_inv, const int *gcount_i, const int *gcount_padded_i, int ci_active, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells, int max_cell_size, cudaStream_t stream);
+/**
+ * @brief Computes the interaction of all the particles in a cell with all the
+ * other ones.
+ *
+ * This function switches between the full potential and the truncated one
+ * depending on needs.
+ *
+ * This function starts by constructing the require #gravity_cache for the
+ * cell and then call the specialised functions doing the actual work on
+ * the cache. It then write the data back to the particles.
+ *
+ * @param r The #runner.
+ * @param c The #cell.
+ */
+void runner_doself_grav_pp_new(struct runner *r, struct cell *c, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells, int max_cell_size, cudaStream_t stream){
+
+  /* Recover some useful constants */
+  const struct engine *e = r->e;
+  const int periodic = e->mesh->periodic;
+  const float r_s_inv = e->mesh->r_s_inv;
+  const double min_trunc = e->mesh->r_cut_min;
+
+  TIMER_TIC;
+
+#ifdef SWIFT_DEBUG_CHECKS
+  if (c->grav.count == 0) error("Doing self gravity on an empty cell !");
+  if (c->nodeID != e->nodeID) error("Running on foreign cell!");
+#endif
+
+  /* Start by constructing a cache for the particles */
+  struct gravity_cache *const ci_cache = &r->ci_gravity_cache;
+
+  /* Shift to apply to the particles in the cell */
+  const double loc[3] = {c->loc[0] + 0.5 * c->width[0],
+                         c->loc[1] + 0.5 * c->width[1],
+                         c->loc[2] + 0.5 * c->width[2]};
+
+  /* Computed the padded counts */
+  const int gcount = c->grav.count;
+  const int gcount_padded = gcount - (gcount % VEC_SIZE) + VEC_SIZE;
+
+  /* Fill the cache */
+  gravity_cache_populate_no_mpole(e->max_active_bin, ci_cache, c->grav.parts,
+                                  gcount, gcount_padded, loc, c,
+                                  e->gravity_properties);
+                                  
+  const float rmax = 2. * c->grav.multipole->r_max;
+  const int ci_active =
+      cell_is_active_gravity(c, e) && (c->nodeID == e->nodeID);
+      
+  //printf("runner active: %i\n", cell_active[0]);
+                                  
+  self_pp_offload_new(periodic, rmax, min_trunc, &r_s_inv, &gcount, &gcount_padded, ci_active, gravity_gpu_values_send_d, gravity_gpu_values_recv_d, ncells, max_cell_size, stream);
+  
+  TIMER_TOC(timer_doself_grav_pp);
+
+}
+
 
 /**
  * @brief Computes the interaction of the field tensor and multipole
@@ -2621,21 +2685,21 @@ void runner_dopair_recursive_grav(struct runner *r, struct cell *ci,
  * @param c The first #cell.
  * @param gettimer Are we timing this ?
  */
-void runner_doself_recursive_grav(struct runner *r, struct cell *c,
-                                  const int gettimer, float *d_h_i, float *d_h_j, float *d_mass_i, float *d_mass_j, float *d_x_i, float *d_x_j, float *d_y_i, float *d_y_j, float *d_z_i, float *d_z_j, float *d_a_x_i, float *d_a_y_i, float *d_a_z_i, float *d_a_x_j, float *d_a_y_j, float *d_a_z_j, float *d_pot_i, float *d_pot_j, int *d_active_i, int *d_active_j, float *d_CoM_i, float *d_CoM_j, int ncells, int max_cell_size, int *gcounts, int *cell_active, cudaStream_t stream) {
+/*void runner_doself_recursive_grav(struct runner *r, struct cell *c,
+                                  const int gettimer, float *d_h_i, float *d_h_j, float *d_mass_i, float *d_mass_j, float *d_x_i, float *d_x_j, float *d_y_i, float *d_y_j, float *d_z_i, float *d_z_j, float *d_a_x_i, float *d_a_y_i, float *d_a_z_i, float *d_a_x_j, float *d_a_y_j, float *d_a_z_j, float *d_pot_i, float *d_pot_j, int *d_active_i, int *d_active_j, float *d_CoM_i, float *d_CoM_j, int ncells, int max_cell_size, int *gcounts, int *cell_active, cudaStream_t stream) {*/
 
   /* Some constants */
-  const struct engine *e = r->e;
+  /*const struct engine *e = r->e;*/
 
   /* Clear the flags */
-  runner_clear_grav_flags(c, e);
+  /*runner_clear_grav_flags(c, e);
 
-#ifdef SWIFT_DEBUG_CHECKS
+#ifdef SWIFT_DEBUG_CHECKS*/
   /* Early abort? */
-  if (c->grav.count == 0) error("Doing self gravity on an empty cell !");
+  /*if (c->grav.count == 0) error("Doing self gravity on an empty cell !");
 #endif
 
-  TIMER_TIC;
+  TIMER_TIC;*/
   
   //printf("cell split = %i \n", c->split);
 
@@ -2667,12 +2731,44 @@ void runner_doself_recursive_grav(struct runner *r, struct cell *c,
   //else {
   
   
+    /*runner_doself_grav_pp(r, c, d_h_i, d_mass_i, d_x_i, d_y_i, d_z_i, d_a_x_i, d_a_y_i, d_a_z_i, d_pot_i, d_active_i, ncells, max_cell_size, gcounts, cell_active, stream);
 
-    runner_doself_grav_pp(r, c, d_h_i, d_mass_i, d_x_i, d_y_i, d_z_i, d_a_x_i, d_a_y_i, d_a_z_i, d_pot_i, d_active_i, ncells, max_cell_size, gcounts, cell_active, stream);
   //}
 
   if (gettimer) TIMER_TOC(timer_dosub_self_grav);
+}*/
+
+
+/**
+ * @brief Computes the interaction of all the particles in a cell.
+ *
+ * This function will try to recurse as far down the tree as possible and only
+ * default to direct summation if there is no better option.
+ *
+ * @param r The #runner.
+ * @param c The first #cell.
+ * @param gettimer Are we timing this ?
+ */
+void runner_doself_recursive_grav_new(struct runner *r, struct cell *c, const int gettimer, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells, int max_cell_size, cudaStream_t stream){
+
+  /* Some constants */
+  const struct engine *e = r->e;
+
+  /* Clear the flags */
+  runner_clear_grav_flags(c, e);
+
+#ifdef SWIFT_DEBUG_CHECKS
+  /* Early abort? */
+  if (c->grav.count == 0) error("Doing self gravity on an empty cell !");
+#endif
+
+  TIMER_TIC;
+  
+    runner_doself_grav_pp_new(r, c, gravity_gpu_values_send_d, gravity_gpu_values_recv_d, ncells, max_cell_size, stream);
+
+  if (gettimer) TIMER_TOC(timer_dosub_self_grav);
 }
+
 
 /**
  * @brief Performs all M-M interactions between a given top-level cell and all

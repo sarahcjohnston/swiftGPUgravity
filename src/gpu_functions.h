@@ -63,8 +63,9 @@ struct gravity_gpu_values_device{
 	int *d_gcounts;
 	int *d_cell_active;
 	};
+
 	
-void gravity_gpu_allocate_mem_host(struct gravity_gpu_values_host *gravity_gpu_values, int ncells, int max_cell_size){
+/*void gravity_gpu_allocate_mem_host(struct gravity_gpu_values_host *gravity_gpu_values, int ncells, int max_cell_size){
 	//allocate memory on host
 	cudaMallocHost((void **)&gravity_gpu_values->h_i, ncells * max_cell_size * sizeof(float));
 	cudaMallocHost((void **)&gravity_gpu_values->h_j, ncells * max_cell_size * sizeof(float));
@@ -117,10 +118,10 @@ void gravity_gpu_allocate_mem_device(struct gravity_gpu_values_device *gravity_g
 	cudaMalloc((void **)&gravity_gpu_values->d_CoM_i, ncells * 3 * sizeof(float));
 	cudaMalloc((void **)&gravity_gpu_values->d_CoM_j, ncells * 3 * sizeof(float));
 	cudaMalloc((void **)&gravity_gpu_values->d_gcounts, ncells * sizeof(int));
-	cudaMallocHost((void **)&gravity_gpu_values->d_cell_active, ncells * sizeof(int));
-	}
+	cudaMalloc((void **)&gravity_gpu_values->d_cell_active, ncells * sizeof(int));
+	}*/
 	
-void gravity_gpu_fill_arrays(struct gravity_gpu_values_host *gravity_gpu_values, struct gravity_cache *const ci_cache, int pack_count, int max_cell_size, int gcount){
+/*void gravity_gpu_fill_arrays(struct gravity_gpu_values_host *gravity_gpu_values, struct gravity_cache *const ci_cache, int pack_count, int max_cell_size, int gcount){
 	//put values into long arrays
   	    for (int i = 0; i < gcount; i++){
             	gravity_gpu_values->h_i[i + pack_count*max_cell_size] = ci_cache->epsilon[i];
@@ -146,13 +147,13 @@ void gravity_gpu_fill_arrays(struct gravity_gpu_values_host *gravity_gpu_values,
             	//add two arrays for each particle to idenify where cj starts and ends
             }
             
-            /*for (int i =0; i < 3; i++){
-            	CoM_i[pack_count*max_cell_size + i] = ci_cache->x[i];
-            	CoM_j[pack_count*max_cell_size + i] = cj_cache->x[i];
-            	}*/
-            }
+            //for (int i =0; i < 3; i++){
+            	//CoM_i[pack_count*max_cell_size + i] = ci_cache->x[i];
+            	//CoM_j[pack_count*max_cell_size + i] = cj_cache->x[i];
+            	//}
+            }*/
             
-void gravity_gpu_H2D(struct gravity_gpu_values_host *gravity_gpu_values_h, struct gravity_gpu_values_device *gravity_gpu_values_d, int ncells, int max_cell_size, cudaStream_t stream){
+/*void gravity_gpu_H2D(struct gravity_gpu_values_host *gravity_gpu_values_h, struct gravity_gpu_values_device *gravity_gpu_values_d, int ncells, int max_cell_size, cudaStream_t stream){
 	//now copy all the arrays to the device
         cudaMemcpyAsync(gravity_gpu_values_d->d_h_i, gravity_gpu_values_h->h_i, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, stream);
         cudaMemcpyAsync(gravity_gpu_values_d->d_h_j, gravity_gpu_values_h->h_j, ncells * max_cell_size * sizeof(float), cudaMemcpyHostToDevice, stream);
@@ -189,11 +190,10 @@ void gravity_gpu_D2H(struct gravity_gpu_values_host *gravity_gpu_values_h, struc
 	cudaMemcpyAsync(gravity_gpu_values_h->a_z_j, gravity_gpu_values_d->d_a_z_j, ncells * max_cell_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
 	cudaMemcpyAsync(gravity_gpu_values_h->pot_i, gravity_gpu_values_d->d_pot_i, ncells * max_cell_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
 	cudaMemcpyAsync(gravity_gpu_values_h->pot_j, gravity_gpu_values_d->d_pot_j, ncells * max_cell_size * sizeof(float), cudaMemcpyDeviceToHost, stream);
-	}
+	}*/
 	
-struct task *enqueue_dependencies(struct scheduler *s, struct task *t) {
-  /* Loop through the dependencies and add them to a queue if
-         they are ready. */
+/*struct task *enqueue_dependencies(struct scheduler *s, struct task *t) {
+  // Loop through the dependencies and add them to a queue if they are ready.
   for (int k = 0; k < t->nr_unlock_tasks; k++) {
     struct task *t2 = t->unlock_tasks[k];
     if (t2->skip) continue;
@@ -205,4 +205,56 @@ struct task *enqueue_dependencies(struct scheduler *s, struct task *t) {
     }
   }
   return NULL;
-}
+}*/
+
+struct gravity_gpu_values_send{
+	/* floats needed for GPU calculations*/
+	float h_i;
+	float h_j;
+	float mass_i;
+	float mass_j;
+	float x_i;
+	float x_j;
+	float y_i;
+	float y_j;
+	float z_i;
+	float z_j;
+	int active_i;
+	int active_j;
+	float CoM_i;
+	float CoM_j;
+	int gcounts;
+	int cell_active;
+	};
+	
+/*void gravity_gpu_fill_arrays_send(struct gravity_gpu_values_send *gravity_gpu_values, struct gravity_cache *const ci_cache, int pack_count, int max_cell_size, int gcount){
+	//put values into long arrays
+  	    for (int i = 0; i < gcount; i++){
+            	gravity_gpu_values[i + pack_count*max_cell_size].h_i = ci_cache->epsilon[i];
+            	gravity_gpu_values[i + pack_count*max_cell_size].h_j = ci_cache->epsilon[i];
+            	gravity_gpu_values[i + pack_count*max_cell_size].mass_i = ci_cache->m[i];
+            	gravity_gpu_values[i + pack_count*max_cell_size].mass_j = ci_cache->m[i];
+            	gravity_gpu_values[i + pack_count*max_cell_size].x_i = ci_cache->x[i];
+            	gravity_gpu_values[i + pack_count*max_cell_size].x_j = ci_cache->x[i];
+            	gravity_gpu_values[i + pack_count*max_cell_size].y_i = ci_cache->y[i];
+            	gravity_gpu_values[i + pack_count*max_cell_size].y_j = ci_cache->y[i];
+            	gravity_gpu_values[i + pack_count*max_cell_size].z_i = ci_cache->z[i];
+            	gravity_gpu_values[i + pack_count*max_cell_size].z_j = ci_cache->z[i];
+            	gravity_gpu_values[i + pack_count*max_cell_size].active_i = ci_cache->active[i];
+            	gravity_gpu_values[i + pack_count*max_cell_size].active_j = ci_cache->active[i];
+            }*/
+            
+            /*for (int i =0; i < 3; i++){
+            	CoM_i[pack_count*max_cell_size + i] = ci_cache->x[i];
+            	CoM_j[pack_count*max_cell_size + i] = cj_cache->x[i];
+            	}*/
+            //}
+            
+            
+struct gravity_gpu_values_recv{
+	/* floats needed for GPU calculations*/
+	float a_x_i;
+	float a_y_i;
+	float a_z_i;
+	float pot_i;
+	};

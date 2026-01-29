@@ -86,9 +86,9 @@ cuda_grav.o: grav_pp_offload.cu
 	nvcc -dc grav_pp_offload.cu -o cuda_grav.o -arch=native -I./src -I. -fmad=false
 
 link_grav.o: cuda_grav.o
-	nvcc cuda_grav.o -arch=native -o link_grav.o -lcudadevrt -lcudart -dlink
+	nvcc -dlink cuda_grav.o -arch=native -o link_grav.o -lcudadevrt 
 	
-CUDALDFLAGS = -L/usr/local/cuda/lib64
+CUDALDFLAGS = -L/cosma/local/Nvidia-hpc-sdk/2025_253/Linux_x86_64/25.3/cuda/lib64 #-L/usr/local/cuda/lib64
 CUDALIBS= -lcudadevrt -lcudart -lcuda -lstdc++
 
 # Sources for swift

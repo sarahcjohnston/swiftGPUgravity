@@ -2368,6 +2368,10 @@ void scheduler_enqueue_mapper(void *map_data, int num_elements,
  */
 void scheduler_start(struct scheduler *s) {
 
+  for (int i = 0; i < s->nr_queues; i++){
+    s->queues[i].gpu_tasks_left = 0;
+    }
+
   /* Re-wait the tasks. */
   if (s->active_count > 1000) {
     threadpool_map(s->threadpool, scheduler_rewait_mapper, s->tid_active,
@@ -2714,6 +2718,10 @@ void scheduler_enqueue(struct scheduler *s, struct task *t) {
 
     /* Insert the task into that queue. */
     queue_insert(&s->queues[qid], t);
+    
+    if (t->subtype == task_subtype_grav && t->type == task_type_self) {
+      atomic_inc(&s->queues[qid].gpu_tasks_left);}
+    
   }
 }
 
@@ -2890,6 +2898,8 @@ struct task *scheduler_gettask(struct scheduler *s, int qid,
   /* Check qid. */
   if (qid >= nr_queues || qid < 0) error("Bad queue ID.");
 
+  /* Get a pointer to our queue for re-use */
+  struct queue *q = &s->queues[qid];
   /* Loop as long as there are tasks... */
   while (s->waiting > 0 && res == NULL) {
     /* Try more than once before sleeping. */
@@ -2905,21 +2915,92 @@ struct task *scheduler_gettask(struct scheduler *s, int qid,
 
       /* If unsuccessful, try stealing from the other queues. */
       if (s->flags & scheduler_flag_steal) {
-        int count = 0, qids[nr_queues];
-        for (int k = 0; k < nr_queues; k++)
+
+        int count = 0;
+        int qids[nr_queues];
+
+        /* Make list of queues that have 1 or more tasks in them */
+        for (int k = 0; k < nr_queues; k++) {
+          /* Don't include this queue */
+          if (k == qid) continue;
           if (s->queues[k].count > 0 || s->queues[k].count_incoming > 0) {
             qids[count++] = k;
           }
+        }
+
         for (int k = 0; k < scheduler_maxsteal && count > 0; k++) {
+
+          /* Pick a queue at random among the non-empty ones */
           const int ind = rand_r(&seed) % count;
-          TIMER_TIC
-          res = queue_gettask(&s->queues[qids[ind]], prev, 0);
+          /* Index of queue we are stealing from */
+          int qstl_id = qids[ind];
+
+          /* If we got the queue we already have, skip. */
+          /* TODO: I think we can remove this, we already exclude the queue in
+           * the loop above. */
+          if (qid == qstl_id) {
+            /* Reduce the size of the list of non-empty queues */
+            qids[ind] = qids[--count];
+            continue;
+          }
+
+          /* Get a pointer to the queue we're stealing from */
+          struct queue *q_stl = &s->queues[qstl_id];
+
+          /* Can we lock our own queue? */
+          //if (lock_trylock(&q->lock) != 0) {
+
+            /* No --> continue and try a different queue */
+            //continue;
+
+         // } else {
+
+            /* Yes --> Try locking the queue we steal from */
+            //if (lock_trylock(&q_stl->lock) != 0) {
+
+              /* Failed? --> Unlock the 1st queue and
+                 try again */
+             // if (lock_unlock(&q->lock) != 0)
+              //  error("Unlocking our queue failed");
+             // continue;
+            //}
+          //}
+
+          /* We now have locked q and q_stl */
+
+          /* Try to get a task from that random queue */
+          TIMER_TIC;
+          res = queue_gettask(q_stl, prev, 0);
           TIMER_TOC(timer_qsteal);
+
+          /* Lucky? i.e. did we actually get a task? */
           if (res != NULL) {
+
+            /* For GPU tasks: Move counter from the robbed to the robber */
+
+            enum task_subtypes subtype = res->subtype;
+            enum task_types type = res->type;
+
+            if (subtype == task_subtype_grav && type == task_type_self) {
+              atomic_inc(&q->gpu_tasks_left);
+              atomic_dec(&q_stl->gpu_tasks_left);
+            }
+            
+            /* Run with the task */
+            /*if (lock_unlock(&q->lock) != 0) error("Unlocking our queue failed");
+            if (lock_unlock(&q_stl->lock) != 0)
+            error("Unlocking the stealing queue failed");*/ //maybe need this bit?
+            
             break;
           } else {
+
+            /* Reduce the size of the list of non-empty queues */
             qids[ind] = qids[--count];
           }
+
+          /*if (lock_unlock(&q->lock) != 0) error("Unlocking our queue failed");
+          if (lock_unlock(&q_stl->lock) != 0)
+            error("Unlocking the stealing queue failed");*/
         }
         if (res != NULL) break;
       }

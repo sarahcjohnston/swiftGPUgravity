@@ -90,7 +90,7 @@ TASKTYPES = [
     "rt_transport_out",
     "rt_tchem",
     "rt_advance_cell_time",
-    "rt_sort",
+    "rt_sorts",
     "rt_collect_times",
     #  "count",
 ]

@@ -10,7 +10,7 @@
 #include "externalfunctions.cu"
 #include "multipole_struct.h"
 
-/* Pair gravity kernel. This is called by the pp_offload function */
+/* Self gravity kernel. This is called by the pp_offload function */
 //PP ALL INTERACTIONS
 __global__ void self_grav_pp(int periodic, float rmax_i, double min_trunc, int *active_i, float *h_i, float *mass_i_arr, float r_s_inv, const float *x_i, const float *y_i, const float *z_i, float *a_x_i, float *a_y_i, float *a_z_i, float *pot_i, int gcount_i, int gcount_padded_i, int ci_active, int ncells, int max_cell_size, int *gcounts, int *cell_active) {
 
@@ -42,6 +42,42 @@ __global__ void self_grav_pp(int periodic, float rmax_i, double min_trunc, int *
   }
   
   //printf("ON GPU 2: %f %f %f %f %f %f %f \n", h_i[0], mass_i_arr[0], x_i[0], y_i[0], z_i[0], a_x_i[0], a_y_i[0]);
+}
+
+
+/* Self gravity kernel. This is called by the pp_offload function */
+//PP ALL INTERACTIONS
+__global__ void self_grav_pp_new(int periodic, float rmax_i, double min_trunc, float r_s_inv, int gcount_i, int gcount_padded_i, int ci_active, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells, int max_cell_size, cudaStream_t stream) {
+
+  int threads = 256;
+	dim3 block(threads);
+	dim3 grid(ncells, (max_cell_size + threads - 1) / threads);
+	size_t shmem = threads * sizeof(gravity_gpu_values_send);
+
+  int max_r_decision = 0;
+  
+  if (!periodic) {
+
+    /* Not periodic -> Can always use Newtonian potential */
+    doself_grav_pp_full_new_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, r_s_inv, gcount_i, gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size);
+
+  } else {
+
+    /* Do we need to use the truncated interactions ? */
+    if (rmax_i > min_trunc) {
+
+      /* Periodic but far-away cells must use the truncated potential */
+      doself_grav_pp_truncated_new_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, r_s_inv, gcount_i, gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size);
+                                    
+
+    } else {
+    
+    max_r_decision = 1;
+
+      /* Periodic but close-by cells can use the full Newtonian potential */
+      doself_grav_pp_full_new_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, r_s_inv, gcount_i, gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size);
+    }
+  }
 }
 
 
@@ -146,6 +182,54 @@ extern "C" void self_pp_offload(int periodic, float rmax_i, double min_trunc, co
 	//check if thread idx has a particle
 	
 	//cudaDeviceSynchronize();
+
+	cudaError_t err2 = cudaGetLastError();
+    	if (err2 != cudaSuccess)
+	printf("Error - self_pp: %s\n", cudaGetErrorString(err2));
+	
+	/* memory transfer was here - this is all done in runner_main now */
+}
+
+
+//self grav pp offload
+extern "C" void self_pp_offload_new(int periodic, float rmax_i, double min_trunc, const float *r_s_inv, const int *gcount_i, const int *gcount_padded_i, int ci_active, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells, int max_cell_size, cudaStream_t stream){
+
+	/* memory allocation was here - this is all done in runner_main now */
+
+	//call kernel function 
+	//int nblocks = gcount_i/256;
+	int threads = 256;
+	dim3 block(threads);
+	dim3 grid(ncells, (max_cell_size + threads - 1) / threads);
+	size_t shmem = 0;//threads * sizeof(gravity_gpu_values_send);
+	
+	int max_r_decision = 0;
+	
+	if (!periodic) {
+
+    /* Not periodic -> Can always use Newtonian potential */
+    doself_grav_pp_full_new_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, *r_s_inv, *gcount_i, *gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size);
+
+  } else {
+
+    /* Do we need to use the truncated interactions ? */
+    if (rmax_i > min_trunc) {
+
+      /* Periodic but far-away cells must use the truncated potential */
+      doself_grav_pp_truncated_new_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, *r_s_inv, *gcount_i, *gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size);
+                                    
+
+    } else {
+    
+    max_r_decision = 1;
+
+      /* Periodic but close-by cells can use the full Newtonian potential */
+      doself_grav_pp_full_new_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, *r_s_inv, *gcount_i, *gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size);
+    }
+  }
+
+	//self_grav_pp_new<<<grid,block, shmem, stream>>>(periodic, rmax_i, min_trunc, *r_s_inv,*gcount_i, *gcount_padded_i, ci_active, gravity_gpu_values_send_d,  gravity_gpu_values_recv_d, ncells, max_cell_size, stream);
+	//check if thread idx has a particle
 
 	cudaError_t err2 = cudaGetLastError();
     	if (err2 != cudaSuccess)

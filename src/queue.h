@@ -74,6 +74,8 @@ struct queue {
   /* DEQ for incoming tasks. */
   int *tid_incoming;
   volatile unsigned int first_incoming, last_incoming, count_incoming;
+  
+  int gpu_tasks_left;
 
 } __attribute__((aligned(queue_struct_align)));
 

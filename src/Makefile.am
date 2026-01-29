@@ -15,7 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-CUDALDFLAGS = -L/usr/local/cuda/lib64 -I/usr/local/cuda/include
+CUDALDFLAGS = -L/cosma/local/Nvidia-hpc-sdk/2025_253/Linux_x86_64/25.3/cuda/lib64 -L/usr/local/cuda/lib64 -I/usr/local/cuda/include
 CUDALIBS= -lcudadevrt -lcudart -lcuda -lstdc++
 
 # Add the non-standard paths to the included library headers

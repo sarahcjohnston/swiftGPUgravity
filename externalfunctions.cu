@@ -11,6 +11,8 @@
 #include "error.h"
 #include "gravity_derivatives.h"
 
+#include "gpu_functions.h"
+
 __device__ float nearestf1(
     float dx, const float box_size) {
 
@@ -495,4 +497,322 @@ __device__ void doself_grav_pp_truncated(int* active, float *h_i, float *mass_i_
 	    atomicAdd(&pot_i[pid+cell*max_cell_size], pot*cell_active[cell]*per*abs(max_r_decision-1));//*act*ci_active
 	  }
      }
+}
+
+
+//SELF PP FULL INTERACTIONS
+__device__ void doself_grav_pp_full_new(struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, float r_s_inv, const int gcount_i, const int gcount_padded_i, const int periodic, int ci_active, int max_r_decision, int ncells, int max_cell_size) {
+    
+     for (int cell=0; cell < ncells; cell++) {
+     
+	  int t = blockIdx.x*blockDim.x +threadIdx.x;
+	  int T = blockDim.x*gridDim.x;
+	  int s = blockIdx.y*blockDim.y +threadIdx.y;
+	  int S = blockDim.y*gridDim.y;
+	  
+	  /* Loop over all particles in ci... */
+	  for (int pid = t; pid < gravity_gpu_values_send_d[cell*max_cell_size].gcounts; pid+=T) {
+	  
+	    if (pid >= gcount_i)
+	    	continue;
+
+	    /* Local accumulators for the acceleration */
+	    float a_x = 0.f, a_y = 0.f, a_z = 0.f, pot = 0.f;
+
+	    /* Loop over every other particle in the cell. */
+	    for (int pjd = s; pjd < gravity_gpu_values_send_d[cell*max_cell_size].gcounts; pjd+=S) {
+
+	      /* No self interaction */
+	      if (pid == pjd) continue;
+
+	      /* Get info about j */
+	      const float mass_i = gravity_gpu_values_send_d[pjd+cell*max_cell_size].mass_i;
+
+	      /* Compute the pairwise (square) distance. */
+	      /* Note: no need for periodic wrapping inside a cell */
+	      float dx = gravity_gpu_values_send_d[pjd+cell*max_cell_size].x_i - gravity_gpu_values_send_d[pid+cell*max_cell_size].x_i;
+	      float dy = gravity_gpu_values_send_d[pjd+cell*max_cell_size].y_i - gravity_gpu_values_send_d[pid+cell*max_cell_size].y_i;
+	      float dz = gravity_gpu_values_send_d[pjd+cell*max_cell_size].z_i - gravity_gpu_values_send_d[pid+cell*max_cell_size].z_i;
+
+	      const float r2 = dx * dx + dy * dy + dz * dz;
+
+	      /* Pick the maximal softening length of i and j */
+	      const float h = max(gravity_gpu_values_send_d[pid+cell*max_cell_size].h_i, gravity_gpu_values_send_d[pjd+cell*max_cell_size].h_i);
+	      const float h2 = h * h;
+	      const float h_inv = 1.f / h;
+	      const float h_inv_3 = h_inv * h_inv * h_inv;
+
+	      /* Interact! */
+	      float f_ij, pot_ij;
+	      iact_grav_pp_full(r2, h2, h_inv, h_inv_3, mass_i, &f_ij, &pot_ij);
+
+	      /* Store it back */
+	      a_x += f_ij * dx;
+	      a_y += f_ij * dy;
+	      a_z += f_ij * dz;
+	      pot += pot_ij;
+	      
+	    }
+	    int act = 0;
+	    if (gravity_gpu_values_send_d[pid+cell*max_cell_size].active_i > 0)
+	    	act = 1;
+
+	    /* Store everything back into values */
+	    atomicAdd(&gravity_gpu_values_recv_d[pid+cell*max_cell_size].a_x_i, a_x*act*gravity_gpu_values_send_d[cell*max_cell_size].cell_active*abs(periodic-1) + a_x*act*gravity_gpu_values_send_d[cell*max_cell_size].cell_active*periodic*max_r_decision);
+	    
+	    atomicAdd(&gravity_gpu_values_recv_d[pid+cell*max_cell_size].a_y_i, a_y*act*gravity_gpu_values_send_d[cell*max_cell_size].cell_active*abs(periodic-1) + a_y*act*gravity_gpu_values_send_d[cell*max_cell_size].cell_active*periodic*max_r_decision);
+	    
+	    atomicAdd(&gravity_gpu_values_recv_d[pid+cell*max_cell_size].a_z_i, a_z*act*gravity_gpu_values_send_d[cell*max_cell_size].cell_active*abs(periodic-1) + a_z*act*gravity_gpu_values_send_d[cell*max_cell_size].cell_active*periodic*max_r_decision);
+	    
+	    atomicAdd(&gravity_gpu_values_recv_d[pid+cell*max_cell_size].pot_i, pot*act*gravity_gpu_values_send_d[cell*max_cell_size].cell_active*abs(periodic-1) + pot*act*gravity_gpu_values_send_d[cell*max_cell_size].cell_active*periodic*max_r_decision);
+	  }
+    }
+}
+
+
+//SELF PP TRUNCATED INTERACTIONS
+__device__ void doself_grav_pp_truncated_new(struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, float r_s_inv, const int gcount_i, const int gcount_padded_i, const int periodic, int ci_active, int max_r_decision, int ncells, int max_cell_size) {
+
+
+     for (int cell=0; cell < ncells; cell++) {	
+
+	  int t = blockIdx.x*blockDim.x +threadIdx.x;
+	  int T = blockDim.x*gridDim.x;
+	  int s = blockIdx.y*blockDim.y +threadIdx.y;
+	  int S = blockDim.y*gridDim.y;
+	  
+	  /* Loop over all particles in ci... */
+	  for (int pid = t; pid < gravity_gpu_values_send_d[cell*max_cell_size].gcounts; pid+=T) {
+
+	    /* Local accumulators for the acceleration and potential */
+	    float a_x = 0.f, a_y = 0.f, a_z = 0.f, pot = 0.f;
+
+	    /* Loop over every other particle in the cell. */
+	    for (int pjd = s; pjd < gravity_gpu_values_send_d[cell*max_cell_size].gcounts; pjd+=S) {
+
+	      /* No self interaction */
+	      if (pid == pjd) continue;
+
+	      /* Get info about j */
+	      const float mass_i = gravity_gpu_values_send_d[pjd+cell*max_cell_size].mass_i;
+
+	      /* Compute the pairwise (square) distance. */
+	      /* Note: no need for periodic wrapping inside a cell */
+	      float dx = gravity_gpu_values_send_d[pjd+cell*max_cell_size].x_i - gravity_gpu_values_send_d[pid+cell*max_cell_size].x_i;
+	      float dy = gravity_gpu_values_send_d[pjd+cell*max_cell_size].y_i - gravity_gpu_values_send_d[pid+cell*max_cell_size].y_i;
+	      float dz = gravity_gpu_values_send_d[pjd+cell*max_cell_size].z_i - gravity_gpu_values_send_d[pid+cell*max_cell_size].z_i;
+
+	      const float r2 = dx * dx + dy * dy + dz * dz;
+
+	      /* Pick the maximal softening length of i and j */
+	      const float h = max(gravity_gpu_values_send_d[pid+cell*max_cell_size].h_i, gravity_gpu_values_send_d[pjd+cell*max_cell_size].h_i);
+	      const float h2 = h * h;
+	      const float h_inv = 1.f / h;
+	      const float h_inv_3 = h_inv * h_inv * h_inv;
+
+	      /* Interact! */
+	      float f_ij, pot_ij;
+	      iact_grav_pp_truncated(r2, h2, h_inv, h_inv_3, mass_i, r_s_inv,
+		                            &f_ij, &pot_ij);
+
+	      /* Store it back */
+	      a_x += f_ij * dx;
+	      a_y += f_ij * dy;
+	      a_z += f_ij * dz;
+	      pot += pot_ij;
+
+	    }
+	    int act = 0;
+	    if (gravity_gpu_values_send_d[pid+cell*max_cell_size].active_i > 0)
+	    	act = 1;
+	    /*if (active[pid] == 0)
+	    	printf("active: %i \n", active[pid]);*/
+	    	
+	    int per = 0;
+	    if (periodic > 0)
+	    	per = 1;
+
+	    /* Store everything back into values */   
+	    //printf("cell active: %i\n", cell_active[cell]);
+	    atomicAdd(&gravity_gpu_values_recv_d[pid+cell*max_cell_size].a_x_i, a_x*gravity_gpu_values_send_d[cell*max_cell_size].cell_active*per*abs(max_r_decision-1));//*act*ci_active
+	    atomicAdd(&gravity_gpu_values_recv_d[pid+cell*max_cell_size].a_y_i, a_y*gravity_gpu_values_send_d[cell*max_cell_size].cell_active*per*abs(max_r_decision-1));//*act*ci_active
+	    atomicAdd(&gravity_gpu_values_recv_d[pid+cell*max_cell_size].a_z_i, a_z*gravity_gpu_values_send_d[cell*max_cell_size].cell_active*per*abs(max_r_decision-1));//*act*ci_active
+	    atomicAdd(&gravity_gpu_values_recv_d[pid+cell*max_cell_size].pot_i, pot*gravity_gpu_values_send_d[cell*max_cell_size].cell_active*per*abs(max_r_decision-1));//*act*ci_active
+	  }
+     }
+}
+
+__global__ void doself_grav_pp_full_new_refactor(struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, float r_s_inv, const int gcount_i, const int gcount_padded_i, const int periodic, int ci_active, int max_r_decision, int ncells, int max_cell_size) {
+
+	int cell = blockIdx.x;
+	if (cell >= ncells)
+		return;
+	
+	int cell_space = cell*max_cell_size;
+	int counts = gravity_gpu_values_send_d[cell_space].gcounts;
+	
+	float factor1 = gravity_gpu_values_send_d[cell_space].cell_active*abs(periodic-1);
+	float factor2 = gravity_gpu_values_send_d[cell_space].cell_active*periodic*max_r_decision;
+		
+	int pid = blockIdx.y*blockDim.x +threadIdx.x;
+	if (pid >= counts) 
+		return;
+		
+	/*values for particle*/
+	float xi = gravity_gpu_values_send_d[cell_space + pid].x_i;
+  	float yi = gravity_gpu_values_send_d[cell_space + pid].y_i;
+  	float zi = gravity_gpu_values_send_d[cell_space + pid].z_i;
+  	float hi = gravity_gpu_values_send_d[cell_space + pid].h_i;	
+
+	/* Local accumulators for the acceleration and potential */
+	float a_x = 0.f, a_y = 0.f, a_z = 0.f, pot = 0.f;
+	
+	/*extern __shared__ gravity_gpu_values_send send[];
+
+  	for (int i0 = 0; i0 < counts; i0 += blockDim.x) {
+
+    		int i = i0 + threadIdx.x;
+    		if (i < counts) send[threadIdx.x] = gravity_gpu_values_send_d[cell_space + i];
+    		__syncthreads();
+
+   	int tile = min(blockDim.x, counts - i0);
+   	
+   	for (int j = 0; j < tile; j++) {
+		int pjd = i0 + j;*/
+	
+	/* Loop over every other particle in the cell. */
+	for (int pjd = 0; pjd < counts; pjd++) {
+		
+	      /* No self interaction */
+	      if (pid == pjd) continue;
+	      
+	      const gravity_gpu_values_send pj = gravity_gpu_values_send_d[cell_space + pjd];
+
+	      /* Get info about j */
+	      const float mass_i = pj.mass_i;
+
+	      /* Compute the pairwise (square) distance. */
+	      /* Note: no need for periodic wrapping inside a cell */
+	      float dx = pj.x_i - xi;
+	      float dy = pj.y_i - yi;
+	      float dz = pj.z_i - zi;
+
+	      const float r2 = dx * dx + dy * dy + dz * dz;
+
+	      /* Pick the maximal softening length of i and j */
+	      const float h = max(hi, pj.h_i);
+	      const float h2 = h * h;
+	      const float h_inv = 1.f / h;
+	      const float h_inv_3 = h_inv * h_inv * h_inv;
+
+	      /* Interact! */
+	      float f_ij, pot_ij;
+	      iact_grav_pp_full(r2, h2, h_inv, h_inv_3, mass_i, &f_ij, &pot_ij);
+
+	      /* Store it back */
+	      a_x += f_ij * dx;
+	      a_y += f_ij * dy;
+	      a_z += f_ij * dz;
+	      pot += pot_ij;
+
+	    }
+	    //__syncthreads();
+	    
+	  
+	int act = 0;
+	if (gravity_gpu_values_send_d[pid+cell_space].active_i > 0)
+		act = 1;
+	  
+	  gravity_gpu_values_recv_d[cell_space + pid].a_x_i += a_x*act*(factor1+factor2);
+	  gravity_gpu_values_recv_d[cell_space + pid].a_y_i += a_y*act*(factor1+factor2);
+	  gravity_gpu_values_recv_d[cell_space + pid].a_z_i += a_z*act*(factor1+factor2);
+	  gravity_gpu_values_recv_d[cell_space + pid].pot_i += pot*act*(factor1+factor2);
+}
+
+//SELF PP TRUNCATED INTERACTIONS
+__global__ void doself_grav_pp_truncated_new_refactor(struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, float r_s_inv, const int gcount_i, const int gcount_padded_i, const int periodic, int ci_active, int max_r_decision, int ncells, int max_cell_size) {
+
+	int cell = blockIdx.x;
+	if (cell >= ncells)
+		return;
+	
+	int cell_space = cell*max_cell_size;
+	int counts = gravity_gpu_values_send_d[cell_space].gcounts;
+	//printf("counts: %i \n", counts);
+	
+	float factor = gravity_gpu_values_send_d[cell_space].cell_active*(periodic ? 1.f : 0.f)*abs(max_r_decision-1);
+	if (factor == 0)
+		return;
+		
+	int pid = blockIdx.y*blockDim.x +threadIdx.x;
+	if (pid >= counts) 
+		return;
+		
+	/*values for particle*/
+	float xi = gravity_gpu_values_send_d[cell_space + pid].x_i;
+  	float yi = gravity_gpu_values_send_d[cell_space + pid].y_i;
+  	float zi = gravity_gpu_values_send_d[cell_space + pid].z_i;
+  	float hi = gravity_gpu_values_send_d[cell_space + pid].h_i;	
+
+	/* Local accumulators for the acceleration and potential */
+	float a_x = 0.f, a_y = 0.f, a_z = 0.f, pot = 0.f;
+	
+	/*extern __shared__ gravity_gpu_values_send send[];
+
+  	for (int i0 = 0; i0 < counts; i0 += blockDim.x) {
+
+    		int i = i0 + threadIdx.x;
+    		if (i < counts) send[threadIdx.x] = gravity_gpu_values_send_d[cell_space + i];
+    		__syncthreads();
+
+   	int tile = min(blockDim.x, counts - i0);
+   	
+   	for (int j = 0; j < tile; j++) {
+		int pjd = i0 + j;*/
+	
+	/* Loop over every other particle in the cell. */
+	for (int pjd = 0; pjd < counts; pjd++) {
+		
+	      /* No self interaction */
+	      if (pid == pjd) continue;
+	      
+	      const gravity_gpu_values_send pj = gravity_gpu_values_send_d[cell_space + pjd];
+
+	      /* Get info about j */
+	      const float mass_i = pj.mass_i;
+
+	      /* Compute the pairwise (square) distance. */
+	      /* Note: no need for periodic wrapping inside a cell */
+	      float dx = pj.x_i - xi;
+	      float dy = pj.y_i - yi;
+	      float dz = pj.z_i - zi;
+
+	      const float r2 = dx * dx + dy * dy + dz * dz;
+
+	      /* Pick the maximal softening length of i and j */
+	      const float h = max(hi, pj.h_i);
+	      const float h2 = h * h;
+	      const float h_inv = 1.f / h;
+	      const float h_inv_3 = h_inv * h_inv * h_inv;
+
+	      /* Interact! */
+	      float f_ij, pot_ij;
+	      iact_grav_pp_truncated(r2, h2, h_inv, h_inv_3, mass_i, r_s_inv,
+		                            &f_ij, &pot_ij);
+
+	      /* Store it back */
+	      a_x += f_ij * dx;
+	      a_y += f_ij * dy;
+	      a_z += f_ij * dz;
+	      pot += pot_ij;
+
+	    }
+	    //__syncthreads();
+	    
+	  
+	  
+	  gravity_gpu_values_recv_d[cell_space + pid].a_x_i = a_x*factor;
+	  gravity_gpu_values_recv_d[cell_space + pid].a_y_i = a_y*factor;
+	  gravity_gpu_values_recv_d[cell_space + pid].a_z_i = a_z*factor;
+	  gravity_gpu_values_recv_d[cell_space + pid].pot_i = pot*factor;
 }

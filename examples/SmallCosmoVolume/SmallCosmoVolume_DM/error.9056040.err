@@ -1,0 +1,1 @@
+/var/slurm/slurmd/job9056040/slurm_script: line 21: 464068 Segmentation fault      (core dumped) ../../../swift --cosmology --self-gravity --threads=16 -n 30 small_cosmo_volume_dm.yml

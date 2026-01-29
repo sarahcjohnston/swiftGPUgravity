@@ -149,6 +149,9 @@ const char* timers_names[timer_count] = {
     "rt_collect_times",
     "do_sync",
     "neutrino_weighting",
+    "gpu_pack",
+    "gpu_copycalc",
+    "gpu_unpack"
 };
 
 /* File to store the timers */
