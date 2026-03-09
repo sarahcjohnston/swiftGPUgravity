@@ -44,9 +44,11 @@ Statistics:
   
 Scheduler:
   max_top_level_cells: 4
-  cell_split_size:     500
+  cell_split_size:     100000
   cell_subdepth_diff_grav: -1
   cell_sub_size_self_grav: 100000
+  cell_sub_size_pair_grav: 100000
+  tasks_per_cell:	1000
   
 # Parameters related to the initial conditions
 InitialConditions:
@@ -54,6 +56,7 @@ InitialConditions:
   periodic:                    1
   cleanup_h_factors:           1    
   cleanup_velocity_factors:    1  
+  replicate:                   1
 
 # Structure finding options
 StructureFinding:

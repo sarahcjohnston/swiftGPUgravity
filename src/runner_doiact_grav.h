@@ -34,6 +34,8 @@ extern "C" {
 
 struct runner;
 struct cell;
+struct task;
+struct scheduler;
 struct gravity_gpu_values_send;
 struct gravity_gpu_values_recv;
 
@@ -66,5 +68,11 @@ void runner_doself_grav_pp_new(struct runner *r, struct cell *c, struct gravity_
 
 void runner_dopair_grav_pp(struct runner *r, struct cell *ci, struct cell *cj,
                            const int symmetric, const int allow_mpole);
+                           
+void runner_dopair_grav_pp_new(struct runner *r, struct cell *ci, struct cell *cj,
+                           const int symmetric, const int allow_mpole, struct gravity_gpu_values_send *gravity_gpu_values_send, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, struct cell** grav_cells_pair, struct task** grav_tasks_pair, struct task *t, struct scheduler *sched, int ncells, int max_cell_size, int *pack_count_pair, cudaStream_t stream);
+                           
+void runner_dopair_recursive_grav_new(struct runner *r, struct cell *ci,
+                                  struct cell *cj, const int gettimer, struct gravity_gpu_values_send *gravity_gpu_values_send, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, struct cell** grav_cells_pair, struct task** grav_tasks_pair, struct task *t, struct scheduler *sched, int ncells, int max_cell_size, int *pack_count_pair, int *packed, cudaStream_t stream);
 
 #endif /* SWIFT_RUNNER_DOIACT_GRAV_H */

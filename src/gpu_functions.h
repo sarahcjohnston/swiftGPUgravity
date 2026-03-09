@@ -221,10 +221,9 @@ struct gravity_gpu_values_send{
 	float z_j;
 	int active_i;
 	int active_j;
-	float CoM_i;
-	float CoM_j;
 	int gcounts;
 	int cell_active;
+	int use_full;
 	};
 	
 /*void gravity_gpu_fill_arrays_send(struct gravity_gpu_values_send *gravity_gpu_values, struct gravity_cache *const ci_cache, int pack_count, int max_cell_size, int gcount){
@@ -257,4 +256,8 @@ struct gravity_gpu_values_recv{
 	float a_y_i;
 	float a_z_i;
 	float pot_i;
+	float a_x_j;
+	float a_y_j;
+	float a_z_j;
+	float pot_j;
 	};

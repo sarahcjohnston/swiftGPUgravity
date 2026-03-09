@@ -2369,7 +2369,8 @@ void scheduler_enqueue_mapper(void *map_data, int num_elements,
 void scheduler_start(struct scheduler *s) {
 
   for (int i = 0; i < s->nr_queues; i++){
-    s->queues[i].gpu_tasks_left = 0;
+    s->queues[i].gpu_self_tasks_left = 0;
+    s->queues[i].gpu_pair_tasks_left = 0;
     }
 
   /* Re-wait the tasks. */
@@ -2715,12 +2716,24 @@ void scheduler_enqueue(struct scheduler *s, struct task *t) {
 
     /* Increase the waiting counter. */
     atomic_inc(&s->waiting);
+    
+    fprintf(stderr,
+        "[ENQ] task=%p type=%d subtype=%d qid=%d waiting=%i\n",
+        (void*)t, t->type, t->subtype, qid, s->waiting);
 
     /* Insert the task into that queue. */
     queue_insert(&s->queues[qid], t);
     
+    /* Wake up one (or all) sleepers. */
+    pthread_mutex_lock(&s->sleep_mutex); //MYCOMMENT
+    pthread_cond_signal(&s->sleep_cond);      // or broadcast
+    pthread_mutex_unlock(&s->sleep_mutex);
+    
     if (t->subtype == task_subtype_grav && t->type == task_type_self) {
-      atomic_inc(&s->queues[qid].gpu_tasks_left);}
+      atomic_inc(&s->queues[qid].gpu_self_tasks_left);}
+      
+    if (t->subtype == task_subtype_grav && t->type == task_type_pair) {
+      atomic_inc(&s->queues[qid].gpu_pair_tasks_left);}
     
   }
 }
@@ -2757,7 +2770,17 @@ struct task *scheduler_done(struct scheduler *s, struct task *t) {
     t->toc = getticks();
     t->total_ticks += t->toc - t->tic;
     pthread_mutex_lock(&s->sleep_mutex);
+    
+    /*fprintf(stderr,
+        "[DONE-BEFORE] task=%p type=%d subtype=%d waiting=%i\n",
+        (void*)t, t->type, t->subtype, s->waiting);*/
+        
     atomic_dec(&s->waiting);
+    
+    fprintf(stderr,
+        "[DONE-AFTER] task=%p type=%d subtype=%d waiting=%i\n",
+        (void*)t, t->type, t->subtype, s->waiting);
+        
     pthread_cond_broadcast(&s->sleep_cond);
     pthread_mutex_unlock(&s->sleep_mutex);
   }
@@ -2798,7 +2821,17 @@ struct task *scheduler_unlock(struct scheduler *s, struct task *t) {
     t->toc = getticks();
     t->total_ticks += t->toc - t->tic;
     pthread_mutex_lock(&s->sleep_mutex);
+    
+    /*fprintf(stderr,
+        "[DONE-BEFORE] task=%p type=%d subtype=%d waiting=%i\n",
+        (void*)t, t->type, t->subtype, s->waiting);*/
+        
     atomic_dec(&s->waiting);
+    
+    fprintf(stderr,
+        "[DONE-AFTER] task=%p type=%d subtype=%d waiting=%i\n",
+        (void*)t, t->type, t->subtype, s->waiting);
+        
     pthread_cond_broadcast(&s->sleep_cond);
     pthread_mutex_unlock(&s->sleep_mutex);
   }
@@ -2970,11 +3003,18 @@ struct task *scheduler_gettask(struct scheduler *s, int qid,
 
           /* Try to get a task from that random queue */
           TIMER_TIC;
+          //lock_lock(&q_stl->lock);
           res = queue_gettask(q_stl, prev, 0);
+          //lock_unlock(&q_stl->lock);
           TIMER_TOC(timer_qsteal);
 
           /* Lucky? i.e. did we actually get a task? */
           if (res != NULL) {
+          
+            /*fprintf(stderr,
+        "[STEAL] thief=%d victim=%d task=%p type=%d subtype=%d waiting=%i\n",
+        qid, qstl_id, (void*)res, res->type, res->subtype,
+        s->waiting);*/
 
             /* For GPU tasks: Move counter from the robbed to the robber */
 
@@ -2982,8 +3022,13 @@ struct task *scheduler_gettask(struct scheduler *s, int qid,
             enum task_types type = res->type;
 
             if (subtype == task_subtype_grav && type == task_type_self) {
-              atomic_inc(&q->gpu_tasks_left);
-              atomic_dec(&q_stl->gpu_tasks_left);
+              atomic_inc(&q->gpu_self_tasks_left);
+              atomic_dec(&q_stl->gpu_self_tasks_left);
+            }
+            
+            if (subtype == task_subtype_grav && type == task_type_pair) {
+              atomic_inc(&q->gpu_pair_tasks_left);
+              atomic_dec(&q_stl->gpu_pair_tasks_left);
             }
             
             /* Run with the task */

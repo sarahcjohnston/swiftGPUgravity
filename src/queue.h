@@ -75,7 +75,10 @@ struct queue {
   int *tid_incoming;
   volatile unsigned int first_incoming, last_incoming, count_incoming;
   
-  int gpu_tasks_left;
+  int gpu_self_tasks_left;
+  int gpu_pair_tasks_left;
+  
+  int pack_count_pair;
 
 } __attribute__((aligned(queue_struct_align)));
 

@@ -9,6 +9,7 @@
 
 #include "externalfunctions.cu"
 #include "multipole_struct.h"
+#include "periodic.h"
 
 /* Self gravity kernel. This is called by the pp_offload function */
 //PP ALL INTERACTIONS
@@ -96,12 +97,12 @@ __global__ void pair_grav_pp(int periodic, const float *CoM_i, const float *CoM_
        Let's updated the active cell(s) only" */
 
       /* Full P2P */
-      grav_pp_full(active_i, dim_0, dim_1, dim_2, h_i, h_j, mass_j_arr, r_s_inv, x_i, x_j, y_i, y_j, z_i, z_j, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_j, periodic, ci_active, 0, symmetric, max_r_decision);
+      pair_grav_pp_full(active_i, dim_0, dim_1, dim_2, h_i, h_j, mass_j_arr, r_s_inv, x_i, x_j, y_i, y_j, z_i, z_j, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_j, periodic, ci_active, 0, symmetric, max_r_decision);
 
       /* No M2P in GPU version */
 
       /* Full P2P */
-      grav_pp_full(active_j, dim_0, dim_1, dim_2, h_j, h_i, mass_i_arr, r_s_inv, x_j, x_i, y_j, y_i, z_j, z_i, a_x_j, a_y_j, a_z_j, pot_j, gcount_j, gcount_padded_i, periodic, 0, cj_active, symmetric, max_r_decision);
+      pair_grav_pp_full(active_j, dim_0, dim_1, dim_2, h_j, h_i, mass_i_arr, r_s_inv, x_j, x_i, y_j, y_i, z_j, z_i, a_x_j, a_y_j, a_z_j, pot_j, gcount_j, gcount_padded_i, periodic, 0, cj_active, symmetric, max_r_decision);
 
     /* Periodic BC */
 
@@ -133,11 +134,11 @@ __global__ void pair_grav_pp(int periodic, const float *CoM_i, const float *CoM_
        Let's updated the active cell(s) only" */
 
         /* Truncated P2P - cell i */
-        grav_pp_truncated(active_i, dim_0, dim_1, dim_2, h_i, h_j, mass_j_arr, r_s_inv, x_i, x_j, y_i, y_j, z_i, z_j, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_j, periodic, ci_active, 0, symmetric, max_r_decision);
+        pair_grav_pp_truncated(active_i, dim_0, dim_1, dim_2, h_i, h_j, mass_j_arr, r_s_inv, x_i, x_j, y_i, y_j, z_i, z_j, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_j, periodic, ci_active, 0, symmetric, max_r_decision);
 	
 
         /* Truncated P2P - cell j */
-	grav_pp_truncated(active_j, dim_0, dim_1, dim_2, h_j, h_i, mass_i_arr, r_s_inv, x_j, x_i, y_j, y_i, z_j, z_i, a_x_j, a_y_j, a_z_j, pot_j, gcount_j, gcount_padded_i, periodic, 0, cj_active, symmetric, max_r_decision);
+	pair_grav_pp_truncated(active_j, dim_0, dim_1, dim_2, h_j, h_i, mass_i_arr, r_s_inv, x_j, x_i, y_j, y_i, z_j, z_i, a_x_j, a_y_j, a_z_j, pot_j, gcount_j, gcount_padded_i, periodic, 0, cj_active, symmetric, max_r_decision);
 
         
 
@@ -146,10 +147,10 @@ __global__ void pair_grav_pp(int periodic, const float *CoM_i, const float *CoM_
        Let's updated the active cell(s) only" */
 
         /* Full P2P - cell i */
-        grav_pp_full(active_i, dim_0, dim_1, dim_2, h_i, h_j, mass_j_arr, r_s_inv, x_i, x_j, y_i, y_j, z_i, z_j, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_j, periodic, ci_active, 0, symmetric, max_r_decision);
+        pair_grav_pp_full(active_i, dim_0, dim_1, dim_2, h_i, h_j, mass_j_arr, r_s_inv, x_i, x_j, y_i, y_j, z_i, z_j, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_j, periodic, ci_active, 0, symmetric, max_r_decision);
 
         /* Full P2P - cell j */
-        grav_pp_full(active_j, dim_0, dim_1, dim_2, h_j, h_i, mass_i_arr, r_s_inv, x_j, x_i, y_j, y_i, z_j, z_i, a_x_j, a_y_j, a_z_j, pot_j, gcount_j, gcount_padded_i, periodic, 0, cj_active, symmetric, max_r_decision);
+        pair_grav_pp_full(active_j, dim_0, dim_1, dim_2, h_j, h_i, mass_i_arr, r_s_inv, x_j, x_i, y_j, y_i, z_j, z_i, a_x_j, a_y_j, a_z_j, pot_j, gcount_j, gcount_padded_i, periodic, 0, cj_active, symmetric, max_r_decision);
 
 }
 
@@ -237,3 +238,94 @@ extern "C" void self_pp_offload_new(int periodic, float rmax_i, double min_trunc
 	
 	/* memory transfer was here - this is all done in runner_main now */
 }
+
+//self grav pp offload
+extern "C" void pair_pp_offload_new(int periodic, float rmax_i, float rmax_j, double min_trunc, const float *r_s_inv, const int *gcount_i, const int *gcount_padded_i, const int *gcount_j, const int *gcount_padded_j, int ci_active, int cj_active, float dim_0, float dim_1, float dim_2, int symmetric, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells, int max_cell_size, cudaStream_t stream){
+
+	int threads = 256;
+	dim3 block(threads);
+	int npairs = ncells/2;
+	dim3 grid(npairs, (max_cell_size + threads - 1) / threads);
+	size_t shmem = 0;//threads * sizeof(gravity_gpu_values_send);
+	
+	// update ci
+	pair_grav_pp_kernel<<<grid, block, 0, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, periodic, *r_s_inv, symmetric, /*swap=*/0, dim_0, dim_1, dim_2, max_cell_size, ncells);
+	
+	//printf("PAIRRR \n");
+	
+	cudaError_t err = cudaPeekAtLastError();
+if (err != cudaSuccess) printf("KERNEL LAUNCH ERROR: %s\n", cudaGetErrorString(err));
+
+	// update cj
+  	if (symmetric) {
+    	pair_grav_pp_kernel<<<grid, block, 0, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, periodic, *r_s_inv, symmetric, /*swap=*/1, dim_0, dim_1, dim_2, max_cell_size, ncells);
+  	}
+  	
+}
+  	
+	//PREVIOUSSSSSS VERSION
+	//int max_r_decision = 0;
+
+    /* GPU-ported copy of the existing SWIFT decision tree
+       "Can we use the Newtonian version or do we need the truncated one ?"
+
+	NON-PERIODIC BC
+       "Not periodic -> Can always use Newtonian potential
+       Let's updated the active cell(s) only" */
+
+      /* Full P2P */
+      //pair_grav_pp_full_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, dim_0, dim_1, dim_2, *r_s_inv, *gcount_i, *gcount_padded_j, periodic, ci_active, cj_active, symmetric, max_r_decision, ncells, max_cell_size);
+
+      /* No M2P in GPU version */
+
+      /* Full P2P */
+      //pair_grav_pp_full_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, dim_0, dim_1, dim_2, *r_s_inv, *gcount_i, *gcount_padded_j, periodic, ci_active, cj_active, symmetric, max_r_decision, ncells, max_cell_size);
+
+    /* Periodic BC */
+
+    /* Get the relative distance between the CoMs */
+    //double d[3] = {CoM_j[0] - CoM_i[0], CoM_j[1] - CoM_i[1],
+      //              CoM_j[2] - CoM_i[2]};
+
+    /* Correct for periodic BCs */
+    //d[0] = nearestf(d[0], dim_0);
+    //d[1] = nearestf(d[1], dim_1);
+    //d[2] = nearestf(d[2], dim_2);
+
+    //const double r2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+
+    /* Get the maximal distance between any two particles */
+    //const double max_r = sqrt(r2) + rmax_i + rmax_j;
+
+    /* Apply decision for whether you need to use truncated interactions or not */
+    //if (max_r > min_trunc) {
+	//max_r_decision = 0;}
+    //else {
+	//max_r_decision = 1;}
+
+    /* "Do we need to use the truncated interactions ?
+    
+
+       Periodic but far-away cells must use the truncated potential 
+
+       Let's updated the active cell(s) only" */
+
+        /* Truncated P2P - cell i */
+       // pair_grav_pp_truncated_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, dim_0, dim_1, dim_2, *r_s_inv, *gcount_i, *gcount_padded_j, periodic, ci_active, cj_active, symmetric, max_r_decision, ncells, max_cell_size);
+	
+
+        /* Truncated P2P - cell j */
+	//pair_grav_pp_truncated_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, dim_0, dim_1, dim_2, *r_s_inv, *gcount_i, *gcount_padded_j, periodic, ci_active, cj_active, symmetric, max_r_decision, ncells, max_cell_size);
+
+        
+
+      /* "Periodic but close-by cells can use the full Newtonian potential
+
+       Let's updated the active cell(s) only" */
+
+        /* Full P2P - cell i */
+        //pair_grav_pp_full_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, dim_0, dim_1, dim_2, *r_s_inv, *gcount_i, *gcount_padded_j, periodic, ci_active, cj_active, symmetric, max_r_decision, ncells, max_cell_size);
+
+        /* Full P2P - cell j */
+       // pair_grav_pp_full_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, dim_0, dim_1, dim_2, *r_s_inv, *gcount_i, *gcount_padded_j, periodic, ci_active, cj_active, symmetric, max_r_decision, ncells, max_cell_size);
+//}

@@ -131,6 +131,30 @@ void runner_do_grav_down(struct runner *r, struct cell *c, int timer) {
     if (!c->grav.multipole->pot.interacted) return;
 
     if (!cell_are_gpart_drifted(c, e)) error("Un-drifted gparts");
+    /*if (!cell_are_gpart_drifted(c, e)) {
+    printf("[GRAV_DOWN] qid=%d cell=%p split=%d count=%zu "
+       "ti_old_part=%lld ti_current=%lld "
+       "do_grav_drift=%d do_grav_sub_drift=%d drifted=%d\n",
+       r->qid,
+       (void*)c,
+       c->split,
+       c->grav.count,
+       (long long)c->grav.ti_old_part,
+       (long long)e->ti_current,
+       cell_get_flag(c, cell_flag_do_grav_drift),
+       cell_get_flag(c, cell_flag_do_grav_sub_drift),
+       cell_are_gpart_drifted(c, e));
+       
+      cell_set_flag(c, cell_flag_do_grav_drift);
+      cell_set_flag(c, cell_flag_do_grav_sub_drift);*/
+      //runner_do_drift_gpart(r, c, /*timer=*/0);
+      
+      /*printf("[POST_DRIFT] qid=%d ti_old_part=%lld ti_current=%lld drifted=%d\n",
+       r->qid,
+       (long long)c->grav.ti_old_part,
+       (long long)e->ti_current,
+       cell_are_gpart_drifted(c, e));}
+    if (!cell_are_gpart_drifted(c, e)) error("qid:%i gparts still not drifted after drift",r->qid);*/
 
 #ifndef SWIFT_TASKS_WITHOUT_ATOMICS
     /* Lock the cell for the particle updates */
@@ -1660,6 +1684,419 @@ void runner_dopair_grav_pp(struct runner *r, struct cell *ci, struct cell *cj,
   TIMER_TOC(timer_dopair_grav_pp);
 }
 
+extern void pair_pp_offload_new(int periodic, float rmax_i, float rmax_j, double min_trunc, const float *r_s_inv, const int *gcount_i, const int *gcount_padded_i, const int *gcount_j, const int *gcount_padded_j, int ci_active, int cj_active, float dim_0, float dim_1, float dim_2, int symmetric, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells, int max_cell_size, cudaStream_t stream);
+/**
+ * @brief Computes the interaction of all the particles in a cell with all the
+ * particles of another cell.
+ *
+ * This function switches between the full potential and the truncated one
+ * depending on needs. It will also use the M2P (multipole) interaction
+ * for the subset of particles in either cell for which the distance criterion
+ * is valid.
+ *
+ * This function starts by constructing the require #gravity_cache for both
+ * cells and then call the specialised functions doing the actual work on
+ * the caches. It then write the data back to the particles.
+ *
+ * @param r The #runner.
+ * @param ci The first #cell.
+ * @param cj The other #cell.
+ * @param symmetric Are we updating both cells (1) or just ci (0) ?
+ * @param allow_mpole Are we allowing the use of M2P interactions ?
+ */
+void runner_dopair_grav_pp_new(struct runner *r, struct cell *ci, struct cell *cj,
+                           const int symmetric, const int allow_mpole, struct gravity_gpu_values_send *gravity_gpu_values_send_pair, struct gravity_gpu_values_send *gravity_gpu_values_send_pair_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair, struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair_d, struct cell** grav_cells_pair, struct task** grav_tasks_pair, struct task *t, struct scheduler *sched, int ncells, int max_cell_size, int *pack_count_pair, cudaStream_t stream) {
+                           
+  //printf("in the pp function! \n");
+
+  /* Recover some useful constants */
+  const struct engine *e = r->e;
+  const int periodic = e->mesh->periodic;
+  const float dim[3] = {(float)e->mesh->dim[0], (float)e->mesh->dim[1],
+                        (float)e->mesh->dim[2]};
+  const float r_s_inv = e->mesh->r_s_inv;
+  const double min_trunc = e->mesh->r_cut_min;
+  
+  float dim_0 = dim[0];
+  float dim_1 = dim[1];
+  float dim_2 = dim[2];
+
+  TIMER_TIC;
+
+  /* Record activity status */
+  const int ci_active =
+      cell_is_active_gravity(ci, e) && (ci->nodeID == e->nodeID);
+  const int cj_active =
+      cell_is_active_gravity(cj, e) && (cj->nodeID == e->nodeID);
+
+  /* Anything to do here? */
+  //if (!ci_active && !cj_active) return;
+  //if (!ci_active && !symmetric) return;
+
+#ifdef SWIFT_DEBUG_CHECKS
+  /* Check that we are not doing something stupid */
+  if (ci->split || cj->split) error("Running P-P on splitable cells");
+
+  /* Let's start by checking things are drifted */
+  if (!cell_are_gpart_drifted(ci, e)) error("Un-drifted gparts");
+  if (!cell_are_gpart_drifted(cj, e)) error("Un-drifted gparts");
+  if (cj_active && ci->grav.ti_old_multipole != e->ti_current)
+    error("Un-drifted multipole");
+  if (ci_active && cj->grav.ti_old_multipole != e->ti_current)
+    error("Un-drifted multipole");
+#endif
+
+  /* Caches to play with */
+  struct gravity_cache *const ci_cache = &r->ci_gravity_cache;
+  struct gravity_cache *const cj_cache = &r->cj_gravity_cache;
+
+  /* Shift to apply to the particles in each cell */
+  const double shift_i[3] = {0., 0., 0.};
+  const double shift_j[3] = {0., 0., 0.};
+
+  /* Recover the multipole info and shift the CoM locations */
+  const float rmax_i = ci->grav.multipole->r_max;
+  const float rmax_j = cj->grav.multipole->r_max;
+  const struct multipole *multi_i = &ci->grav.multipole->m_pole;
+  const struct multipole *multi_j = &cj->grav.multipole->m_pole;
+  const float CoM_i[3] = {(float)(ci->grav.multipole->CoM[0] - shift_i[0]),
+                          (float)(ci->grav.multipole->CoM[1] - shift_i[1]),
+                          (float)(ci->grav.multipole->CoM[2] - shift_i[2])};
+  const float CoM_j[3] = {(float)(cj->grav.multipole->CoM[0] - shift_j[0]),
+                          (float)(cj->grav.multipole->CoM[1] - shift_j[1]),
+                          (float)(cj->grav.multipole->CoM[2] - shift_j[2])};
+
+  /* Start by constructing particle caches */
+
+  /* Computed the padded counts */
+  const int gcount_i = ci->grav.count;
+  const int gcount_j = cj->grav.count;
+  const int gcount_padded_i = gcount_i - (gcount_i % VEC_SIZE) + VEC_SIZE;
+  const int gcount_padded_j = gcount_j - (gcount_j % VEC_SIZE) + VEC_SIZE;
+  const int allow_multipole_i = allow_mpole && ci->grav.count > 1;
+  const int allow_multipole_j = allow_mpole && cj->grav.count > 1;
+
+  /* Fill the caches */
+  if (ci->nodeID == e->nodeID) {
+    gravity_cache_populate(e->max_active_bin, allow_multipole_j, periodic, dim,
+                           ci_cache, ci->grav.parts, gcount_i, gcount_padded_i,
+                           shift_i, CoM_j, cj->grav.multipole, ci,
+                           e->gravity_properties);
+  } else {
+    gravity_cache_populate_foreign(
+        periodic, dim, ci_cache, ci->grav.parts_foreign, gcount_i,
+        gcount_padded_i, shift_i, ci, e->gravity_properties);
+  }
+
+  if (cj->nodeID == e->nodeID) {
+    gravity_cache_populate(e->max_active_bin, allow_multipole_i, periodic, dim,
+                           cj_cache, cj->grav.parts, gcount_j, gcount_padded_j,
+                           shift_j, CoM_i, ci->grav.multipole, cj,
+                           e->gravity_properties);
+  } else {
+    gravity_cache_populate_foreign(
+        periodic, dim, cj_cache, cj->grav.parts_foreign, gcount_j,
+        gcount_padded_j, shift_j, cj, e->gravity_properties);
+  }
+  
+  struct cell *ci0 = ci;
+  struct cell *cj0 = cj;
+  struct cell *a = ci0, *b = cj0;
+  
+  if (a > b) { struct cell *tmp = a; a = b; b = tmp; }
+  while (cell_glocktree(a)) { ; }
+  while (cell_glocktree(b)) { ; }
+  
+  cudaEvent_t startpack, stoppack;
+  cudaEventCreate(&startpack);
+  cudaEventCreate(&stoppack);
+
+  cudaEventRecord(startpack, stream);
+  
+  //printf("packing values! \n");
+  
+  {TIMER_TIC;
+	    for (int i = 0; i < gcount_i; i++){
+            	gravity_gpu_values_send_pair[i + *pack_count_pair*max_cell_size].h_i = ci_cache->epsilon[i];
+            	gravity_gpu_values_send_pair[i + *pack_count_pair*max_cell_size].mass_i = ci_cache->m[i];
+            	gravity_gpu_values_send_pair[i + *pack_count_pair*max_cell_size].x_i = ci_cache->x[i];
+            	gravity_gpu_values_send_pair[i + *pack_count_pair*max_cell_size].y_i = ci_cache->y[i];
+            	gravity_gpu_values_send_pair[i + *pack_count_pair*max_cell_size].z_i = ci_cache->z[i];
+            	gravity_gpu_values_send_pair[i + *pack_count_pair*max_cell_size].active_i = ci_cache->active[i];
+            	
+            	gravity_gpu_values_send_pair[i + *pack_count_pair*max_cell_size].h_j = ci_cache->epsilon[i];
+            	gravity_gpu_values_send_pair[i + *pack_count_pair*max_cell_size].mass_j = ci_cache->m[i];
+            	gravity_gpu_values_send_pair[i + *pack_count_pair*max_cell_size].x_j = ci_cache->x[i];
+            	gravity_gpu_values_send_pair[i + *pack_count_pair*max_cell_size].y_j = ci_cache->y[i];
+            	gravity_gpu_values_send_pair[i + *pack_count_pair*max_cell_size].z_j = ci_cache->z[i];
+            	gravity_gpu_values_send_pair[i + *pack_count_pair*max_cell_size].active_j = ci_cache->active[i];
+            }
+            
+            for (int i = 0; i < gcount_j; i++){
+            	gravity_gpu_values_send_pair[i + (*pack_count_pair+1)*max_cell_size].h_j = cj_cache->epsilon[i];
+            	gravity_gpu_values_send_pair[i + (*pack_count_pair+1)*max_cell_size].mass_j = cj_cache->m[i];
+            	gravity_gpu_values_send_pair[i + (*pack_count_pair+1)*max_cell_size].x_j = cj_cache->x[i];
+            	gravity_gpu_values_send_pair[i + (*pack_count_pair+1)*max_cell_size].y_j = cj_cache->y[i];
+            	gravity_gpu_values_send_pair[i + (*pack_count_pair+1)*max_cell_size].z_j = cj_cache->z[i];
+            	gravity_gpu_values_send_pair[i + (*pack_count_pair+1)*max_cell_size].active_j = cj_cache->active[i];
+            	
+            	gravity_gpu_values_send_pair[i + (*pack_count_pair+1)*max_cell_size].h_i      = cj_cache->epsilon[i];
+    		gravity_gpu_values_send_pair[i + (*pack_count_pair+1)*max_cell_size].mass_i   = cj_cache->m[i];
+    		gravity_gpu_values_send_pair[i + (*pack_count_pair+1)*max_cell_size].x_i      = cj_cache->x[i];
+    		gravity_gpu_values_send_pair[i + (*pack_count_pair+1)*max_cell_size].y_i      = cj_cache->y[i];
+    		gravity_gpu_values_send_pair[i + (*pack_count_pair+1)*max_cell_size].z_i      = cj_cache->z[i];
+    		gravity_gpu_values_send_pair[i + (*pack_count_pair+1)*max_cell_size].active_i = cj_cache->active[i];
+            }
+            
+            for (int i = 0; i < max_cell_size; i++){
+            	gravity_gpu_values_recv_pair[i + *pack_count_pair*max_cell_size].a_x_i = 0;
+            	gravity_gpu_values_recv_pair[i + *pack_count_pair*max_cell_size].a_y_i = 0;
+            	gravity_gpu_values_recv_pair[i + *pack_count_pair*max_cell_size].a_z_i = 0;
+            	gravity_gpu_values_recv_pair[i + *pack_count_pair*max_cell_size].pot_i = 0;
+            	gravity_gpu_values_recv_pair[i + *pack_count_pair*max_cell_size].a_x_j = 0;
+            	gravity_gpu_values_recv_pair[i + *pack_count_pair*max_cell_size].a_y_j = 0;
+            	gravity_gpu_values_recv_pair[i + *pack_count_pair*max_cell_size].a_z_j = 0;
+            	gravity_gpu_values_recv_pair[i + *pack_count_pair*max_cell_size].pot_j = 0;
+            	}
+            	
+            for (int i = 0; i < max_cell_size; i++){
+            	gravity_gpu_values_recv_pair[i + (*pack_count_pair+1)*max_cell_size].a_x_i = 0;
+            	gravity_gpu_values_recv_pair[i + (*pack_count_pair+1)*max_cell_size].a_y_i = 0;
+            	gravity_gpu_values_recv_pair[i + (*pack_count_pair+1)*max_cell_size].a_z_i = 0;
+            	gravity_gpu_values_recv_pair[i + (*pack_count_pair+1)*max_cell_size].pot_i = 0;
+            	gravity_gpu_values_recv_pair[i + (*pack_count_pair+1)*max_cell_size].a_x_j = 0;
+            	gravity_gpu_values_recv_pair[i + (*pack_count_pair+1)*max_cell_size].a_y_j = 0;
+            	gravity_gpu_values_recv_pair[i + (*pack_count_pair+1)*max_cell_size].a_z_j = 0;
+            	gravity_gpu_values_recv_pair[i + (*pack_count_pair+1)*max_cell_size].pot_j = 0;
+            	}
+	TIMER_TOC(timer_doself_grav_pp);}
+	
+	//store the address of the cells and tasks we are working on	
+        grav_cells_pair[*pack_count_pair] = ci;
+        grav_cells_pair[*pack_count_pair + 1] = cj;
+        grav_tasks_pair[*pack_count_pair/2] = t;
+        
+        gravity_gpu_values_send_pair[*pack_count_pair*max_cell_size].cell_active = cell_is_active_gravity(ci, e);
+	    gravity_gpu_values_send_pair[(*pack_count_pair+1)*max_cell_size].cell_active = cell_is_active_gravity(cj, e);
+
+	    gravity_gpu_values_send_pair[*pack_count_pair*max_cell_size].gcounts = gcount_i;
+	    gravity_gpu_values_send_pair[(*pack_count_pair+1)*max_cell_size].gcounts = gcount_j;
+	    
+	    int use_full = 1;
+	    if (periodic) {
+  		double d0 = CoM_j[0] - CoM_i[0];
+  		double d1 = CoM_j[1] - CoM_i[1];
+  		double d2 = CoM_j[2] - CoM_i[2];
+  		d0 = nearest(d0, e->mesh->dim[0]);
+  		d1 = nearest(d1, e->mesh->dim[1]);
+  		d2 = nearest(d2, e->mesh->dim[2]);
+  		double r2 = d0*d0 + d1*d1 + d2*d2;
+  		double max_r = sqrt(r2) + rmax_i + rmax_j;
+  		use_full = (max_r <= min_trunc);
+		}
+
+	   // store decision on BOTH blocks
+	   gravity_gpu_values_send_pair[*pack_count_pair * max_cell_size].use_full = use_full;
+	   gravity_gpu_values_send_pair[(*pack_count_pair + 1) * max_cell_size].use_full = use_full;
+            
+            //update that we packed a cell into our array
+            //printf("qid:%i pack count: %i ncells:%i \n", r->qid, *pack_count_pair, ncells);
+            *pack_count_pair += 2;
+            //printf("qid:%i pack count: %i ncells:%i \n", r->qid, *pack_count_pair, ncells);
+            
+            /*printf("PACK: qid=%d t=%p pack_count=%d ci=%p cj=%p\n",
+       	    r->qid, (void*)t, *pack_count_pair, (void*)ci, (void*)cj);*/
+            
+            gravity_cache_zero_output(ci_cache, gcount_padded_i);
+            gravity_cache_zero_output(cj_cache, gcount_padded_j);
+            
+            cell_gunlocktree(b);
+	    cell_gunlocktree(a);
+	    
+	    lock_lock(&sched->queues[r->qid].lock); 
+	    sched->queues[r->qid].gpu_pair_tasks_left--;
+	    (void)lock_unlock(&sched->queues[r->qid].lock);
+	    
+	    //printf("qid:%i Packed: %i \n", r->qid, *pack_count_pair);
+	    //fflush(stdout);
+	    
+	    if (*pack_count_pair >= ncells){
+	    	//printf("its pack send time! \n");
+            	int ncells_orig = ncells;   
+            	
+            	cudaEvent_t startcopyH2D, stopcopyH2D;
+	    	cudaEventCreate(&startcopyH2D);
+	    	cudaEventCreate(&stopcopyH2D);
+
+	    	cudaEventRecord(startcopyH2D, stream);
+			    	
+	    	{TIMER_TIC;
+	    	
+	    	//printf("sending values! \n");
+            
+            	//now copy all the arrays to the device
+        	//gravity_gpu_H2D(gravity_gpu_values_h, gravity_gpu_values_d, ncells, max_cell_size, stream);
+        	cudaMemcpyAsync(gravity_gpu_values_send_pair_d, gravity_gpu_values_send_pair, ncells * max_cell_size * sizeof(struct gravity_gpu_values_send), cudaMemcpyHostToDevice, stream);
+        	cudaMemcpyAsync(gravity_gpu_values_recv_pair_d, gravity_gpu_values_recv_pair, ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv), cudaMemcpyHostToDevice, stream);
+        	
+        	cudaEventRecord(stopcopyH2D, stream);
+	     	
+		cudaError_t err2 = cudaGetLastError();
+    		if (err2 != cudaSuccess) 
+    			printf("Error2: %s\n", cudaGetErrorString(err2));
+    			
+    		cudaEvent_t startker, stopker;
+	    	cudaEventCreate(&startker);
+	    	cudaEventCreate(&stopker);
+
+	    	cudaEventRecord(startker, stream);
+    			
+    		//run the GPU function	
+    		pair_pp_offload_new(periodic, rmax_i, rmax_j, min_trunc, &r_s_inv, &gcount_i, &gcount_padded_i, &gcount_j, &gcount_padded_j, ci_active, cj_active, dim_0, dim_1, dim_2, symmetric, gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair_d, ncells, max_cell_size, stream);
+    		
+    		cudaEventRecord(stopker, stream);
+    		
+    		//cudaDeviceSynchronize();
+    		
+    		cudaEvent_t startcopyD2H, stopcopyD2H;
+	    	cudaEventCreate(&startcopyD2H);
+	    	cudaEventCreate(&stopcopyD2H);
+
+	    	cudaEventRecord(startcopyD2H, stream);
+		
+		//copy the arrays from device to host
+		//gravity_gpu_D2H(gravity_gpu_values_h, gravity_gpu_values_d, ncells, max_cell_size, stream);
+		cudaMemcpyAsync(gravity_gpu_values_recv_pair, gravity_gpu_values_recv_pair_d, ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv), cudaMemcpyDeviceToHost, stream);
+		
+		cudaEventRecord(stopcopyD2H, stream);
+
+		cudaStreamSynchronize(stream); //THIS ONE IS NEEDED!
+
+		TIMER_TOC(timer_doself_grav_pp);}//TIMER_TOC(timer_gpu_copycalc);
+		
+		//TIMINGS RECORDING
+		/*printf("Pack Time: %f ms\n", timer_gpu_pack);
+	    	FILE *f1 = fopen("packtime_a30.txt", "a");
+    	    	fprintf(f1, "%f\n", timer_gpu_pack);
+            	fclose(f1);
+            	
+            	float copytimeH2D = 0;
+	     	cudaEventElapsedTime(&copytimeH2D, startcopyH2D, stopcopyH2D);
+	     	printf("Copy Time: %f ms\n", copytimeH2D);
+	     	FILE *f2 = fopen("copytimeH2D_a30.txt", "a");
+    	        fprintf(f2, "%f\n", copytimeH2D);
+                fclose(f2);
+                
+	     	float kerneltime = 0;
+	     	cudaEventElapsedTime(&kerneltime, startker, stopker);
+	     	printf("Kernel Time: %f ms\n", kerneltime);
+	     	FILE *f3 = fopen("kerneltime_a30.txt", "a");
+    	        fprintf(f3, "%f\n", kerneltime);
+                fclose(f3);
+                
+                float copytimeD2H = 0;
+	     	cudaEventElapsedTime(&copytimeD2H, startcopyD2H, stopcopyD2H);
+	     	printf("Copy Time: %f ms\n", copytimeD2H);
+	     	FILE *f4 = fopen("copytimeD2H_a30.txt", "a");
+    	        fprintf(f4, "%f\n", copytimeD2H);
+                fclose(f4);*/
+		
+		//cudaDeviceSynchronize();
+		cudaError_t err3 = cudaGetLastError();
+    		if (err3 != cudaSuccess) 
+    			printf("Error3: %s\n", cudaGetErrorString(err3));
+    			
+    		{TIMER_TIC;
+    		
+    		/*send results back to relevant cell structs*/
+    		for (int j = 0; j < ncells; j+=2) {
+    		
+    			if (grav_cells_pair[j] == NULL || grav_cells_pair[j+1] == NULL)
+    error("PAIR UNPACK: NULL cell j=%d packed=%d qid=%d", j, ncells, r->qid);
+
+  if (grav_tasks_pair[j/2] == NULL)
+    error("PAIR UNPACK: NULL task k=%d (j=%d) packed=%d qid=%d",
+          j/2, j, ncells, r->qid);
+          
+    			struct cell *ci0 = grav_cells_pair[j];
+			struct cell *cj0 = grav_cells_pair[j+1];
+			struct cell *a = ci0, *b = cj0;
+			
+			if (a > b) { struct cell *tmp = a; a = b; b = tmp; }
+
+    			/*while (cell_glocktree(grav_cells_pair[j])) {
+      			; // spin until we acquire the lock
+			}
+			while (cell_glocktree(grav_cells_pair[j+1])) {
+      			; // spin until we acquire the lock
+			}*/
+			while (cell_glocktree(a)) { ; }
+			//printf("hunting for lock for cell %p\n", (void*)a); }
+	    		for (int i =0; i < gravity_gpu_values_send_pair[j*max_cell_size].gcounts; i++){
+	    			ci0->grav.parts[i].a_grav[0] += gravity_gpu_values_recv_pair[i + j*max_cell_size].a_x_i;
+	    			ci0->grav.parts[i].a_grav[1] += gravity_gpu_values_recv_pair[i + j*max_cell_size].a_y_i;
+	    			ci0->grav.parts[i].a_grav[2] += gravity_gpu_values_recv_pair[i + j*max_cell_size].a_z_i;
+	    			ci0->grav.parts[i].potential += gravity_gpu_values_recv_pair[i + j*max_cell_size].pot_i;
+	    		
+	    			/*if (ci0->grav.parts[i].a_grav[0] == 0){
+	    			printf("cell:%i part:%i gcount:%i acceleration: [%f %f %f]\n", j, i, gravity_gpu_values_send_pair[j*max_cell_size].gcounts, ci0->grav.parts[i].a_grav[0], ci0->grav.parts[i].a_grav[1], ci0->grav.parts[i].a_grav[2]);}*/
+	    		}
+	    		cell_gunlocktree(a);
+	    		
+	    		while (cell_glocktree(b)){;}// {printf("hunting for lock for cell %p\n", (void*)b);}
+	    		for (int i = 0; i < gravity_gpu_values_send_pair[(j+1)*max_cell_size].gcounts; i++) {
+    				cj0->grav.parts[i].a_grav[0] += gravity_gpu_values_recv_pair[i + (j+1)*max_cell_size].a_x_i;
+    				cj0->grav.parts[i].a_grav[1] += gravity_gpu_values_recv_pair[i + (j+1)*max_cell_size].a_y_i;
+    				cj0->grav.parts[i].a_grav[2] += gravity_gpu_values_recv_pair[i + (j+1)*max_cell_size].a_z_i;
+    				cj0->grav.parts[i].potential += gravity_gpu_values_recv_pair[i + (j+1)*max_cell_size].pot_i;
+    				
+    				/*if (cj0->grav.parts[i].a_grav[0] == 0){
+    				printf("cell:%i part:%i gcount:%i acceleration: [%f %f %f]\n", j, i, gravity_gpu_values_send_pair[j*max_cell_size].gcounts, cj0->grav.parts[i].a_grav[0], cj0->grav.parts[i].a_grav[1], cj0->grav.parts[i].a_grav[2]);}*/
+			}
+			cell_gunlocktree(b);
+		  	
+		  	scheduler_done(sched, grav_tasks_pair[j/2]);
+		  	/*enqueue_dependencies(sched, grav_tasks_pair[j]);
+		  	pthread_mutex_lock(&sched->sleep_mutex);
+		  	atomic_dec(&sched->waiting);
+      			pthread_cond_broadcast(&sched->sleep_cond);
+      			pthread_mutex_unlock(&sched->sleep_mutex);*/
+	    			}
+	    			
+	    	TIMER_TOC(timer_doself_grav_pp);}//TIMER_TOC(timer_gpu_unpack);
+	    			
+    		
+    		//cudaDeviceSynchronize();
+		
+		/*for(int i=0; i<ncells; i+=2){
+			struct cell *a = grav_cells_pair[i];
+			struct cell *b = grav_cells_pair[i+1];
+			if (a > b) { struct cell *tmp = a; a = b; b = tmp; }
+			cell_gunlocktree(b);
+		  	cell_gunlocktree(a);
+		  	//cell_gunlocktree(grav_cells_pair[i]);
+		  	//cell_gunlocktree(grav_cells_pair[i+1]);
+		  	enqueue_dependencies(sched, grav_tasks_pair[i]);
+		  	pthread_mutex_lock(&sched->sleep_mutex);
+		  	atomic_dec(&sched->waiting);
+      			pthread_cond_broadcast(&sched->sleep_cond);
+      			pthread_mutex_unlock(&sched->sleep_mutex);
+		}*/
+		
+		//reset counter for next pack
+		for (int i = 0; i < ncells; i+=2) {
+    			grav_cells_pair[i] = NULL;
+    			grav_cells_pair[i+1] = NULL;
+    			grav_tasks_pair[i/2] = NULL;
+		}
+            	*pack_count_pair = 0;
+
+            	}
+
+  TIMER_TOC(timer_dopair_grav_pp);
+}
+
+
 /**
  * @brief Compute the gravitational forces from particles in #cell cj onto
  * particles in #cell ci without using a cache for cj.
@@ -2674,6 +3111,228 @@ void runner_dopair_recursive_grav(struct runner *r, struct cell *ci,
 
   if (gettimer) TIMER_TOC(timer_dosub_pair_grav);
 }
+
+
+/**
+ * @brief Computes the interaction of all the particles in a cell with all the
+ * particles of another cell.
+ *
+ * This function will try to recurse as far down the tree as possible and only
+ * default to direct summation if there is no better option.
+ *
+ * If using periodic BCs, we will abort the recursion if th distance between the
+ * cells is larger than the set threshold.
+ *
+ * @param r The #runner.
+ * @param ci The first #cell.
+ * @param cj The other #cell.
+ * @param gettimer Are we timing this ?
+ */
+void runner_dopair_recursive_grav_new(struct runner *r, struct cell *ci,
+                                  struct cell *cj, const int gettimer, struct gravity_gpu_values_send *gravity_gpu_values_send_pair, struct gravity_gpu_values_send *gravity_gpu_values_send_pair_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair, struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair_d, struct cell** grav_cells_pair, struct task** grav_tasks_pair, struct task *t, struct scheduler *sched, int ncells, int max_cell_size, int *pack_count_pair, int *packed, cudaStream_t stream) {
+                                  
+  if (ci == NULL || cj == NULL) error("runner_dopair_recursive_grav_new got NULL cell");
+
+  const struct engine *e = r->e;
+  
+  if (!cell_are_gpart_drifted(ci, e)) cell_drift_gpart(ci, e, /*force=*/1, NULL);
+  if (!cell_are_gpart_drifted(cj, e)) cell_drift_gpart(cj, e, /*force=*/1, NULL);
+
+  /* Clear the flags */
+  runner_clear_grav_flags(ci, e);
+  runner_clear_grav_flags(cj, e);
+
+  /* Some constants */
+  const int nodeID = e->nodeID;
+  const int periodic = e->mesh->periodic;
+  const double dim[3] = {e->mesh->dim[0], e->mesh->dim[1], e->mesh->dim[2]};
+  const double max_distance = e->mesh->r_cut_max;
+
+  /* Anything to do here? */
+  if (!((cell_is_active_gravity(ci, e) && ci->nodeID == nodeID) ||
+        (cell_is_active_gravity(cj, e) && cj->nodeID == nodeID)))
+    return;
+
+#ifdef SWIFT_DEBUG_CHECKS
+
+  const int gcount_i = ci->grav.count;
+  const int gcount_j = cj->grav.count;
+
+  /* Early abort? */
+  if (gcount_i == 0 || gcount_j == 0)
+    error("Doing pair gravity on an empty cell !");
+
+  /* Sanity check */
+  if (ci == cj) error("Pair interaction between a cell and itself.");
+
+  if (cell_is_active_gravity(ci, e) &&
+      ci->grav.ti_old_multipole != e->ti_current)
+    error("ci->grav.multipole not drifted.");
+  if (cell_is_active_gravity(cj, e) &&
+      cj->grav.ti_old_multipole != e->ti_current)
+    error("cj->grav.multipole not drifted.");
+#endif
+
+  TIMER_TIC;
+
+  /* Recover the multipole information */
+  struct gravity_tensors *const multi_i = ci->grav.multipole;
+  struct gravity_tensors *const multi_j = cj->grav.multipole;
+
+  /* Get the distance between the CoMs */
+  double dx = multi_i->CoM[0] - multi_j->CoM[0];
+  double dy = multi_i->CoM[1] - multi_j->CoM[1];
+  double dz = multi_i->CoM[2] - multi_j->CoM[2];
+
+  /* Apply BC */
+  if (periodic) {
+    dx = nearest(dx, dim[0]);
+    dy = nearest(dy, dim[1]);
+    dz = nearest(dz, dim[2]);
+  }
+  const double r2 = dx * dx + dy * dy + dz * dz;
+
+  /* Minimal distance between any 2 particles in the two cells */
+  const double r_lr_check = sqrt(r2) - (multi_i->r_max + multi_j->r_max);
+
+  /* Are we beyond the distance where the truncated forces are 0? */
+  if (periodic && r_lr_check > max_distance) {
+
+#ifdef SWIFT_DEBUG_CHECKS
+    if (cell_is_active_gravity(ci, e))
+      accumulate_add_ll(&multi_i->pot.num_interacted,
+                        multi_j->m_pole.num_gpart);
+    if (cell_is_active_gravity(cj, e))
+      accumulate_add_ll(&multi_j->pot.num_interacted,
+                        multi_i->m_pole.num_gpart);
+#endif
+
+#ifdef SWIFT_GRAVITY_FORCE_CHECKS
+    /* Need to account for the interactions we missed */
+    if (cell_is_active_gravity(ci, e))
+      accumulate_add_ll(&multi_i->pot.num_interacted_pm,
+                        multi_j->m_pole.num_gpart);
+    if (cell_is_active_gravity(cj, e))
+      accumulate_add_ll(&multi_j->pot.num_interacted_pm,
+                        multi_i->m_pole.num_gpart);
+#endif
+    return;
+  }
+  
+
+  /* OK, we actually need to compute this pair. Let's find the cheapest
+   * option... */
+
+  if (ci->grav.count <= 1 || cj->grav.count <= 1) {
+  
+    //printf("BEING CHEAP \n");
+
+    /* We have two cheap cells. Go P-P. */
+    runner_dopair_grav_pp_no_cache(r, ci, cj);
+    runner_dopair_grav_pp_no_cache(r, cj, ci);
+    
+    lock_lock(&sched->queues[r->qid].lock); 
+    sched->queues[r->qid].gpu_pair_tasks_left--;
+    (void)lock_unlock(&sched->queues[r->qid].lock);
+
+    /* Can we use M-M interactions ? */
+  } else if (gravity_M2L_accept_symmetric(e->gravity_properties, multi_i,
+                                          multi_j, r2,
+                                           /*use_rebuild_sizes=*/0, periodic)) {
+                                           
+   //printf("qid:%i MM\n", r->qid);
+                                        
+                                        //printf("DOING MM \n");
+
+    /* Go M-M */
+    runner_dopair_grav_mm(r, ci, cj);
+    
+    lock_lock(&sched->queues[r->qid].lock); 
+    sched->queues[r->qid].gpu_pair_tasks_left--;
+    (void)lock_unlock(&sched->queues[r->qid].lock);
+
+    /* Did we reach the bottom? */
+  } else if (!ci->split && !cj->split) {
+    //printf("qid:%i PP here we go!\n", r->qid);
+    
+    //printf("qid:%i PP packed:%i\n", r->qid, *packed);
+    //fflush(stdout);
+    
+    //if (!ci->split && !cj->split){
+    	//printf("qid:%i tree condition met\n", r->qid);}
+  
+
+    /* We have two leaves. Go P-P. */
+    runner_dopair_grav_pp_new(r, ci, cj, /*symmetric*/ 1, /*allow_mpoles=*/1, gravity_gpu_values_send_pair, gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair, gravity_gpu_values_recv_pair_d, grav_cells_pair, grav_tasks_pair, t, sched, ncells, max_cell_size, pack_count_pair, stream);
+    
+    *packed = 1;
+
+  } else {
+  
+ 	//printf("qid:%i recursing\n", r->qid);
+ 	
+
+    /* Alright, we'll have to split and recurse. */
+    /* We know at least one of ci and cj is splittable */
+
+    const double ri_max = multi_i->r_max;
+    const double rj_max = multi_j->r_max;
+
+    /* Split the larger of the two cells and start over again */
+    if (ri_max > rj_max) {
+
+      /* Can we actually split that interaction ? */
+      if (ci->split) {
+
+        /* Loop over ci's children */
+        for (int k = 0; k < 8; k++) {
+          if (ci->progeny[k] != NULL){
+            //runner_dopair_recursive_grav(r, ci->progeny[k], cj, 0);
+            runner_dopair_recursive_grav_new(r, ci->progeny[k], cj, 0, gravity_gpu_values_send_pair, gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair, gravity_gpu_values_recv_pair_d, grav_cells_pair, grav_tasks_pair, t, sched, ncells, max_cell_size, pack_count_pair, packed, stream);}
+        }
+
+      } else {
+        /* cj is split */
+
+        /* MATTHIEU: This could maybe be replaced by P-M interactions ?  */
+
+        /* Loop over cj's children */
+        for (int k = 0; k < 8; k++) {
+          if (cj->progeny[k] != NULL){
+            //runner_dopair_recursive_grav(r, ci, cj->progeny[k], 0);
+            runner_dopair_recursive_grav_new(r, ci, cj->progeny[k], 0, gravity_gpu_values_send_pair, gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair, gravity_gpu_values_recv_pair_d, grav_cells_pair, grav_tasks_pair, t, sched, ncells, max_cell_size, pack_count_pair, packed, stream);}
+        }
+      }
+    } else {
+
+      /* Can we actually split that interaction ? */
+      if (cj->split) {
+
+        /* Loop over cj's children */
+        for (int k = 0; k < 8; k++) {
+          if (cj->progeny[k] != NULL){
+            //runner_dopair_recursive_grav(r, ci, cj->progeny[k], 0);
+            runner_dopair_recursive_grav_new(r, ci, cj->progeny[k], 0, gravity_gpu_values_send_pair, gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair, gravity_gpu_values_recv_pair_d, grav_cells_pair, grav_tasks_pair, t, sched, ncells, max_cell_size, pack_count_pair, packed, stream);}
+        }
+
+      } else {
+        /* ci is split */
+
+        /* MATTHIEU: This could maybe be replaced by P-M interactions ?  */
+
+        /* Loop over ci's children */
+        for (int k = 0; k < 8; k++) {
+          if (ci->progeny[k] != NULL){
+            //runner_dopair_recursive_grav(r, ci->progeny[k], cj, 0);
+            runner_dopair_recursive_grav_new(r, ci->progeny[k], cj, 0, gravity_gpu_values_send_pair, gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair, gravity_gpu_values_recv_pair_d, grav_cells_pair, grav_tasks_pair, t, sched, ncells, max_cell_size, pack_count_pair, packed, stream);}
+        }
+      }
+    }
+  }
+
+  if (gettimer) TIMER_TOC(timer_dosub_pair_grav);
+}
+
 
 /**
  * @brief Computes the interaction of all the particles in a cell.

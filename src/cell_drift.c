@@ -462,6 +462,8 @@ void cell_drift_gpart(struct cell *c, const struct engine *e, int force,
 
   /* Are we not in a leaf ? */
   if (c->split && (force || cell_get_flag(c, cell_flag_do_grav_sub_drift))) {
+  
+    //printf("DOWN: not in leaf \n");
 
     /* Loop over the progeny and collect their data. */
     for (int k = 0; k < 8; k++) {
@@ -477,6 +479,9 @@ void cell_drift_gpart(struct cell *c, const struct engine *e, int force,
     c->grav.ti_old_part = ti_current;
 
   } else if (!c->split && force && ti_current > ti_old_gpart) {
+  
+  //printf("DOWN: !split \n");
+  
     /* Drift from the last time the cell was drifted to the current time */
     double dt_drift;
     if (with_cosmology) {
