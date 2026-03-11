@@ -589,6 +589,9 @@ void* runner_main(void* data) {
           const int flush_count_pair =
               sched->gpu_grav_batch_pair_counts[r->qid];
 
+          message("[NO TASK -> FLUSH] flush_count_self=%d, flush_count_pair=%d",
+                  flush_count_self, flush_count_pair);
+
           const int flushed_self = runner_flush_packed_self_batch(
               r, sched, gravity_gpu_values_send_self,
               gravity_gpu_values_send_self_d, gravity_gpu_values_recv_self,
@@ -1365,59 +1368,6 @@ void* runner_main(void* data) {
           break;
         default:
           error("Unknown/invalid task type (%d).", t->type);
-      }
-
-      /* Check to see if this is the last task in the queue. If so,
-       * setlaunch_leftovers to 1 and pack and launch on GPU */
-      int self_launch = 0;
-      lock_lock(&sched->queues[r->qid].lock);
-      if (sched->queues[r->qid].gpu_self_tasks_left < 1) self_launch = 1;
-      (void)lock_unlock(&sched->queues[r->qid].lock);
-
-      const int current_self_completed_by_flush =
-          self_launch == 1 && sched->gpu_grav_batch_self_counts[r->qid] != 0 &&
-          t->subtype == task_subtype_grav && t->type == task_type_self;
-
-      const int flush_count_self = sched->gpu_grav_batch_self_counts[r->qid];
-
-      if (self_launch == 1 && flush_count_self != 0) {
-        runner_flush_packed_self_batch(
-            r, sched, gravity_gpu_values_send_self,
-            gravity_gpu_values_send_self_d, gravity_gpu_values_recv_self,
-            gravity_gpu_values_recv_self_d, grav_cells_self, grav_tasks_self,
-            max_cell_size, stream, flush_count_self);
-        sched->gpu_grav_batch_self_counts[r->qid] = 0;
-      }
-
-      int pair_launch = 0;
-      lock_lock(&sched->queues[r->qid].lock);
-      // printf("qid:%i tasks left %i\n", r->qid,
-      // sched->queues[r->qid].gpu_pair_tasks_left); fflush(stdout);
-      if (sched->queues[r->qid].gpu_pair_tasks_left < 1) pair_launch = 1;
-      (void)lock_unlock(&sched->queues[r->qid].lock);
-
-      const int current_pair_completed_by_flush =
-          pair_launch == 1 && sched->gpu_grav_batch_pair_counts[r->qid] != 0 &&
-          t->subtype == task_subtype_grav && t->type == task_type_pair &&
-          packed == 1;
-
-      const int flush_count_pair = sched->gpu_grav_batch_pair_counts[r->qid];
-
-      if (pair_launch == 1 && flush_count_pair != 0) {
-        runner_flush_packed_pair_batch(
-            r, sched, gravity_gpu_values_send_pair,
-            gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair,
-            gravity_gpu_values_recv_pair_d, grav_cells_pair, grav_tasks_pair,
-            max_cell_size, stream, flush_count_pair);
-        sched->gpu_grav_batch_pair_counts[r->qid] = 0;
-      }
-
-      if (current_self_completed_by_flush || current_pair_completed_by_flush) {
-        r->active_time += (getticks() - task_beg);
-        prev = NULL;
-        t = NULL;
-        packed = 0;
-        continue;
       }
 
       r->active_time += (getticks() - task_beg);
