@@ -1,8 +1,9 @@
+/* GPU headers */
+#include <hip/hip_runtime_api.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* GPU headers */
-#include <hip/hip_runtime_api.h>
 #ifdef __cplusplus
 }
 #endif

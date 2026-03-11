@@ -847,7 +847,7 @@ HIP_ROOT=""
 HIP_CPPFLAGS="-D__HIP_PLATFORM_AMD__"
 HIP_LDFLAGS=""
 HIP_LIBS="-lamdhip64 -lstdc++"
-HIP_FLAGS="-x hip"
+HIP_FLAGS=""
 
 if test "x$with_cuda" != "xno"; then
    GPU_BACKEND="cuda"
@@ -920,7 +920,7 @@ if test "x$with_hip" != "xno"; then
    GPU_LDFLAGS="$HIP_LDFLAGS"
    GPU_LIBS="$HIP_LIBS"
    GPU_FLAGS="$HIP_FLAGS"
-   GPU_COMPILE_MODE_FLAGS="-c"
+   GPU_COMPILE_MODE_FLAGS="-x hip -c"
    AC_DEFINE([WITH_HIP], 1, [Compile with the HIP GPU backend])
 fi
 
