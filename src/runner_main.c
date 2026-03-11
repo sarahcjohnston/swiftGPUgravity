@@ -259,7 +259,7 @@ void* runner_main(void* data) {
     struct gravity_gpu_values_send* gravity_gpu_values_send_self_d;
     hipMalloc((void**)&gravity_gpu_values_send_self_d,
               ncells * max_cell_size * sizeof(struct gravity_gpu_values_send));
-    hipMallocHost(
+    hipHostMalloc(
         (void**)&gravity_gpu_values_send_self,
         ncells * max_cell_size * sizeof(struct gravity_gpu_values_send));
 
@@ -267,7 +267,7 @@ void* runner_main(void* data) {
     struct gravity_gpu_values_send* gravity_gpu_values_send_pair_d;
     hipMalloc((void**)&gravity_gpu_values_send_pair_d,
               ncells * max_cell_size * sizeof(struct gravity_gpu_values_send));
-    hipMallocHost(
+    hipHostMalloc(
         (void**)&gravity_gpu_values_send_pair,
         ncells * max_cell_size * sizeof(struct gravity_gpu_values_send));
 
@@ -275,7 +275,7 @@ void* runner_main(void* data) {
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_self_d;
     hipMalloc((void**)&gravity_gpu_values_recv_self_d,
               ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv));
-    hipMallocHost(
+    hipHostMalloc(
         (void**)&gravity_gpu_values_recv_self,
         ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv));
 
@@ -283,7 +283,7 @@ void* runner_main(void* data) {
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair_d;
     hipMalloc((void**)&gravity_gpu_values_recv_pair_d,
               ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv));
-    hipMallocHost(
+    hipHostMalloc(
         (void**)&gravity_gpu_values_recv_pair,
         ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv));
 
@@ -510,8 +510,6 @@ void* runner_main(void* data) {
 
             // update that we packed a cell into our array
             sched->gpu_grav_batch_self_counts[r->qid] += 1;
-            packed_self += 1;
-
             gravity_cache_zero_output(ci_cache, gcount_padded);  // ADDED HERE?
 
             cell_gunlocktree(ci);
@@ -542,8 +540,6 @@ void* runner_main(void* data) {
               // printf("qid: %i Cells packed. GPU time\n", r->qid);
               const int ncells_flush_self =
                   sched->gpu_grav_batch_self_counts[r->qid];
-              int ncells_orig = ncells;
-
               hipEvent_t startcopyH2D, stopcopyH2D;
               hipEventCreate(&startcopyH2D);
               hipEventCreate(&stopcopyH2D);
