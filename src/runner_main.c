@@ -192,13 +192,18 @@ void* runner_main(void* data) {
         /* Did I get anything? */
         if (t == NULL) {
 
+          int flushed = 0;
+
           if (r->gpu.grav_batch_self_count != 0)
-            error("qid=%d going idle with %d packed self tasks", r->qid,
-                  r->gpu.grav_batch_self_count);
+            runner_gpu_flush_leftover_self(r, sched), flushed = 1;
 
           if (r->gpu.grav_batch_pair_count != 0)
-            error("qid=%d going idle with %d packed pair tasks", r->qid,
-                  r->gpu.grav_batch_pair_count);
+            runner_gpu_flush_leftover_pair(r, sched), flushed = 1;
+
+          if (flushed) {
+            prev = NULL;
+            continue;
+          }
 
           break;
         }
