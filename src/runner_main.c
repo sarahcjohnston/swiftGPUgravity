@@ -583,6 +583,12 @@ void* runner_main(void* data) {
       struct cell* ci = t->ci;
       struct cell* cj = t->cj;
 
+      if (t->implicit) {
+        prev = NULL;
+        t = scheduler_done(sched, t);
+        continue;
+      }
+
 #ifdef SWIFT_DEBUG_TASKS
       /* Mark the thread we run on */
       t->rid = r->cpuid;
