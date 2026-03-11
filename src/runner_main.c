@@ -191,8 +191,6 @@ void* runner_main(void* data) {
     r->gpu.grav_batch_self_count = 0;
     r->gpu.grav_batch_pair_count = 0;
 
-    int ntasks;
-
     int packed = 0;
 
     /* Loop while there are tasks... */

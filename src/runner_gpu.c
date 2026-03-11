@@ -1,3 +1,4 @@
+#include "active.h"
 #include "engine.h"
 #include "error.h"
 #include "gpu_functions.h"
