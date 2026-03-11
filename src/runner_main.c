@@ -1762,8 +1762,7 @@ void* runner_main(void* data) {
           runner_do_rt_advance_cell_time(r, t->ci, 1);
           break;
         default:
-          error("Unknown/invalid task type (%d/%d:%s/%s).",
-                taskID_names[t->type], subtaskID_names[t->subtype]);
+          error("Unknown/invalid task type (%d).", t->type);
       }
 
       /*ntasks = sched->queues[r->qid].count; //how many tasks there are to do
