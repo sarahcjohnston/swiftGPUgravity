@@ -47,7 +47,7 @@ __global__ void self_grav_pp(int periodic, float rmax_i, double min_trunc, int *
 
 /* Self gravity kernel. This is called by the pp_offload function */
 //PP ALL INTERACTIONS
-__global__ void self_grav_pp_new(int periodic, float rmax_i, double min_trunc, float r_s_inv, int gcount_i, int gcount_padded_i, int ci_active, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells, int max_cell_size, hipStream_t stream) {
+static void self_grav_pp_new(int periodic, float rmax_i, double min_trunc, float r_s_inv, int gcount_i, int gcount_padded_i, int ci_active, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells, int max_cell_size, hipStream_t stream) {
 
   int threads = 256;
 	dim3 block(threads);
