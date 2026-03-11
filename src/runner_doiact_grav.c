@@ -2062,31 +2062,31 @@ void runner_dopair_grav_pp_new(
     }  // TIMER_TOC(timer_gpu_copycalc);
 
     // TIMINGS RECORDING
-    /*printf("Pack Time: %f ms\n", timer_gpu_pack);
-    FILE *f1 = fopen("packtime_a30.txt", "a");
+    printf("Pack Time: %f ms\n", timer_gpu_pack);
+    FILE* f1 = fopen("packtime_a30.txt", "a");
     fprintf(f1, "%f\n", timer_gpu_pack);
     fclose(f1);
 
     float copytimeH2D = 0;
     hipEventElapsedTime(&copytimeH2D, startcopyH2D, stopcopyH2D);
     printf("Copy Time: %f ms\n", copytimeH2D);
-    FILE *f2 = fopen("copytimeH2D_a30.txt", "a");
+    FILE* f2 = fopen("copytimeH2D_a30.txt", "a");
     fprintf(f2, "%f\n", copytimeH2D);
     fclose(f2);
 
     float kerneltime = 0;
     hipEventElapsedTime(&kerneltime, startker, stopker);
     printf("Kernel Time: %f ms\n", kerneltime);
-    FILE *f3 = fopen("kerneltime_a30.txt", "a");
+    FILE* f3 = fopen("kerneltime_a30.txt", "a");
     fprintf(f3, "%f\n", kerneltime);
     fclose(f3);
 
     float copytimeD2H = 0;
     hipEventElapsedTime(&copytimeD2H, startcopyD2H, stopcopyD2H);
     printf("Copy Time: %f ms\n", copytimeD2H);
-    FILE *f4 = fopen("copytimeD2H_a30.txt", "a");
+    FILE* f4 = fopen("copytimeD2H_a30.txt", "a");
     fprintf(f4, "%f\n", copytimeD2H);
-    fclose(f4);*/
+    fclose(f4);
 
     // hipDeviceSynchronize();
     hipError_t err3 = hipGetLastError();
