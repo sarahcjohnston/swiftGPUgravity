@@ -1652,8 +1652,9 @@ pack_count_pair);*/
         for (int i = 0; i < ncells_flush_self; i++) {
           scheduler_done(sched, grav_tasks_self[i]);
 
-          fprintf(stderr, "[FLUSH-DONE-SELF] task=%p qid=%d i=%d waiting=%i\n",
-                  (void*)grav_tasks_self[i], r->qid, i, sched->waiting);
+          /*fprintf(stderr, "[FLUSH-DONE-SELF] task=%p qid=%d i=%d
+             waiting=%i\n", (void*)grav_tasks_self[i], r->qid, i,
+             sched->waiting); */
           // if (grav_cells[i] != NULL) { //skip if grav_cells[i] not filled in
           // final batch cell_gunlocktree(grav_cells_self[i]);//}
           // if (grav_tasks[i] != NULL){
@@ -1873,9 +1874,10 @@ pack_count_pair);*/
 
             scheduler_done(sched, grav_tasks_pair[j / 2]);
 
-            fprintf(stderr,
+            /*fprintf(stderr,
                     "[FLUSH-DONE-PAIR] task=%p qid=%d j=%d waiting=%i\n",
                     (void*)grav_tasks_pair[j / 2], r->qid, j, sched->waiting);
+             */
 
             /*enqueue_dependencies(sched, grav_tasks_pair[j]);
             pthread_mutex_lock(&sched->sleep_mutex);
