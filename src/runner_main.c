@@ -145,21 +145,6 @@
 
 #include <stdatomic.h>
 
-extern void self_pp_offload_new(
-    int periodic, float rmax_i, double min_trunc, const float* r_s_inv,
-    const int* gcount_i, const int* gcount_padded_i, int ci_active,
-    struct gravity_gpu_values_send* gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv_d, int ncells,
-    int max_cell_size, hipStream_t stream);
-extern void pair_pp_offload_new(
-    int periodic, float rmax_i, float rmax_j, double min_trunc,
-    const float* r_s_inv, const int* gcount_i, const int* gcount_padded_i,
-    const int* gcount_j, const int* gcount_padded_j, int ci_active,
-    int cj_active, float dim_0, float dim_1, float dim_2, int symmetric,
-    struct gravity_gpu_values_send* gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv_d, int ncells,
-    int max_cell_size, hipStream_t stream);
-;
 /**
  * @brief The #runner main thread routine.
  *
