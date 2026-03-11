@@ -35,6 +35,22 @@ void runner_gpu_init(struct runner* r) {
   if (gpu->grav_batch_ncells == 0) gpu->grav_batch_ncells = 8;
   gpu->grav_batch_ncells = 4;
 
+  const size_t send_bytes = gpu->grav_batch_ncells * gpu->grav_max_cell_size *
+                            sizeof(struct gravity_gpu_values_send);
+  const size_t recv_bytes = gpu->grav_batch_ncells * gpu->grav_max_cell_size *
+                            sizeof(struct gravity_gpu_values_recv);
+  const size_t total_device_bytes = 2 * send_bytes + 2 * recv_bytes;
+  const size_t total_host_pinned_bytes = 2 * send_bytes + 2 * recv_bytes;
+
+  if (r->qid == 0) {
+    message("GPU device: %s", prop.name);
+    message("Total GPU memory: %.2f B", (float)prop.totalGlobalMem);
+    message("Max cell size: %i", gpu->grav_max_cell_size);
+    message("ncells per pack: %i", gpu->grav_batch_ncells);
+    message("Per-runner device buffer bytes: %zu", total_device_bytes);
+    message("Per-runner host pinned bytes: %zu", total_host_pinned_bytes);
+  }
+
   gpu->grav_batch_self_count = 0;
   gpu->grav_batch_pair_count = 0;
 

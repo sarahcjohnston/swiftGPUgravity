@@ -187,19 +187,8 @@ void* runner_main(void* data) {
   struct engine* e = r->e;
   struct scheduler* sched = &e->sched;
 
-  hipSetDevice(0);
-
-  hipDeviceProp_t prop;
-  hipGetDeviceProperties(&prop, 0);
-
   const int max_cell_size = r->gpu.grav_max_cell_size;
   const int ncells = r->gpu.grav_batch_ncells;
-
-  if (r->qid == 0) {
-    printf("Total GPU memory: %.2f B\n", (float)prop.totalGlobalMem);
-    printf("Max cell size: %i\n", max_cell_size);
-    printf("ncells per pack: %i \n", ncells);
-  }
 
   /* Main loop. */
   while (1) {
