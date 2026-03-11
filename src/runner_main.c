@@ -204,7 +204,6 @@ void* runner_main(void* data) {
   // define number of cells to transfer
   // int ncells = 10;
 
-  hipStream_t stream = r->gpu.stream;
 
   // int max_cell_size = 10000;
 
@@ -346,7 +345,7 @@ void* runner_main(void* data) {
             hipEventCreate(&startpack);
             hipEventCreate(&stoppack);
 
-            hipEventRecord(startpack, stream);
+            hipEventRecord(startpack, r->gpu.stream);
 
             // fill the GPU arrays
             // gravity_gpu_fill_arrays(gravity_gpu_values_h, ci_cache,
@@ -503,26 +502,26 @@ void* runner_main(void* data) {
               hipEventCreate(&startcopyH2D);
               hipEventCreate(&stopcopyH2D);
 
-              hipEventRecord(startcopyH2D, stream);
+              hipEventRecord(startcopyH2D, r->gpu.stream);
 
               {
                 TIMER_TIC;
 
                 // now copy all the arrays to the device
                 // gravity_gpu_H2D(gravity_gpu_values_h, gravity_gpu_values_d,
-                // ncells, max_cell_size, stream);
+                // ncells, max_cell_size, r->gpu.stream);
                 hipMemcpyAsync(r->gpu.gravity_gpu_values_send_self_d,
                                r->gpu.gravity_gpu_values_send_self,
                                ncells * max_cell_size *
                                    sizeof(struct gravity_gpu_values_send),
-                               hipMemcpyHostToDevice, stream);
+                               hipMemcpyHostToDevice, r->gpu.stream);
                 hipMemcpyAsync(r->gpu.gravity_gpu_values_recv_self_d,
                                r->gpu.gravity_gpu_values_recv_self,
                                ncells * max_cell_size *
                                    sizeof(struct gravity_gpu_values_recv),
-                               hipMemcpyHostToDevice, stream);
+                               hipMemcpyHostToDevice, r->gpu.stream);
 
-                hipEventRecord(stopcopyH2D, stream);
+                hipEventRecord(stopcopyH2D, r->gpu.stream);
 
                 hipError_t err2 = hipGetLastError();
                 if (err2 != hipSuccess)
@@ -532,7 +531,7 @@ void* runner_main(void* data) {
                 hipEventCreate(&startker);
                 hipEventCreate(&stopker);
 
-                hipEventRecord(startker, stream);
+                hipEventRecord(startker, r->gpu.stream);
 
                 // run the GPU function
                 // runner_doself_recursive_grav(r, ci, 1,
@@ -550,14 +549,14 @@ void* runner_main(void* data) {
                 // gravity_gpu_values_d->d_active_j,
                 // gravity_gpu_values_d->d_CoM_i, gravity_gpu_values_d->d_CoM_j,
                 // ncells, max_cell_size, gravity_gpu_values_d->d_gcounts,
-                // gravity_gpu_values_d->d_r->gpu.cell_active, stream);
+                // gravity_gpu_values_d->d_r->gpu.cell_active, r->gpu.stream);
 
                 runner_doself_recursive_grav_new(
                     r, ci, 1, r->gpu.gravity_gpu_values_send_self_d,
                     r->gpu.gravity_gpu_values_recv_self_d, ncells,
-                    max_cell_size, stream);
+                    max_cell_size, r->gpu.stream);
 
-                hipEventRecord(stopker, stream);
+                hipEventRecord(stopker, r->gpu.stream);
 
                 // hipDeviceSynchronize();
 
@@ -565,20 +564,20 @@ void* runner_main(void* data) {
                 hipEventCreate(&startcopyD2H);
                 hipEventCreate(&stopcopyD2H);
 
-                hipEventRecord(startcopyD2H, stream);
+                hipEventRecord(startcopyD2H, r->gpu.stream);
 
                 // copy the arrays from device to host
                 // gravity_gpu_D2H(gravity_gpu_values_h, gravity_gpu_values_d,
-                // ncells, max_cell_size, stream);
+                // ncells, max_cell_size, r->gpu.stream);
                 hipMemcpyAsync(r->gpu.gravity_gpu_values_recv_self,
                                r->gpu.gravity_gpu_values_recv_self_d,
                                ncells * max_cell_size *
                                    sizeof(struct gravity_gpu_values_recv),
-                               hipMemcpyDeviceToHost, stream);
+                               hipMemcpyDeviceToHost, r->gpu.stream);
 
-                hipEventRecord(stopcopyD2H, stream);
+                hipEventRecord(stopcopyD2H, r->gpu.stream);
 
-                hipStreamSynchronize(stream);  // THIS ONE IS NEEDED!
+                hipStreamSynchronize(r->gpu.stream);  // THIS ONE IS NEEDED!
 
                 TIMER_TOC(timer_doself_grav_pp);
               }  // TIMER_TOC(timer_gpu_copycalc);
@@ -745,7 +744,7 @@ void* runner_main(void* data) {
                 r->gpu.gravity_gpu_values_recv_pair,
                 r->gpu.gravity_gpu_values_recv_pair_d, r->gpu.grav_cells_pair,
                 r->gpu.grav_tasks_pair, t, sched, ncells, max_cell_size,
-                &packed, stream);
+                &packed, r->gpu.stream);
 
             /*const struct engine *e = r->e;
             const int periodic = e->mesh->periodic;
@@ -824,7 +823,7 @@ void* runner_main(void* data) {
             hipEventCreate(&startpack);
             hipEventCreate(&stoppack);
 
-            hipEventRecord(startpack, stream);*/
+            hipEventRecord(startpack, r->gpu.stream);*/
 
             // fill the GPU arrays
             // gravity_gpu_fill_arrays(gravity_gpu_values_h, ci_cache,
@@ -1019,23 +1018,23 @@ void* runner_main(void* data) {
                 hipEventCreate(&startcopyH2D);
                 hipEventCreate(&stopcopyH2D);
 
-                hipEventRecord(startcopyH2D, stream);
+                hipEventRecord(startcopyH2D, r->gpu.stream);
 
                 {TIMER_TIC;
 
                 //now copy all the arrays to the device
                 //gravity_gpu_H2D(gravity_gpu_values_h, gravity_gpu_values_d,
-               ncells, max_cell_size, stream);
+               ncells, max_cell_size, r->gpu.stream);
                 hipMemcpyAsync(r->gpu.gravity_gpu_values_send_pair_d,
                r->gpu.gravity_gpu_values_send_pair, ncells * max_cell_size *
                sizeof(struct gravity_gpu_values_send), hipMemcpyHostToDevice,
-               stream);
+               r->gpu.stream);
                hipMemcpyAsync(r->gpu.gravity_gpu_values_recv_pair_d,
                r->gpu.gravity_gpu_values_recv_pair, ncells * max_cell_size *
                sizeof(struct gravity_gpu_values_recv), hipMemcpyHostToDevice,
-               stream);
+               r->gpu.stream);
 
-                hipEventRecord(stopcopyH2D, stream);
+                hipEventRecord(stopcopyH2D, r->gpu.stream);
 
                 hipError_t err2 = hipGetLastError();
                 if (err2 != hipSuccess)
@@ -1045,15 +1044,15 @@ void* runner_main(void* data) {
                 hipEventCreate(&startker);
                 hipEventCreate(&stopker);
 
-                hipEventRecord(startker, stream);
+                hipEventRecord(startker, r->gpu.stream);
 
                 //run the GPU function
                 runner_dopair_recursive_grav_new(r, ci, cj, 1,
                r->gpu.gravity_gpu_values_send_pair_d,
                r->gpu.gravity_gpu_values_recv_pair_d, ncells,
-               max_cell_size, stream);
+               max_cell_size, r->gpu.stream);
 
-                hipEventRecord(stopker, stream);
+                hipEventRecord(stopker, r->gpu.stream);
 
                 //hipDeviceSynchronize();
 
@@ -1061,19 +1060,19 @@ void* runner_main(void* data) {
                 hipEventCreate(&startcopyD2H);
                 hipEventCreate(&stopcopyD2H);
 
-                hipEventRecord(startcopyD2H, stream);
+                hipEventRecord(startcopyD2H, r->gpu.stream);
 
                 //copy the arrays from device to host
                 //gravity_gpu_D2H(gravity_gpu_values_h, gravity_gpu_values_d,
-               ncells, max_cell_size, stream);
+               ncells, max_cell_size, r->gpu.stream);
                 hipMemcpyAsync(r->gpu.gravity_gpu_values_recv_pair,
                r->gpu.gravity_gpu_values_recv_pair_d, ncells *
                max_cell_size * sizeof(struct gravity_gpu_values_recv),
-               hipMemcpyDeviceToHost, stream);
+               hipMemcpyDeviceToHost, r->gpu.stream);
 
-                hipEventRecord(stopcopyD2H, stream);
+                hipEventRecord(stopcopyD2H, r->gpu.stream);
 
-                hipStreamSynchronize(stream); //THIS ONE IS NEEDED!
+                hipStreamSynchronize(r->gpu.stream); //THIS ONE IS NEEDED!
 
                 TIMER_TOC(timer_doself_grav_pp);}//TIMER_TOC(timer_gpu_copycalc);*/
 
@@ -1554,12 +1553,12 @@ r->gpu.grav_batch_pair_count);*/
                          r->gpu.gravity_gpu_values_send_self,
                          ncells_flush_self * max_cell_size *
                              sizeof(struct gravity_gpu_values_send),
-                         hipMemcpyHostToDevice, stream);
+                         hipMemcpyHostToDevice, r->gpu.stream);
           hipMemcpyAsync(r->gpu.gravity_gpu_values_recv_self_d,
                          r->gpu.gravity_gpu_values_recv_self,
                          ncells_flush_self * max_cell_size *
                              sizeof(struct gravity_gpu_values_recv),
-                         hipMemcpyHostToDevice, stream);
+                         hipMemcpyHostToDevice, r->gpu.stream);
 
           hipError_t err4 = hipGetLastError();
           if (err4 != hipSuccess)
@@ -1569,7 +1568,7 @@ r->gpu.grav_batch_pair_count);*/
           runner_doself_recursive_grav_new(
               r, ci, 1, r->gpu.gravity_gpu_values_send_self_d,
               r->gpu.gravity_gpu_values_recv_self_d, ncells_flush_self,
-              max_cell_size, stream);
+              max_cell_size, r->gpu.stream);
 
           // hipDeviceSynchronize();
 
@@ -1578,9 +1577,9 @@ r->gpu.grav_batch_pair_count);*/
                          r->gpu.gravity_gpu_values_recv_self_d,
                          ncells_flush_self * max_cell_size *
                              sizeof(struct gravity_gpu_values_recv),
-                         hipMemcpyDeviceToHost, stream);
+                         hipMemcpyDeviceToHost, r->gpu.stream);
 
-          hipStreamSynchronize(stream);  // THIS ONE IS NEEDED!
+          hipStreamSynchronize(r->gpu.stream);  // THIS ONE IS NEEDED!
 
           TIMER_TOC(timer_doself_grav_pp);
         }  // TIMER_TOC(timer_gpu_copycalc);
@@ -1679,12 +1678,12 @@ r->gpu.grav_batch_pair_count);*/
                          r->gpu.gravity_gpu_values_send_pair,
                          ncells_flush_pair * max_cell_size *
                              sizeof(struct gravity_gpu_values_send),
-                         hipMemcpyHostToDevice, stream);
+                         hipMemcpyHostToDevice, r->gpu.stream);
           hipMemcpyAsync(r->gpu.gravity_gpu_values_recv_pair_d,
                          r->gpu.gravity_gpu_values_recv_pair,
                          ncells_flush_pair * max_cell_size *
                              sizeof(struct gravity_gpu_values_recv),
-                         hipMemcpyHostToDevice, stream);
+                         hipMemcpyHostToDevice, r->gpu.stream);
 
           hipError_t err4 = hipGetLastError();
           if (err4 != hipSuccess)
@@ -1740,7 +1739,7 @@ r->gpu.grav_batch_pair_count);*/
           // r->gpu.gravity_gpu_values_recv_pair_d,
           // r->gpu.grav_cells_pair, r->gpu.grav_tasks_pair, t, sched,
           // ncells_flush_pair, max_cell_size, &r->gpu.grav_batch_pair_count,
-          // stream);
+          // r->gpu.stream);
 
           pair_pp_offload_new(periodic, rmax_i, rmax_j, min_trunc, &r_s_inv,
                               &gcount_i, &gcount_padded_i, &gcount_j,
@@ -1748,12 +1747,12 @@ r->gpu.grav_batch_pair_count);*/
                               dim_1, dim_2, /*symmetric =*/1,
                               r->gpu.gravity_gpu_values_send_pair_d,
                               r->gpu.gravity_gpu_values_recv_pair_d,
-                              ncells_flush_pair, max_cell_size, stream);
+                              ncells_flush_pair, max_cell_size, r->gpu.stream);
 
           // runner_dopair_recursive_grav_new(r, ci, cj, 1,
           // r->gpu.gravity_gpu_values_send_pair_d,
           // r->gpu.gravity_gpu_values_recv_pair_d, ncells_flush_pair,
-          // max_cell_size, stream);
+          // max_cell_size, r->gpu.stream);
 
           // hipDeviceSynchronize();
 
@@ -1762,9 +1761,9 @@ r->gpu.grav_batch_pair_count);*/
                          r->gpu.gravity_gpu_values_recv_pair_d,
                          ncells_flush_pair * max_cell_size *
                              sizeof(struct gravity_gpu_values_recv),
-                         hipMemcpyDeviceToHost, stream);
+                         hipMemcpyDeviceToHost, r->gpu.stream);
 
-          hipStreamSynchronize(stream);  // THIS ONE IS NEEDED!
+          hipStreamSynchronize(r->gpu.stream);  // THIS ONE IS NEEDED!
 
           TIMER_TOC(timer_doself_grav_pp);
         }  // TIMER_TOC(timer_gpu_copycalc);
