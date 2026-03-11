@@ -404,6 +404,21 @@ static int runner_flush_packed_pair_batch(
   return 1;
 }
 
+static void runner_finish_leaked_implicit_task(struct scheduler* sched,
+                                               struct task* t) {
+
+  task_unlock(t);
+  t->toc = getticks();
+  t->total_ticks += t->toc - t->tic;
+
+  pthread_mutex_lock(&sched->sleep_mutex);
+  atomic_dec(&sched->waiting);
+  pthread_cond_broadcast(&sched->sleep_cond);
+  pthread_mutex_unlock(&sched->sleep_mutex);
+
+  t->skip = 1;
+}
+
 /**
  * @brief The #runner main thread routine.
  *
@@ -584,8 +599,9 @@ void* runner_main(void* data) {
       struct cell* cj = t->cj;
 
       if (t->implicit) {
+        runner_finish_leaked_implicit_task(sched, t);
         prev = NULL;
-        t = scheduler_done(sched, t);
+        t = NULL;
         continue;
       }
 
