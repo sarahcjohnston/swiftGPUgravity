@@ -204,8 +204,7 @@ void* runner_main(void* data) {
   // define number of cells to transfer
   // int ncells = 10;
 
-  hipStream_t stream;
-  hipStreamCreate(&stream);
+  hipStream_t stream = r->gpu.stream;
 
   // int max_cell_size = 10000;
 
@@ -2028,7 +2027,6 @@ r->gpu.grav_batch_pair_count);*/
 
     // printf("qid: %i selfgravs %i\n", r->qid, selfgravs);
   }
-  hipStreamDestroy(stream);
   /* Be kind, rewind. */
   return NULL;
 }

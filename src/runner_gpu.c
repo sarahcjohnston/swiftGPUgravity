@@ -38,6 +38,8 @@ void runner_gpu_init(struct runner* r) {
   gpu->grav_batch_self_count = 0;
   gpu->grav_batch_pair_count = 0;
 
+  hipStreamCreate(&gpu->stream);
+
   hipMalloc((void**)&gpu->gravity_gpu_values_send_self_d,
             gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                 sizeof(struct gravity_gpu_values_send));
@@ -107,6 +109,8 @@ void runner_gpu_clean(struct runner* r) {
   free(gpu->grav_tasks_pair);
   free(gpu->cell_active);
 
+  hipStreamDestroy(gpu->stream);
+
   gpu->gravity_gpu_values_send_self = NULL;
   gpu->gravity_gpu_values_send_self_d = NULL;
   gpu->gravity_gpu_values_send_pair = NULL;
@@ -120,6 +124,7 @@ void runner_gpu_clean(struct runner* r) {
   gpu->grav_cells_pair = NULL;
   gpu->grav_tasks_pair = NULL;
   gpu->cell_active = NULL;
+  gpu->stream = NULL;
   gpu->grav_batch_self_count = 0;
   gpu->grav_batch_pair_count = 0;
   gpu->grav_batch_ncells = 0;

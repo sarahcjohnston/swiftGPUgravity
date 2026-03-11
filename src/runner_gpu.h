@@ -19,6 +19,8 @@
 #ifndef SWIFT_RUNNER_GPU_H
 #define SWIFT_RUNNER_GPU_H
 
+#include <hip/hip_runtime_api.h>
+
 struct cell;
 struct runner;
 struct task;
@@ -68,6 +70,9 @@ struct gpu_runner {
 
   /*! Per-cell activity flags used by the GPU path. */
   int* cell_active;
+
+  /*! Stream used for this runner's GPU work. */
+  hipStream_t stream;
 };
 
 /**
