@@ -786,12 +786,6 @@ AC_PROG_EGREP
 # Check for the libraries we will need.
 AC_CHECK_LIB(m,sqrt,,AC_MSG_ERROR(something is wrong with the math library!))
 
-# Check for optional GPU toolchains.
-with_cuda="no"
-with_hip="no"
-with_cuda_flags=""
-with_hip_flags=""
-
 AC_ARG_WITH([cuda],
     [AS_HELP_STRING([--with-cuda=PATH],
        [root directory where CUDA is installed @<:@yes/no@:>@]
