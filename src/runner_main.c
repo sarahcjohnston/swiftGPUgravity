@@ -261,7 +261,7 @@ void* runner_main(void* data) {
               ncells * max_cell_size * sizeof(struct gravity_gpu_values_send));
     hipHostMalloc(
         (void**)&gravity_gpu_values_send_self,
-        ncells * max_cell_size * sizeof(struct gravity_gpu_values_send));
+        ncells * max_cell_size * sizeof(struct gravity_gpu_values_send), 0);
 
     struct gravity_gpu_values_send* gravity_gpu_values_send_pair;
     struct gravity_gpu_values_send* gravity_gpu_values_send_pair_d;
@@ -269,7 +269,7 @@ void* runner_main(void* data) {
               ncells * max_cell_size * sizeof(struct gravity_gpu_values_send));
     hipHostMalloc(
         (void**)&gravity_gpu_values_send_pair,
-        ncells * max_cell_size * sizeof(struct gravity_gpu_values_send));
+        ncells * max_cell_size * sizeof(struct gravity_gpu_values_send), 0);
 
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_self;
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_self_d;
@@ -277,7 +277,7 @@ void* runner_main(void* data) {
               ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv));
     hipHostMalloc(
         (void**)&gravity_gpu_values_recv_self,
-        ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv));
+        ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv), 0);
 
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair;
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair_d;
@@ -285,7 +285,7 @@ void* runner_main(void* data) {
               ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv));
     hipHostMalloc(
         (void**)&gravity_gpu_values_recv_pair,
-        ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv));
+        ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv), 0);
 
     struct cell** grav_cells_self;
     grav_cells_self = malloc(ncells * sizeof(struct cell*));
@@ -521,8 +521,8 @@ void* runner_main(void* data) {
             // printf("qid: %i pack count: %i packed: %i\n", r->qid, pack_count,
             // packed);
 
-            int acc = 0;
 #ifdef SWIFT_DEBUG_CHECKS
+            int acc = 0;
             /* Update the interaction counter if it's not a padded gpart */
             for (int j = 0; j < gcount; j++) {
               for (int i = 0; i < gcount; i++) {
