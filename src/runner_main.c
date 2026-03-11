@@ -790,7 +790,6 @@ void* runner_main(void* data) {
           runner_do_end_hydro_force(r, ci, 1);
           break;
         case task_type_end_grav_force:
-          // printf("end grav \n");
           runner_do_end_grav_force(r, ci, 1);
           break;
         case task_type_csds:
@@ -1075,10 +1074,6 @@ r->gpu.grav_batch_pair_count);*/
               r->gpu.grav_cells_self[j]->grav.parts[i].potential +=
                   r->gpu.gravity_gpu_values_recv_self[i + j * max_cell_size]
                       .pot_i;
-              // printf("acceleration: [%f %f %f]\n",
-              // grav_cells[j]->grav.parts[i].a_grav[0],
-              // grav_cells[j]->grav.parts[i].a_grav[1],
-              // grav_cells[j]->grav.parts[i].a_grav[2]);
             }
             cell_gunlocktree(r->gpu.grav_cells_self[j]);
           }
@@ -1088,18 +1083,6 @@ r->gpu.grav_batch_pair_count);*/
 
         for (int i = 0; i < ncells_flush_self; i++) {
           scheduler_done(sched, r->gpu.grav_tasks_self[i]);
-
-          fprintf(stderr, "[FLUSH-DONE-SELF] task=%p qid=%d i=%d waiting=%i\n",
-                  (void*)r->gpu.grav_tasks_self[i], r->qid, i, sched->waiting);
-          // if (grav_cells[i] != NULL) { //skip if grav_cells[i] not filled in
-          // final batch cell_gunlocktree(r->gpu.grav_cells_self[i]);//}
-          // if (grav_tasks[i] != NULL){
-          /*enqueue_dependencies(sched, r->gpu.grav_tasks_self[i]); //Line 3296
-          in Abou repo pthread_mutex_lock(&sched->sleep_mutex);
-          atomic_dec(&sched->waiting);
-          pthread_cond_broadcast(&sched->sleep_cond);
-          pthread_mutex_unlock(&sched->sleep_mutex);*/
-          //}
         }
 
         // reset counter for next pack
@@ -1108,8 +1091,6 @@ r->gpu.grav_batch_pair_count);*/
           r->gpu.grav_tasks_self[i] = NULL;
         }
         r->gpu.grav_batch_self_count = 0;
-        // pack_done = 1;
-        /*ncells = ncells_orig;*/
       }
 
       int pair_launch = 0;
@@ -1119,20 +1100,7 @@ r->gpu.grav_batch_pair_count);*/
       if (sched->queues[r->qid].gpu_pair_tasks_left < 1) pair_launch = 1;
       (void)lock_unlock(&sched->queues[r->qid].lock);
 
-      if (pair_launch == 1 && r->gpu.grav_batch_pair_count !=
-                                  0) {  //(ntasks_g == 0 && pack_count != 0){
-        // printf("qid:%i flushing pair task \n", r->qid);
-        // fflush(stdout);
-        // printf("qid:%i flush \n", r->qid);
-        // printf("qid: %i Time to flush\n", r->qid);
-        // printf("FLUSH ENTER qid=%d pack_count=%d tid=%ld\n", r->qid,
-        // r->gpu.grav_batch_pair_count, pthread_self());
-        /*int ncells_orig = ncells;
-
-        if (r->gpu.grav_batch_pair_count != ncells){
-                ncells = r->gpu.grav_batch_pair_count; //updating ncells so that
-        if pack_count < ncells at end then we aren't dealing with null data
-                }   */
+      if (pair_launch == 1 && r->gpu.grav_batch_pair_count != 0) {
         int ncells_flush_pair = r->gpu.grav_batch_pair_count;
 
         {
@@ -1329,36 +1297,10 @@ r->gpu.grav_batch_pair_count);*/
             cell_gunlocktree(b);
 
             scheduler_done(sched, r->gpu.grav_tasks_pair[j / 2]);
-
-            fprintf(stderr,
-                    "[FLUSH-DONE-PAIR] task=%p qid=%d j=%d waiting=%i\n",
-                    (void*)r->gpu.grav_tasks_pair[j / 2], r->qid, j,
-                    sched->waiting);
-
-            /*enqueue_dependencies(sched, r->gpu.grav_tasks_pair[j]);
-            pthread_mutex_lock(&sched->sleep_mutex);
-            atomic_dec(&sched->waiting);
-            pthread_cond_broadcast(&sched->sleep_cond);
-            pthread_mutex_unlock(&sched->sleep_mutex);*/
           }
 
           TIMER_TOC(timer_doself_grav_pp);
         }  // TIMER_TOC(timer_gpu_unpack);
-
-        /*for(int i=0; i<ncells; i+=2){
-                struct cell *a = r->gpu.grav_cells_pair[i];
-                struct cell *b = r->gpu.grav_cells_pair[i+1];
-                if (a > b) { struct cell *tmp = a; a = b; b = tmp; }
-                cell_gunlocktree(b);
-                cell_gunlocktree(a);
-                //cell_gunlocktree(r->gpu.grav_cells_pair[i]);
-                //cell_gunlocktree(r->gpu.grav_cells_pair[i+1]);
-                enqueue_dependencies(sched, r->gpu.grav_tasks_pair[i]);
-                pthread_mutex_lock(&sched->sleep_mutex);
-                atomic_dec(&sched->waiting);
-                pthread_cond_broadcast(&sched->sleep_cond);
-                pthread_mutex_unlock(&sched->sleep_mutex);
-        }*/
 
         // reset counter for next pack
         for (int i = 0; i < ncells_flush_pair; i += 2) {
@@ -1370,17 +1312,9 @@ r->gpu.grav_batch_pair_count);*/
         lock_lock(&sched->queues[r->qid].lock);
         r->gpu.grav_batch_pair_count = 0;
         (void)lock_unlock(&sched->queues[r->qid].lock);
-        // pack_done = 1;
-        // ncells = ncells_orig;
-
-        // printf("FLUSH EXIT  qid=%d pack_count=%d tid=%ld\n", r->qid,
-        // r->gpu.grav_batch_pair_count, pthread_self());
       }
 
       r->active_time += (getticks() - task_beg);
-
-      // printf("qid:%i packed:%i \n", r->qid, packed);
-      // fflush(stdout);
 
 /* Mark that we have run this task on these cells */
 #ifdef SWIFT_DEBUG_CHECKS
