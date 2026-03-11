@@ -190,11 +190,11 @@ static int runner_flush_packed_self_batch(
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_self,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_self_d,
     struct cell** grav_cells_self, struct task** grav_tasks_self,
-    const int max_cell_size, hipStream_t stream, int* pack_count_self) {
+    const int max_cell_size, hipStream_t stream, const int flush_count_self) {
 
-  if (*pack_count_self == 0) return 0;
+  if (flush_count_self == 0) return 0;
 
-  const int ncells_flush_self = *pack_count_self;
+  const int ncells_flush_self = flush_count_self;
   struct cell* c_flush = grav_cells_self[0];
 
   if (c_flush == NULL) error("self flush: NULL packed cell");
@@ -262,7 +262,6 @@ static int runner_flush_packed_self_batch(
     grav_tasks_self[i] = NULL;
   }
 
-  *pack_count_self = 0;
   return 1;
 }
 
@@ -273,11 +272,11 @@ static int runner_flush_packed_pair_batch(
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair_d,
     struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    const int max_cell_size, hipStream_t stream, int* pack_count_pair) {
+    const int max_cell_size, hipStream_t stream, const int flush_count_pair) {
 
-  if (*pack_count_pair == 0) return 0;
+  if (flush_count_pair == 0) return 0;
 
-  const int ncells_flush_pair = *pack_count_pair;
+  const int ncells_flush_pair = flush_count_pair;
   struct cell* ci_flush = grav_cells_pair[0];
   struct cell* cj_flush = grav_cells_pair[1];
 
@@ -402,7 +401,6 @@ static int runner_flush_packed_pair_batch(
     grav_tasks_pair[i / 2] = NULL;
   }
 
-  *pack_count_pair = 0;
   return 1;
 }
 
@@ -557,17 +555,23 @@ void* runner_main(void* data) {
         /* Did I get anything? */
         if (t == NULL) {
 
+          const int flush_count_self = pack_count_self;
+          const int flush_count_pair = pack_count_pair;
+
           const int flushed_self = runner_flush_packed_self_batch(
               r, sched, gravity_gpu_values_send_self,
               gravity_gpu_values_send_self_d, gravity_gpu_values_recv_self,
               gravity_gpu_values_recv_self_d, grav_cells_self, grav_tasks_self,
-              max_cell_size, stream, &pack_count_self);
+              max_cell_size, stream, flush_count_self);
 
           const int flushed_pair = runner_flush_packed_pair_batch(
               r, sched, gravity_gpu_values_send_pair,
               gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair,
               gravity_gpu_values_recv_pair_d, grav_cells_pair, grav_tasks_pair,
-              max_cell_size, stream, &pack_count_pair);
+              max_cell_size, stream, flush_count_pair);
+
+          if (flushed_self) pack_count_self = 0;
+          if (flushed_pair) pack_count_pair = 0;
 
           if (flushed_self || flushed_pair) continue;
 
@@ -1307,12 +1311,16 @@ void* runner_main(void* data) {
           self_launch == 1 && pack_count_self != 0 &&
           t->subtype == task_subtype_grav && t->type == task_type_self;
 
-      if (self_launch == 1 && pack_count_self != 0)
+      const int flush_count_self = pack_count_self;
+
+      if (self_launch == 1 && flush_count_self != 0) {
         runner_flush_packed_self_batch(
             r, sched, gravity_gpu_values_send_self,
             gravity_gpu_values_send_self_d, gravity_gpu_values_recv_self,
             gravity_gpu_values_recv_self_d, grav_cells_self, grav_tasks_self,
-            max_cell_size, stream, &pack_count_self);
+            max_cell_size, stream, flush_count_self);
+        pack_count_self = 0;
+      }
 
       int pair_launch = 0;
       lock_lock(&sched->queues[r->qid].lock);
@@ -1326,12 +1334,16 @@ void* runner_main(void* data) {
           t->subtype == task_subtype_grav && t->type == task_type_pair &&
           packed == 1;
 
-      if (pair_launch == 1 && pack_count_pair != 0)
+      const int flush_count_pair = pack_count_pair;
+
+      if (pair_launch == 1 && flush_count_pair != 0) {
         runner_flush_packed_pair_batch(
             r, sched, gravity_gpu_values_send_pair,
             gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair,
             gravity_gpu_values_recv_pair_d, grav_cells_pair, grav_tasks_pair,
-            max_cell_size, stream, &pack_count_pair);
+            max_cell_size, stream, flush_count_pair);
+        pack_count_pair = 0;
+      }
 
       if (current_self_completed_by_flush || current_pair_completed_by_flush) {
         r->active_time += (getticks() - task_beg);
