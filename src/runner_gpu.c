@@ -41,30 +41,34 @@ void runner_gpu_init(struct runner* r) {
   hipMalloc((void**)&gpu->gravity_gpu_values_send_self_d,
             gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                 sizeof(struct gravity_gpu_values_send));
-  hipMallocHost((void**)&gpu->gravity_gpu_values_send_self,
+  hipHostMalloc((void**)&gpu->gravity_gpu_values_send_self,
                 gpu->grav_batch_ncells * gpu->grav_max_cell_size *
-                    sizeof(struct gravity_gpu_values_send));
+                    sizeof(struct gravity_gpu_values_send),
+                0);
 
   hipMalloc((void**)&gpu->gravity_gpu_values_send_pair_d,
             gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                 sizeof(struct gravity_gpu_values_send));
-  hipMallocHost((void**)&gpu->gravity_gpu_values_send_pair,
+  hipHostMalloc((void**)&gpu->gravity_gpu_values_send_pair,
                 gpu->grav_batch_ncells * gpu->grav_max_cell_size *
-                    sizeof(struct gravity_gpu_values_send));
+                    sizeof(struct gravity_gpu_values_send),
+                0);
 
   hipMalloc((void**)&gpu->gravity_gpu_values_recv_self_d,
             gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                 sizeof(struct gravity_gpu_values_recv));
-  hipMallocHost((void**)&gpu->gravity_gpu_values_recv_self,
+  hipHostMalloc((void**)&gpu->gravity_gpu_values_recv_self,
                 gpu->grav_batch_ncells * gpu->grav_max_cell_size *
-                    sizeof(struct gravity_gpu_values_recv));
+                    sizeof(struct gravity_gpu_values_recv),
+                0);
 
   hipMalloc((void**)&gpu->gravity_gpu_values_recv_pair_d,
             gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                 sizeof(struct gravity_gpu_values_recv));
-  hipMallocHost((void**)&gpu->gravity_gpu_values_recv_pair,
+  hipHostMalloc((void**)&gpu->gravity_gpu_values_recv_pair,
                 gpu->grav_batch_ncells * gpu->grav_max_cell_size *
-                    sizeof(struct gravity_gpu_values_recv));
+                    sizeof(struct gravity_gpu_values_recv),
+                0);
 
   gpu->grav_cells_self = malloc(gpu->grav_batch_ncells * sizeof(struct cell*));
   gpu->grav_cells_pair = malloc(gpu->grav_batch_ncells * sizeof(struct cell*));

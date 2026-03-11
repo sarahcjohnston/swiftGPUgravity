@@ -461,7 +461,7 @@ void* runner_main(void* data) {
                   .gravity_gpu_values_send_self[i +
                                                 r->gpu.grav_batch_self_count *
                                                     max_cell_size]
-                  .r->gpu.cell_active = cell_is_active_gravity(ci, e);
+                  .cell_active = cell_is_active_gravity(ci, e);
               r->gpu
                   .gravity_gpu_values_send_self[i +
                                                 r->gpu.grav_batch_self_count *
@@ -500,8 +500,6 @@ void* runner_main(void* data) {
             if (r->gpu.grav_batch_self_count >= ncells) {
               // printf("qid: %i send to GPU \n", r->qid);
               // printf("qid: %i Cells packed. GPU time\n", r->qid);
-              int ncells_orig = ncells;
-
               hipEvent_t startcopyH2D, stopcopyH2D;
               hipEventCreate(&startcopyH2D);
               hipEventCreate(&stopcopyH2D);
@@ -746,9 +744,9 @@ void* runner_main(void* data) {
                 r, ci, cj, 1, r->gpu.gravity_gpu_values_send_pair,
                 r->gpu.gravity_gpu_values_send_pair_d,
                 r->gpu.gravity_gpu_values_recv_pair,
-                r->gpu.gravity_gpu_values_recv_pair_d,
-                r->gpu.grav_cells_pair, r->gpu.grav_tasks_pair, t, sched,
-                ncells, max_cell_size, &packed, stream);
+                r->gpu.gravity_gpu_values_recv_pair_d, r->gpu.grav_cells_pair,
+                r->gpu.grav_tasks_pair, t, sched, ncells, max_cell_size,
+                &packed, stream);
 
             /*const struct engine *e = r->e;
             const int periodic = e->mesh->periodic;
@@ -1700,12 +1698,13 @@ r->gpu.grav_batch_pair_count);*/
           if (ci_flush == NULL || cj_flush == NULL)
             error("pair flush: NULL packed cells");
 
-          const struct engine* e = r->e;
-          const int periodic = e->mesh->periodic;
-          const float dim[3] = {(float)e->mesh->dim[0], (float)e->mesh->dim[1],
-                                (float)e->mesh->dim[2]};
-          const float r_s_inv = e->mesh->r_s_inv;
-          const double min_trunc = e->mesh->r_cut_min;
+          const struct engine* engine_local = r->e;
+          const int periodic = engine_local->mesh->periodic;
+          const float dim[3] = {(float)engine_local->mesh->dim[0],
+                                (float)engine_local->mesh->dim[1],
+                                (float)engine_local->mesh->dim[2]};
+          const float r_s_inv = engine_local->mesh->r_s_inv;
+          const double min_trunc = engine_local->mesh->r_cut_min;
 
           float dim_0 = dim[0];
           float dim_1 = dim[1];
@@ -1714,10 +1713,12 @@ r->gpu.grav_batch_pair_count);*/
           TIMER_TIC;
 
           /* Record activity status */
-          const int ci_active = cell_is_active_gravity(ci_flush, e) &&
-                                (ci_flush->nodeID == e->nodeID);
-          const int cj_active = cell_is_active_gravity(cj_flush, e) &&
-                                (cj_flush->nodeID == e->nodeID);
+          const int ci_active =
+              cell_is_active_gravity(ci_flush, engine_local) &&
+              (ci_flush->nodeID == engine_local->nodeID);
+          const int cj_active =
+              cell_is_active_gravity(cj_flush, engine_local) &&
+              (cj_flush->nodeID == engine_local->nodeID);
 
           /* Recover the multipole info and shift the CoM locations */
           const float rmax_i = ci_flush->grav.multipole->r_max;
