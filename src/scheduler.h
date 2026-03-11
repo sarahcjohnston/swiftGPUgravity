@@ -93,6 +93,10 @@ struct scheduler {
   pthread_mutex_t sleep_mutex;
   pthread_cond_t sleep_cond;
 
+  /* GPU cell batch counts. */
+  int *gpu_grav_batch_self_counts;
+  int *gpu_grav_batch_pair_counts;
+
   /* The space associated with this scheduler. */
   struct space *space;
 
