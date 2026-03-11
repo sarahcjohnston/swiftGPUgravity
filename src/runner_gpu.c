@@ -42,7 +42,7 @@ void runner_gpu_init(struct runner* r) {
   const size_t total_device_bytes = 2 * send_bytes + 2 * recv_bytes;
   const size_t total_host_pinned_bytes = 2 * send_bytes + 2 * recv_bytes;
 
-  if (r->qid == 0) {
+  if (r->id == 0) {
     message("GPU device: %s", prop.name);
     message("Total GPU memory: %.2f B", (float)prop.totalGlobalMem);
     message("Max cell size: %i", gpu->grav_max_cell_size);
