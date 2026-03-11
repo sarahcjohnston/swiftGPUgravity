@@ -34,8 +34,7 @@
 extern "C" {
 #endif
 /* GPU headers */
-#include <cuda.h>
-#include <cuda_runtime.h>
+#include <hip/hip_runtime_api.h>
 #ifdef __cplusplus
 }
 #endif
@@ -173,7 +172,7 @@ extern void self_pp_offload_new(
     const int* gcount_i, const int* gcount_padded_i, int ci_active,
     struct gravity_gpu_values_send* gravity_gpu_values_send_d,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_d, int ncells,
-    int max_cell_size, cudaStream_t stream);
+    int max_cell_size, hipStream_t stream);
 extern void pair_pp_offload_new(
     int periodic, float rmax_i, float rmax_j, double min_trunc,
     const float* r_s_inv, const int* gcount_i, const int* gcount_padded_i,
@@ -181,7 +180,7 @@ extern void pair_pp_offload_new(
     int cj_active, float dim_0, float dim_1, float dim_2, int symmetric,
     struct gravity_gpu_values_send* gravity_gpu_values_send_d,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_d, int ncells,
-    int max_cell_size, cudaStream_t stream);
+    int max_cell_size, hipStream_t stream);
 ;
 /**
  * @brief The #runner main thread routine.
@@ -194,10 +193,10 @@ void* runner_main(void* data) {
   struct engine* e = r->e;
   struct scheduler* sched = &e->sched;
 
-  cudaSetDevice(0);
+  hipSetDevice(0);
 
-  struct cudaDeviceProp prop;
-  cudaGetDeviceProperties(&prop, 0);
+  hipDeviceProp_t prop;
+  hipGetDeviceProperties(&prop, 0);
 
   // NEED TO UPDATE THIS SECTION FOR AUTOMATED SPLITTING WITH NEW STRUCT MEMORY
   // SIZES!
@@ -235,8 +234,8 @@ void* runner_main(void* data) {
   // define number of cells to transfer
   // int ncells = 10;
 
-  cudaStream_t stream;
-  cudaStreamCreate(&stream);
+  hipStream_t stream;
+  hipStreamCreate(&stream);
 
   // int max_cell_size = 10000;
 
@@ -257,33 +256,33 @@ void* runner_main(void* data) {
 
     struct gravity_gpu_values_send* gravity_gpu_values_send_self;
     struct gravity_gpu_values_send* gravity_gpu_values_send_self_d;
-    cudaMalloc((void**)&gravity_gpu_values_send_self_d,
-               ncells * max_cell_size * sizeof(struct gravity_gpu_values_send));
-    cudaMallocHost(
+    hipMalloc((void**)&gravity_gpu_values_send_self_d,
+              ncells * max_cell_size * sizeof(struct gravity_gpu_values_send));
+    hipMallocHost(
         (void**)&gravity_gpu_values_send_self,
         ncells * max_cell_size * sizeof(struct gravity_gpu_values_send));
 
     struct gravity_gpu_values_send* gravity_gpu_values_send_pair;
     struct gravity_gpu_values_send* gravity_gpu_values_send_pair_d;
-    cudaMalloc((void**)&gravity_gpu_values_send_pair_d,
-               ncells * max_cell_size * sizeof(struct gravity_gpu_values_send));
-    cudaMallocHost(
+    hipMalloc((void**)&gravity_gpu_values_send_pair_d,
+              ncells * max_cell_size * sizeof(struct gravity_gpu_values_send));
+    hipMallocHost(
         (void**)&gravity_gpu_values_send_pair,
         ncells * max_cell_size * sizeof(struct gravity_gpu_values_send));
 
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_self;
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_self_d;
-    cudaMalloc((void**)&gravity_gpu_values_recv_self_d,
-               ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv));
-    cudaMallocHost(
+    hipMalloc((void**)&gravity_gpu_values_recv_self_d,
+              ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv));
+    hipMallocHost(
         (void**)&gravity_gpu_values_recv_self,
         ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv));
 
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair;
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair_d;
-    cudaMalloc((void**)&gravity_gpu_values_recv_pair_d,
-               ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv));
-    cudaMallocHost(
+    hipMalloc((void**)&gravity_gpu_values_recv_pair_d,
+              ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv));
+    hipMallocHost(
         (void**)&gravity_gpu_values_recv_pair,
         ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv));
 
@@ -309,8 +308,8 @@ void* runner_main(void* data) {
     int* cell_active;
     cell_active = malloc(ncells * sizeof(int));
 
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) printf("Error1: %s\n", cudaGetErrorString(err));
+    hipError_t err = hipGetLastError();
+    if (err != hipSuccess) printf("Error1: %s\n", hipGetErrorString(err));
 
     int ntasks;
 
@@ -426,11 +425,11 @@ void* runner_main(void* data) {
               ; /* spin until we acquire the lock */
             }
 
-            cudaEvent_t startpack, stoppack;
-            cudaEventCreate(&startpack);
-            cudaEventCreate(&stoppack);
+            hipEvent_t startpack, stoppack;
+            hipEventCreate(&startpack);
+            hipEventCreate(&stoppack);
 
-            cudaEventRecord(startpack, stream);
+            hipEventRecord(startpack, stream);
 
             // fill the GPU arrays
             // gravity_gpu_fill_arrays(gravity_gpu_values_h, ci_cache,
@@ -547,11 +546,11 @@ void* runner_main(void* data) {
               // printf("qid: %i Cells packed. GPU time\n", r->qid);
               int ncells_orig = ncells;
 
-              cudaEvent_t startcopyH2D, stopcopyH2D;
-              cudaEventCreate(&startcopyH2D);
-              cudaEventCreate(&stopcopyH2D);
+              hipEvent_t startcopyH2D, stopcopyH2D;
+              hipEventCreate(&startcopyH2D);
+              hipEventCreate(&stopcopyH2D);
 
-              cudaEventRecord(startcopyH2D, stream);
+              hipEventRecord(startcopyH2D, stream);
 
               {
                 TIMER_TIC;
@@ -559,28 +558,28 @@ void* runner_main(void* data) {
                 // now copy all the arrays to the device
                 // gravity_gpu_H2D(gravity_gpu_values_h, gravity_gpu_values_d,
                 // ncells, max_cell_size, stream);
-                cudaMemcpyAsync(gravity_gpu_values_send_self_d,
-                                gravity_gpu_values_send_self,
-                                ncells * max_cell_size *
-                                    sizeof(struct gravity_gpu_values_send),
-                                cudaMemcpyHostToDevice, stream);
-                cudaMemcpyAsync(gravity_gpu_values_recv_self_d,
-                                gravity_gpu_values_recv_self,
-                                ncells * max_cell_size *
-                                    sizeof(struct gravity_gpu_values_recv),
-                                cudaMemcpyHostToDevice, stream);
+                hipMemcpyAsync(gravity_gpu_values_send_self_d,
+                               gravity_gpu_values_send_self,
+                               ncells * max_cell_size *
+                                   sizeof(struct gravity_gpu_values_send),
+                               hipMemcpyHostToDevice, stream);
+                hipMemcpyAsync(gravity_gpu_values_recv_self_d,
+                               gravity_gpu_values_recv_self,
+                               ncells * max_cell_size *
+                                   sizeof(struct gravity_gpu_values_recv),
+                               hipMemcpyHostToDevice, stream);
 
-                cudaEventRecord(stopcopyH2D, stream);
+                hipEventRecord(stopcopyH2D, stream);
 
-                cudaError_t err2 = cudaGetLastError();
-                if (err2 != cudaSuccess)
-                  printf("Error2: %s\n", cudaGetErrorString(err2));
+                hipError_t err2 = hipGetLastError();
+                if (err2 != hipSuccess)
+                  printf("Error2: %s\n", hipGetErrorString(err2));
 
-                cudaEvent_t startker, stopker;
-                cudaEventCreate(&startker);
-                cudaEventCreate(&stopker);
+                hipEvent_t startker, stopker;
+                hipEventCreate(&startker);
+                hipEventCreate(&stopker);
 
-                cudaEventRecord(startker, stream);
+                hipEventRecord(startker, stream);
 
                 // run the GPU function
                 // runner_doself_recursive_grav(r, ci, 1,
@@ -605,28 +604,28 @@ void* runner_main(void* data) {
                                                  gravity_gpu_values_recv_self_d,
                                                  ncells, max_cell_size, stream);
 
-                cudaEventRecord(stopker, stream);
+                hipEventRecord(stopker, stream);
 
-                // cudaDeviceSynchronize();
+                // hipDeviceSynchronize();
 
-                cudaEvent_t startcopyD2H, stopcopyD2H;
-                cudaEventCreate(&startcopyD2H);
-                cudaEventCreate(&stopcopyD2H);
+                hipEvent_t startcopyD2H, stopcopyD2H;
+                hipEventCreate(&startcopyD2H);
+                hipEventCreate(&stopcopyD2H);
 
-                cudaEventRecord(startcopyD2H, stream);
+                hipEventRecord(startcopyD2H, stream);
 
                 // copy the arrays from device to host
                 // gravity_gpu_D2H(gravity_gpu_values_h, gravity_gpu_values_d,
                 // ncells, max_cell_size, stream);
-                cudaMemcpyAsync(gravity_gpu_values_recv_self,
-                                gravity_gpu_values_recv_self_d,
-                                ncells * max_cell_size *
-                                    sizeof(struct gravity_gpu_values_recv),
-                                cudaMemcpyDeviceToHost, stream);
+                hipMemcpyAsync(gravity_gpu_values_recv_self,
+                               gravity_gpu_values_recv_self_d,
+                               ncells * max_cell_size *
+                                   sizeof(struct gravity_gpu_values_recv),
+                               hipMemcpyDeviceToHost, stream);
 
-                cudaEventRecord(stopcopyD2H, stream);
+                hipEventRecord(stopcopyD2H, stream);
 
-                cudaStreamSynchronize(stream);  // THIS ONE IS NEEDED!
+                hipStreamSynchronize(stream);  // THIS ONE IS NEEDED!
 
                 TIMER_TOC(timer_doself_grav_pp);
               }  // TIMER_TOC(timer_gpu_copycalc);
@@ -638,30 +637,30 @@ void* runner_main(void* data) {
               fclose(f1);
 
               float copytimeH2D = 0;
-              cudaEventElapsedTime(&copytimeH2D, startcopyH2D, stopcopyH2D);
+              hipEventElapsedTime(&copytimeH2D, startcopyH2D, stopcopyH2D);
               printf("Copy Time: %f ms\n", copytimeH2D);
               FILE *f2 = fopen("copytimeH2D_a30.txt", "a");
               fprintf(f2, "%f\n", copytimeH2D);
               fclose(f2);
 
               float kerneltime = 0;
-              cudaEventElapsedTime(&kerneltime, startker, stopker);
+              hipEventElapsedTime(&kerneltime, startker, stopker);
               printf("Kernel Time: %f ms\n", kerneltime);
               FILE *f3 = fopen("kerneltime_a30.txt", "a");
               fprintf(f3, "%f\n", kerneltime);
               fclose(f3);
 
               float copytimeD2H = 0;
-              cudaEventElapsedTime(&copytimeD2H, startcopyD2H, stopcopyD2H);
+              hipEventElapsedTime(&copytimeD2H, startcopyD2H, stopcopyD2H);
               printf("Copy Time: %f ms\n", copytimeD2H);
               FILE *f4 = fopen("copytimeD2H_a30.txt", "a");
               fprintf(f4, "%f\n", copytimeD2H);
               fclose(f4);*/
 
-              // cudaDeviceSynchronize();
-              cudaError_t err3 = cudaGetLastError();
-              if (err3 != cudaSuccess)
-                printf("Error3: %s\n", cudaGetErrorString(err3));
+              // hipDeviceSynchronize();
+              hipError_t err3 = hipGetLastError();
+              if (err3 != hipSuccess)
+                printf("Error3: %s\n", hipGetErrorString(err3));
 
               {
                 TIMER_TIC;
@@ -703,7 +702,7 @@ void* runner_main(void* data) {
                 TIMER_TOC(timer_doself_grav_pp);
               }  // TIMER_TOC(timer_gpu_unpack);
 
-              // cudaDeviceSynchronize();
+              // hipDeviceSynchronize();
 
               for (int i = 0; i < ncells; i++) {
                 scheduler_done(sched, grav_tasks_self[i]);
@@ -862,11 +861,11 @@ void* runner_main(void* data) {
             while (cell_glocktree(a)) { ; }
             while (cell_glocktree(b)) { ; }*/
 
-            /*cudaEvent_t startpack, stoppack;
-            cudaEventCreate(&startpack);
-            cudaEventCreate(&stoppack);
+            /*hipEvent_t startpack, stoppack;
+            hipEventCreate(&startpack);
+            hipEventCreate(&stoppack);
 
-            cudaEventRecord(startpack, stream);*/
+            hipEventRecord(startpack, stream);*/
 
             // fill the GPU arrays
             // gravity_gpu_fill_arrays(gravity_gpu_values_h, ci_cache,
@@ -1052,63 +1051,63 @@ void* runner_main(void* data) {
             /*if (pack_count_pair >= ncells){
                 int ncells_orig = ncells;
 
-                cudaEvent_t startcopyH2D, stopcopyH2D;
-                cudaEventCreate(&startcopyH2D);
-                cudaEventCreate(&stopcopyH2D);
+                hipEvent_t startcopyH2D, stopcopyH2D;
+                hipEventCreate(&startcopyH2D);
+                hipEventCreate(&stopcopyH2D);
 
-                cudaEventRecord(startcopyH2D, stream);
+                hipEventRecord(startcopyH2D, stream);
 
                 {TIMER_TIC;
 
                 //now copy all the arrays to the device
                 //gravity_gpu_H2D(gravity_gpu_values_h, gravity_gpu_values_d,
                ncells, max_cell_size, stream);
-                cudaMemcpyAsync(gravity_gpu_values_send_pair_d,
+                hipMemcpyAsync(gravity_gpu_values_send_pair_d,
                gravity_gpu_values_send_pair, ncells * max_cell_size *
-               sizeof(struct gravity_gpu_values_send), cudaMemcpyHostToDevice,
-               stream); cudaMemcpyAsync(gravity_gpu_values_recv_pair_d,
+               sizeof(struct gravity_gpu_values_send), hipMemcpyHostToDevice,
+               stream); hipMemcpyAsync(gravity_gpu_values_recv_pair_d,
                gravity_gpu_values_recv_pair, ncells * max_cell_size *
-               sizeof(struct gravity_gpu_values_recv), cudaMemcpyHostToDevice,
+               sizeof(struct gravity_gpu_values_recv), hipMemcpyHostToDevice,
                stream);
 
-                cudaEventRecord(stopcopyH2D, stream);
+                hipEventRecord(stopcopyH2D, stream);
 
-                cudaError_t err2 = cudaGetLastError();
-                if (err2 != cudaSuccess)
-                        printf("Error2: %s\n", cudaGetErrorString(err2));
+                hipError_t err2 = hipGetLastError();
+                if (err2 != hipSuccess)
+                        printf("Error2: %s\n", hipGetErrorString(err2));
 
-                cudaEvent_t startker, stopker;
-                cudaEventCreate(&startker);
-                cudaEventCreate(&stopker);
+                hipEvent_t startker, stopker;
+                hipEventCreate(&startker);
+                hipEventCreate(&stopker);
 
-                cudaEventRecord(startker, stream);
+                hipEventRecord(startker, stream);
 
                 //run the GPU function
                 runner_dopair_recursive_grav_new(r, ci, cj, 1,
                gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair_d,
                ncells, max_cell_size, stream);
 
-                cudaEventRecord(stopker, stream);
+                hipEventRecord(stopker, stream);
 
-                //cudaDeviceSynchronize();
+                //hipDeviceSynchronize();
 
-                cudaEvent_t startcopyD2H, stopcopyD2H;
-                cudaEventCreate(&startcopyD2H);
-                cudaEventCreate(&stopcopyD2H);
+                hipEvent_t startcopyD2H, stopcopyD2H;
+                hipEventCreate(&startcopyD2H);
+                hipEventCreate(&stopcopyD2H);
 
-                cudaEventRecord(startcopyD2H, stream);
+                hipEventRecord(startcopyD2H, stream);
 
                 //copy the arrays from device to host
                 //gravity_gpu_D2H(gravity_gpu_values_h, gravity_gpu_values_d,
                ncells, max_cell_size, stream);
-                cudaMemcpyAsync(gravity_gpu_values_recv_pair,
+                hipMemcpyAsync(gravity_gpu_values_recv_pair,
                gravity_gpu_values_recv_pair_d, ncells * max_cell_size *
-               sizeof(struct gravity_gpu_values_recv), cudaMemcpyDeviceToHost,
+               sizeof(struct gravity_gpu_values_recv), hipMemcpyDeviceToHost,
                stream);
 
-                cudaEventRecord(stopcopyD2H, stream);
+                hipEventRecord(stopcopyD2H, stream);
 
-                cudaStreamSynchronize(stream); //THIS ONE IS NEEDED!
+                hipStreamSynchronize(stream); //THIS ONE IS NEEDED!
 
                 TIMER_TOC(timer_doself_grav_pp);}//TIMER_TOC(timer_gpu_copycalc);*/
 
@@ -1119,30 +1118,30 @@ void* runner_main(void* data) {
             fclose(f1);
 
             float copytimeH2D = 0;
-            cudaEventElapsedTime(&copytimeH2D, startcopyH2D, stopcopyH2D);
+            hipEventElapsedTime(&copytimeH2D, startcopyH2D, stopcopyH2D);
             printf("Copy Time: %f ms\n", copytimeH2D);
             FILE *f2 = fopen("copytimeH2D_a30.txt", "a");
             fprintf(f2, "%f\n", copytimeH2D);
             fclose(f2);
 
             float kerneltime = 0;
-            cudaEventElapsedTime(&kerneltime, startker, stopker);
+            hipEventElapsedTime(&kerneltime, startker, stopker);
             printf("Kernel Time: %f ms\n", kerneltime);
             FILE *f3 = fopen("kerneltime_a30.txt", "a");
             fprintf(f3, "%f\n", kerneltime);
             fclose(f3);
 
             float copytimeD2H = 0;
-            cudaEventElapsedTime(&copytimeD2H, startcopyD2H, stopcopyD2H);
+            hipEventElapsedTime(&copytimeD2H, startcopyD2H, stopcopyD2H);
             printf("Copy Time: %f ms\n", copytimeD2H);
             FILE *f4 = fopen("copytimeD2H_a30.txt", "a");
             fprintf(f4, "%f\n", copytimeD2H);
             fclose(f4);*/
 
-            // cudaDeviceSynchronize();
-            /*cudaError_t err3 = cudaGetLastError();
-            if (err3 != cudaSuccess)
-                    printf("Error3: %s\n", cudaGetErrorString(err3));
+            // hipDeviceSynchronize();
+            /*hipError_t err3 = hipGetLastError();
+            if (err3 != hipSuccess)
+                    printf("Error3: %s\n", hipGetErrorString(err3));
 
             {TIMER_TIC;*/
 
@@ -1205,7 +1204,7 @@ void* runner_main(void* data) {
 
             // TIMER_TOC(timer_doself_grav_pp);}//TIMER_TOC(timer_gpu_unpack);
 
-            // cudaDeviceSynchronize();
+            // hipDeviceSynchronize();
 
             /*for(int i=0; i<ncells; i+=2){
                     struct cell *a = grav_cells_pair[i];
@@ -1583,20 +1582,20 @@ pack_count_pair);*/
           TIMER_TIC;
 
           // now copy all the arrays to the device
-          cudaMemcpyAsync(gravity_gpu_values_send_self_d,
-                          gravity_gpu_values_send_self,
-                          ncells_flush_self * max_cell_size *
-                              sizeof(struct gravity_gpu_values_send),
-                          cudaMemcpyHostToDevice, stream);
-          cudaMemcpyAsync(gravity_gpu_values_recv_self_d,
-                          gravity_gpu_values_recv_self,
-                          ncells_flush_self * max_cell_size *
-                              sizeof(struct gravity_gpu_values_recv),
-                          cudaMemcpyHostToDevice, stream);
+          hipMemcpyAsync(gravity_gpu_values_send_self_d,
+                         gravity_gpu_values_send_self,
+                         ncells_flush_self * max_cell_size *
+                             sizeof(struct gravity_gpu_values_send),
+                         hipMemcpyHostToDevice, stream);
+          hipMemcpyAsync(gravity_gpu_values_recv_self_d,
+                         gravity_gpu_values_recv_self,
+                         ncells_flush_self * max_cell_size *
+                             sizeof(struct gravity_gpu_values_recv),
+                         hipMemcpyHostToDevice, stream);
 
-          cudaError_t err4 = cudaGetLastError();
-          if (err4 != cudaSuccess)
-            printf("Error4: %s\n", cudaGetErrorString(err4));
+          hipError_t err4 = hipGetLastError();
+          if (err4 != hipSuccess)
+            printf("Error4: %s\n", hipGetErrorString(err4));
 
           // run the GPU function
           runner_doself_recursive_grav_new(
@@ -1604,22 +1603,21 @@ pack_count_pair);*/
               gravity_gpu_values_recv_self_d, ncells_flush_self, max_cell_size,
               stream);
 
-          // cudaDeviceSynchronize();
+          // hipDeviceSynchronize();
 
           // copy the arrays from device to host
-          cudaMemcpyAsync(gravity_gpu_values_recv_self,
-                          gravity_gpu_values_recv_self_d,
-                          ncells_flush_self * max_cell_size *
-                              sizeof(struct gravity_gpu_values_recv),
-                          cudaMemcpyDeviceToHost, stream);
+          hipMemcpyAsync(gravity_gpu_values_recv_self,
+                         gravity_gpu_values_recv_self_d,
+                         ncells_flush_self * max_cell_size *
+                             sizeof(struct gravity_gpu_values_recv),
+                         hipMemcpyDeviceToHost, stream);
 
-          cudaStreamSynchronize(stream);  // THIS ONE IS NEEDED!
+          hipStreamSynchronize(stream);  // THIS ONE IS NEEDED!
 
           TIMER_TOC(timer_doself_grav_pp);
         }  // TIMER_TOC(timer_gpu_copycalc);
-        cudaError_t err5 = cudaGetLastError();
-        if (err5 != cudaSuccess)
-          printf("Error5: %s\n", cudaGetErrorString(err5));
+        hipError_t err5 = hipGetLastError();
+        if (err5 != hipSuccess) printf("Error5: %s\n", hipGetErrorString(err5));
 
         {
           TIMER_TIC;
@@ -1704,20 +1702,20 @@ pack_count_pair);*/
           TIMER_TIC;
 
           // now copy all the arrays to the device
-          cudaMemcpyAsync(gravity_gpu_values_send_pair_d,
-                          gravity_gpu_values_send_pair,
-                          ncells_flush_pair * max_cell_size *
-                              sizeof(struct gravity_gpu_values_send),
-                          cudaMemcpyHostToDevice, stream);
-          cudaMemcpyAsync(gravity_gpu_values_recv_pair_d,
-                          gravity_gpu_values_recv_pair,
-                          ncells_flush_pair * max_cell_size *
-                              sizeof(struct gravity_gpu_values_recv),
-                          cudaMemcpyHostToDevice, stream);
+          hipMemcpyAsync(gravity_gpu_values_send_pair_d,
+                         gravity_gpu_values_send_pair,
+                         ncells_flush_pair * max_cell_size *
+                             sizeof(struct gravity_gpu_values_send),
+                         hipMemcpyHostToDevice, stream);
+          hipMemcpyAsync(gravity_gpu_values_recv_pair_d,
+                         gravity_gpu_values_recv_pair,
+                         ncells_flush_pair * max_cell_size *
+                             sizeof(struct gravity_gpu_values_recv),
+                         hipMemcpyHostToDevice, stream);
 
-          cudaError_t err4 = cudaGetLastError();
-          if (err4 != cudaSuccess)
-            printf("Error4: %s\n", cudaGetErrorString(err4));
+          hipError_t err4 = hipGetLastError();
+          if (err4 != hipSuccess)
+            printf("Error4: %s\n", hipGetErrorString(err4));
 
           // run the GPU function
           struct cell* ci_flush = grav_cells_pair[0];
@@ -1776,22 +1774,21 @@ pack_count_pair);*/
           // gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair_d,
           // ncells_flush_pair, max_cell_size, stream);
 
-          // cudaDeviceSynchronize();
+          // hipDeviceSynchronize();
 
           // copy the arrays from device to host
-          cudaMemcpyAsync(gravity_gpu_values_recv_pair,
-                          gravity_gpu_values_recv_pair_d,
-                          ncells_flush_pair * max_cell_size *
-                              sizeof(struct gravity_gpu_values_recv),
-                          cudaMemcpyDeviceToHost, stream);
+          hipMemcpyAsync(gravity_gpu_values_recv_pair,
+                         gravity_gpu_values_recv_pair_d,
+                         ncells_flush_pair * max_cell_size *
+                             sizeof(struct gravity_gpu_values_recv),
+                         hipMemcpyDeviceToHost, stream);
 
-          cudaStreamSynchronize(stream);  // THIS ONE IS NEEDED!
+          hipStreamSynchronize(stream);  // THIS ONE IS NEEDED!
 
           TIMER_TOC(timer_doself_grav_pp);
         }  // TIMER_TOC(timer_gpu_copycalc);
-        cudaError_t err5 = cudaGetLastError();
-        if (err5 != cudaSuccess)
-          printf("Error5: %s\n", cudaGetErrorString(err5));
+        hipError_t err5 = hipGetLastError();
+        if (err5 != hipSuccess) printf("Error5: %s\n", hipGetErrorString(err5));
 
         {
           TIMER_TIC;
@@ -1982,65 +1979,65 @@ pack_count_pair);*/
 
     } /* main loop. */
 
-    /*cudaFreeHost(gravity_gpu_values_h->h_i);
-    cudaFreeHost(gravity_gpu_values_h->h_j);
-    cudaFreeHost(gravity_gpu_values_h->mass_i);
-    cudaFreeHost(gravity_gpu_values_h->mass_j);
-    cudaFreeHost(gravity_gpu_values_h->x_i);
-    cudaFreeHost(gravity_gpu_values_h->x_j);
-    cudaFreeHost(gravity_gpu_values_h->y_i);
-    cudaFreeHost(gravity_gpu_values_h->y_j);
-    cudaFreeHost(gravity_gpu_values_h->z_i);
-    cudaFreeHost(gravity_gpu_values_h->z_j);
-    cudaFreeHost(gravity_gpu_values_h->a_x_i);
-    cudaFreeHost(gravity_gpu_values_h->a_y_i);
-    cudaFreeHost(gravity_gpu_values_h->a_z_i);
-    cudaFreeHost(gravity_gpu_values_h->a_x_j);
-    cudaFreeHost(gravity_gpu_values_h->a_y_j);
-    cudaFreeHost(gravity_gpu_values_h->a_z_j);
-    cudaFreeHost(gravity_gpu_values_h->pot_i);
-    cudaFreeHost(gravity_gpu_values_h->pot_j);
-    cudaFreeHost(gravity_gpu_values_h->active_i);
-    cudaFreeHost(gravity_gpu_values_h->active_j);
-    cudaFreeHost(gravity_gpu_values_h->CoM_i);
-    cudaFreeHost(gravity_gpu_values_h->CoM_j);
-    cudaFreeHost(gravity_gpu_values_h->gcounts);
+    /*hipFreeHost(gravity_gpu_values_h->h_i);
+    hipFreeHost(gravity_gpu_values_h->h_j);
+    hipFreeHost(gravity_gpu_values_h->mass_i);
+    hipFreeHost(gravity_gpu_values_h->mass_j);
+    hipFreeHost(gravity_gpu_values_h->x_i);
+    hipFreeHost(gravity_gpu_values_h->x_j);
+    hipFreeHost(gravity_gpu_values_h->y_i);
+    hipFreeHost(gravity_gpu_values_h->y_j);
+    hipFreeHost(gravity_gpu_values_h->z_i);
+    hipFreeHost(gravity_gpu_values_h->z_j);
+    hipFreeHost(gravity_gpu_values_h->a_x_i);
+    hipFreeHost(gravity_gpu_values_h->a_y_i);
+    hipFreeHost(gravity_gpu_values_h->a_z_i);
+    hipFreeHost(gravity_gpu_values_h->a_x_j);
+    hipFreeHost(gravity_gpu_values_h->a_y_j);
+    hipFreeHost(gravity_gpu_values_h->a_z_j);
+    hipFreeHost(gravity_gpu_values_h->pot_i);
+    hipFreeHost(gravity_gpu_values_h->pot_j);
+    hipFreeHost(gravity_gpu_values_h->active_i);
+    hipFreeHost(gravity_gpu_values_h->active_j);
+    hipFreeHost(gravity_gpu_values_h->CoM_i);
+    hipFreeHost(gravity_gpu_values_h->CoM_j);
+    hipFreeHost(gravity_gpu_values_h->gcounts);
     free(gravity_gpu_values_h);
 
-    cudaFree(gravity_gpu_values_d->d_h_i);
-    cudaFree(gravity_gpu_values_d->d_h_j);
-    cudaFree(gravity_gpu_values_d->d_mass_i);
-    cudaFree(gravity_gpu_values_d->d_mass_j);
-    cudaFree(gravity_gpu_values_d->d_x_i);
-    cudaFree(gravity_gpu_values_d->d_x_j);
-    cudaFree(gravity_gpu_values_d->d_y_i);
-    cudaFree(gravity_gpu_values_d->d_y_j);
-    cudaFree(gravity_gpu_values_d->d_z_i);
-    cudaFree(gravity_gpu_values_d->d_z_j);
-    cudaFree(gravity_gpu_values_d->d_a_x_i);
-    cudaFree(gravity_gpu_values_d->d_a_y_i);
-    cudaFree(gravity_gpu_values_d->d_a_z_i);
-    cudaFree(gravity_gpu_values_d->d_a_x_j);
-    cudaFree(gravity_gpu_values_d->d_a_y_j);
-    cudaFree(gravity_gpu_values_d->d_a_z_j);
-    cudaFree(gravity_gpu_values_d->d_pot_i);
-    cudaFree(gravity_gpu_values_d->d_pot_j);
-    cudaFree(gravity_gpu_values_d->d_active_i);
-    cudaFree(gravity_gpu_values_d->d_active_j);
-    cudaFree(gravity_gpu_values_d->d_CoM_i);
-    cudaFree(gravity_gpu_values_d->d_CoM_j);
-    cudaFree(gravity_gpu_values_d->d_gcounts);
+    hipFree(gravity_gpu_values_d->d_h_i);
+    hipFree(gravity_gpu_values_d->d_h_j);
+    hipFree(gravity_gpu_values_d->d_mass_i);
+    hipFree(gravity_gpu_values_d->d_mass_j);
+    hipFree(gravity_gpu_values_d->d_x_i);
+    hipFree(gravity_gpu_values_d->d_x_j);
+    hipFree(gravity_gpu_values_d->d_y_i);
+    hipFree(gravity_gpu_values_d->d_y_j);
+    hipFree(gravity_gpu_values_d->d_z_i);
+    hipFree(gravity_gpu_values_d->d_z_j);
+    hipFree(gravity_gpu_values_d->d_a_x_i);
+    hipFree(gravity_gpu_values_d->d_a_y_i);
+    hipFree(gravity_gpu_values_d->d_a_z_i);
+    hipFree(gravity_gpu_values_d->d_a_x_j);
+    hipFree(gravity_gpu_values_d->d_a_y_j);
+    hipFree(gravity_gpu_values_d->d_a_z_j);
+    hipFree(gravity_gpu_values_d->d_pot_i);
+    hipFree(gravity_gpu_values_d->d_pot_j);
+    hipFree(gravity_gpu_values_d->d_active_i);
+    hipFree(gravity_gpu_values_d->d_active_j);
+    hipFree(gravity_gpu_values_d->d_CoM_i);
+    hipFree(gravity_gpu_values_d->d_CoM_j);
+    hipFree(gravity_gpu_values_d->d_gcounts);
     free(gravity_gpu_values_d);*/
 
-    cudaFreeHost(gravity_gpu_values_send_self);
-    cudaFreeHost(gravity_gpu_values_recv_self);
-    cudaFree(gravity_gpu_values_send_self_d);
-    cudaFree(gravity_gpu_values_recv_self_d);
+    hipFreeHost(gravity_gpu_values_send_self);
+    hipFreeHost(gravity_gpu_values_recv_self);
+    hipFree(gravity_gpu_values_send_self_d);
+    hipFree(gravity_gpu_values_recv_self_d);
 
-    cudaFreeHost(gravity_gpu_values_send_pair);
-    cudaFreeHost(gravity_gpu_values_recv_pair);
-    cudaFree(gravity_gpu_values_send_pair_d);
-    cudaFree(gravity_gpu_values_recv_pair_d);
+    hipFreeHost(gravity_gpu_values_send_pair);
+    hipFreeHost(gravity_gpu_values_recv_pair);
+    hipFree(gravity_gpu_values_send_pair_d);
+    hipFree(gravity_gpu_values_recv_pair_d);
 
     free(grav_cells_self);
     free(grav_tasks_self);
@@ -2050,7 +2047,7 @@ pack_count_pair);*/
 
     // printf("qid: %i selfgravs %i\n", r->qid, selfgravs);
   }
-  cudaStreamDestroy(stream);
+  hipStreamDestroy(stream);
   /* Be kind, rewind. */
   return NULL;
 }

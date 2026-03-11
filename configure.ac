@@ -847,7 +847,7 @@ HIP_ROOT=""
 HIP_CPPFLAGS=""
 HIP_LDFLAGS=""
 HIP_LIBS="-lamdhip64 -lstdc++"
-HIP_FLAGS=""
+HIP_FLAGS="-x hip"
 
 if test "x$with_cuda" != "xno"; then
    GPU_BACKEND="cuda"

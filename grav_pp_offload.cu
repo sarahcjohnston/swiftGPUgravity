@@ -3,11 +3,10 @@
 #include <iostream>
 #include <math.h>
 #include <time.h>
-#include <cuda.h>
-#include <cuda_runtime.h>
+#include <hip/hip_runtime.h>
 #include <unistd.h>
 
-#include "externalfunctions.cu"
+#include "externalfunctions_hip.h"
 #include "multipole_struct.h"
 #include "periodic.h"
 
@@ -48,7 +47,7 @@ __global__ void self_grav_pp(int periodic, float rmax_i, double min_trunc, int *
 
 /* Self gravity kernel. This is called by the pp_offload function */
 //PP ALL INTERACTIONS
-__global__ void self_grav_pp_new(int periodic, float rmax_i, double min_trunc, float r_s_inv, int gcount_i, int gcount_padded_i, int ci_active, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells, int max_cell_size, cudaStream_t stream) {
+__global__ void self_grav_pp_new(int periodic, float rmax_i, double min_trunc, float r_s_inv, int gcount_i, int gcount_padded_i, int ci_active, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells, int max_cell_size, hipStream_t stream) {
 
   int threads = 256;
 	dim3 block(threads);
@@ -164,16 +163,16 @@ extern "C" void pair_pp_offload(int periodic, const float *CoM_i, const float *C
 	pair_grav_pp<<<32,256>>>(periodic, d_CoM_i, d_CoM_j, rmax_i, rmax_j, min_trunc, d_active_i, d_active_j, dim[0], dim[1], dim[2], d_h_i, d_h_j, d_mass_i, d_mass_j, *r_s_inv, d_x_i, d_x_j, d_y_i, d_y_j, d_z_i, d_z_j, d_a_x_i, d_a_y_i, d_a_z_i, d_a_x_j, d_a_y_j, d_a_z_j, d_pot_i, d_pot_j, *gcount_i, *gcount_padded_i, *gcount_j, *gcount_padded_j, ci_active, cj_active, symmetric, epsilon);
 
 
-	cudaError_t err2 = cudaGetLastError();
-    	if (err2 != cudaSuccess)
-	printf("Error - pair_pp: %s\n", cudaGetErrorString(err2));
+	hipError_t err2 = hipGetLastError();
+    	if (err2 != hipSuccess)
+	printf("Error - pair_pp: %s\n", hipGetErrorString(err2));
 
 	/* memory transfer was here - this is all done in runner_main now */	
 }
 
 
 //self grav pp offload
-extern "C" void self_pp_offload(int periodic, float rmax_i, double min_trunc, const float *r_s_inv, const int *gcount_i, const int *gcount_padded_i, int ci_active, float *d_h_i, float *d_mass_i, float *d_x_i, float *d_y_i, float *d_z_i, float *d_a_x_i, float *d_a_y_i, float *d_a_z_i, float *d_pot_i, int *d_active_i, int ncells, int max_cell_size, int *gcounts, int *cell_active, cudaStream_t stream){
+extern "C" void self_pp_offload(int periodic, float rmax_i, double min_trunc, const float *r_s_inv, const int *gcount_i, const int *gcount_padded_i, int ci_active, float *d_h_i, float *d_mass_i, float *d_x_i, float *d_y_i, float *d_z_i, float *d_a_x_i, float *d_a_y_i, float *d_a_z_i, float *d_pot_i, int *d_active_i, int ncells, int max_cell_size, int *gcounts, int *cell_active, hipStream_t stream){
 
 	/* memory allocation was here - this is all done in runner_main now */
 
@@ -182,18 +181,18 @@ extern "C" void self_pp_offload(int periodic, float rmax_i, double min_trunc, co
 	self_grav_pp<<<32,256, 0, stream>>>(periodic, rmax_i, min_trunc, d_active_i, d_h_i, d_mass_i, *r_s_inv, d_x_i, d_y_i, d_z_i, d_a_x_i, d_a_y_i, d_a_z_i, d_pot_i, *gcount_i, *gcount_padded_i, ci_active, ncells, max_cell_size, gcounts, cell_active);
 	//check if thread idx has a particle
 	
-	//cudaDeviceSynchronize();
+	//hipDeviceSynchronize();
 
-	cudaError_t err2 = cudaGetLastError();
-    	if (err2 != cudaSuccess)
-	printf("Error - self_pp: %s\n", cudaGetErrorString(err2));
+	hipError_t err2 = hipGetLastError();
+    	if (err2 != hipSuccess)
+	printf("Error - self_pp: %s\n", hipGetErrorString(err2));
 	
 	/* memory transfer was here - this is all done in runner_main now */
 }
 
 
 //self grav pp offload
-extern "C" void self_pp_offload_new(int periodic, float rmax_i, double min_trunc, const float *r_s_inv, const int *gcount_i, const int *gcount_padded_i, int ci_active, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells, int max_cell_size, cudaStream_t stream){
+extern "C" void self_pp_offload_new(int periodic, float rmax_i, double min_trunc, const float *r_s_inv, const int *gcount_i, const int *gcount_padded_i, int ci_active, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells, int max_cell_size, hipStream_t stream){
 
 	/* memory allocation was here - this is all done in runner_main now */
 
@@ -232,15 +231,15 @@ extern "C" void self_pp_offload_new(int periodic, float rmax_i, double min_trunc
 	//self_grav_pp_new<<<grid,block, shmem, stream>>>(periodic, rmax_i, min_trunc, *r_s_inv,*gcount_i, *gcount_padded_i, ci_active, gravity_gpu_values_send_d,  gravity_gpu_values_recv_d, ncells, max_cell_size, stream);
 	//check if thread idx has a particle
 
-	cudaError_t err2 = cudaGetLastError();
-    	if (err2 != cudaSuccess)
-	printf("Error - self_pp: %s\n", cudaGetErrorString(err2));
+	hipError_t err2 = hipGetLastError();
+    	if (err2 != hipSuccess)
+	printf("Error - self_pp: %s\n", hipGetErrorString(err2));
 	
 	/* memory transfer was here - this is all done in runner_main now */
 }
 
 //self grav pp offload
-extern "C" void pair_pp_offload_new(int periodic, float rmax_i, float rmax_j, double min_trunc, const float *r_s_inv, const int *gcount_i, const int *gcount_padded_i, const int *gcount_j, const int *gcount_padded_j, int ci_active, int cj_active, float dim_0, float dim_1, float dim_2, int symmetric, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells, int max_cell_size, cudaStream_t stream){
+extern "C" void pair_pp_offload_new(int periodic, float rmax_i, float rmax_j, double min_trunc, const float *r_s_inv, const int *gcount_i, const int *gcount_padded_i, const int *gcount_j, const int *gcount_padded_j, int ci_active, int cj_active, float dim_0, float dim_1, float dim_2, int symmetric, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells, int max_cell_size, hipStream_t stream){
 
 	int threads = 256;
 	dim3 block(threads);
@@ -253,8 +252,8 @@ extern "C" void pair_pp_offload_new(int periodic, float rmax_i, float rmax_j, do
 	
 	//printf("PAIRRR \n");
 	
-	cudaError_t err = cudaPeekAtLastError();
-if (err != cudaSuccess) printf("KERNEL LAUNCH ERROR: %s\n", cudaGetErrorString(err));
+	hipError_t err = hipPeekAtLastError();
+if (err != hipSuccess) printf("KERNEL LAUNCH ERROR: %s\n", hipGetErrorString(err));
 
 	// update cj
   	if (symmetric) {
