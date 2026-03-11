@@ -549,7 +549,7 @@ void* runner_main(void* data) {
         t = scheduler_gettask(sched, r->qid, prev);
         TIMER_TOC(timer_gettask);
 
-        message("[TASK GRABBED] task=%p qid=%d waiting=%i\n", (void*)t, r->qid,
+        message("[TASK GRABBED] task=%p qid=%d waiting=%i", (void*)t, r->qid,
                 sched->waiting);
 
         /* Did I get anything? */
