@@ -786,6 +786,177 @@ AC_PROG_EGREP
 # Check for the libraries we will need.
 AC_CHECK_LIB(m,sqrt,,AC_MSG_ERROR(something is wrong with the math library!))
 
+# Check for optional GPU toolchains.
+with_cuda="no"
+with_hip="no"
+with_cuda_flags=""
+with_hip_flags=""
+
+AC_ARG_WITH([cuda],
+    [AS_HELP_STRING([--with-cuda=PATH],
+       [root directory where CUDA is installed @<:@yes/no@:>@]
+    )],
+    [with_cuda="$withval"],
+    [with_cuda="no"]
+)
+
+AC_ARG_WITH([hip],
+    [AS_HELP_STRING([--with-hip=PATH],
+       [root directory where HIP/ROCm is installed @<:@yes/no@:>@]
+    )],
+    [with_hip="$withval"],
+    [with_hip="no"]
+)
+
+AC_ARG_WITH([cuda-flags],
+    [AS_HELP_STRING([--with-cuda-flags=FLAGS],
+       [extra CUDA compiler flags appended to the default CUDA flags]
+    )],
+    [with_cuda_flags="$withval"],
+    [with_cuda_flags=""]
+)
+
+AC_ARG_WITH([hip-flags],
+    [AS_HELP_STRING([--with-hip-flags=FLAGS],
+       [extra HIP compiler flags appended to the default HIP flags]
+    )],
+    [with_hip_flags="$withval"],
+    [with_hip_flags=""]
+)
+
+if test "x$with_cuda" != "xno" -a "x$with_hip" != "xno"; then
+   AC_MSG_ERROR([Please specify only one GPU backend via --with-cuda or --with-hip])
+fi
+
+if test "x$with_cuda" = "xno" -a "x$with_hip" = "xno"; then
+   AC_MSG_ERROR([Please specify a GPU backend via --with-cuda=PATH or --with-hip=PATH])
+fi
+
+GPU_BACKEND="none"
+GPUCC=""
+GPU_CPPFLAGS=""
+GPU_LDFLAGS=""
+GPU_LIBS=""
+GPU_FLAGS=""
+GPU_COMPILE_MODE_FLAGS=""
+GPU_DEVICE_LINK_FLAGS=""
+GPU_DEVICE_LINK_LIBS=""
+GPU_DLINK_OBJECT=""
+
+CUDA_ROOT=""
+CUDA_CPPFLAGS="-I/usr/local/cuda/include"
+CUDA_LDFLAGS="-L/cosma/local/Nvidia-hpc-sdk/2025_253/Linux_x86_64/25.3/cuda/lib64 -L/usr/local/cuda/lib64"
+CUDA_LIBS="-lcudadevrt -lcudart -lcuda -lstdc++"
+CUDA_FLAGS="-arch=native -fmad=false"
+
+HIP_ROOT=""
+HIP_CPPFLAGS=""
+HIP_LDFLAGS=""
+HIP_LIBS="-lamdhip64 -lstdc++"
+HIP_FLAGS=""
+
+if test "x$with_cuda" != "xno"; then
+   GPU_BACKEND="cuda"
+
+   if test "x$with_cuda" = "xyes"; then
+      AC_PATH_PROG([CUDA_NVCC], [nvcc], [notfound])
+      if test "x$CUDA_NVCC" = "xnotfound"; then
+         AC_MSG_ERROR([Could not find nvcc on PATH. Use --with-cuda=PATH to specify the CUDA root])
+      fi
+      GPUCC="$CUDA_NVCC"
+   else
+      CUDA_ROOT="$with_cuda"
+      GPUCC="$CUDA_ROOT/bin/nvcc"
+      if test ! -x "$GPUCC"; then
+         AC_MSG_ERROR([Could not find nvcc at $GPUCC])
+      fi
+      CUDA_CPPFLAGS="$CUDA_CPPFLAGS -I$CUDA_ROOT/include"
+      if test -d "$CUDA_ROOT/lib64"; then
+         CUDA_LDFLAGS="$CUDA_LDFLAGS -L$CUDA_ROOT/lib64"
+      fi
+      if test -d "$CUDA_ROOT/lib"; then
+         CUDA_LDFLAGS="$CUDA_LDFLAGS -L$CUDA_ROOT/lib"
+      fi
+   fi
+
+   if test "x$with_cuda_flags" != "x"; then
+      CUDA_FLAGS="$CUDA_FLAGS $with_cuda_flags"
+   fi
+
+   GPU_CPPFLAGS="$CUDA_CPPFLAGS"
+   GPU_LDFLAGS="$CUDA_LDFLAGS"
+   GPU_LIBS="$CUDA_LIBS"
+   GPU_FLAGS="$CUDA_FLAGS"
+   GPU_COMPILE_MODE_FLAGS="-dc"
+   GPU_DEVICE_LINK_FLAGS="-dlink"
+   GPU_DEVICE_LINK_LIBS="-lcudadevrt"
+   GPU_DLINK_OBJECT="gpu_link.o"
+   AC_DEFINE([WITH_CUDA], 1, [Compile with the CUDA GPU backend])
+fi
+
+if test "x$with_hip" != "xno"; then
+   GPU_BACKEND="hip"
+
+   if test "x$with_hip" = "xyes"; then
+      AC_PATH_PROG([HIP_HIPCC], [hipcc], [notfound])
+      if test "x$HIP_HIPCC" = "xnotfound"; then
+         AC_MSG_ERROR([Could not find hipcc on PATH. Use --with-hip=PATH to specify the HIP root])
+      fi
+      GPUCC="$HIP_HIPCC"
+   else
+      HIP_ROOT="$with_hip"
+      GPUCC="$HIP_ROOT/bin/hipcc"
+      if test ! -x "$GPUCC"; then
+         AC_MSG_ERROR([Could not find hipcc at $GPUCC])
+      fi
+      HIP_CPPFLAGS="-I$HIP_ROOT/include"
+      if test -d "$HIP_ROOT/lib64"; then
+         HIP_LDFLAGS="$HIP_LDFLAGS -L$HIP_ROOT/lib64"
+      fi
+      if test -d "$HIP_ROOT/lib"; then
+         HIP_LDFLAGS="$HIP_LDFLAGS -L$HIP_ROOT/lib"
+      fi
+   fi
+
+   if test "x$with_hip_flags" != "x"; then
+      HIP_FLAGS="$HIP_FLAGS $with_hip_flags"
+   fi
+
+   GPU_CPPFLAGS="$HIP_CPPFLAGS"
+   GPU_LDFLAGS="$HIP_LDFLAGS"
+   GPU_LIBS="$HIP_LIBS"
+   GPU_FLAGS="$HIP_FLAGS"
+   GPU_COMPILE_MODE_FLAGS="-c"
+   AC_DEFINE([WITH_HIP], 1, [Compile with the HIP GPU backend])
+fi
+
+AC_SUBST([GPU_BACKEND])
+AC_SUBST([GPUCC])
+AC_SUBST([GPU_CPPFLAGS])
+AC_SUBST([GPU_LDFLAGS])
+AC_SUBST([GPU_LIBS])
+AC_SUBST([GPU_FLAGS])
+AC_SUBST([GPU_COMPILE_MODE_FLAGS])
+AC_SUBST([GPU_DEVICE_LINK_FLAGS])
+AC_SUBST([GPU_DEVICE_LINK_LIBS])
+AC_SUBST([GPU_DLINK_OBJECT])
+
+AC_SUBST([CUDA_ROOT])
+AC_SUBST([CUDA_CPPFLAGS])
+AC_SUBST([CUDA_LDFLAGS])
+AC_SUBST([CUDA_LIBS])
+AC_SUBST([CUDA_FLAGS])
+
+AC_SUBST([HIP_ROOT])
+AC_SUBST([HIP_CPPFLAGS])
+AC_SUBST([HIP_LDFLAGS])
+AC_SUBST([HIP_LIBS])
+AC_SUBST([HIP_FLAGS])
+
+AM_CONDITIONAL([HAVEGPU], [test "x$GPU_BACKEND" != "xnone"])
+AM_CONDITIONAL([HAVECUDA], [test "x$GPU_BACKEND" = "xcuda"])
+AM_CONDITIONAL([HAVEHIP], [test "x$GPU_BACKEND" = "xhip"])
+
 # Check for GSL. We test for this in the standard directories by default,
 # and only disable if using --with-gsl=no or --without-gsl. When a value
 # is given GSL must be found.
@@ -3411,6 +3582,12 @@ AC_MSG_RESULT([
    Black holes model    : $with_black_holes
    Radiative transfer   : $with_rt
    Extra i/o            : $with_extra_io
+
+   GPU backend          : $GPU_BACKEND
+   CUDA root            : $CUDA_ROOT
+   CUDA flags           : $CUDA_FLAGS
+   HIP root             : $HIP_ROOT
+   HIP flags            : $HIP_FLAGS
 
    Atomic operations in tasks  : $enable_atomics_within_tasks
    Individual timers           : $enable_timers
