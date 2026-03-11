@@ -145,22 +145,6 @@
 
 #include <stdatomic.h>
 
-struct task* enqueue_dependencies(struct scheduler* s, struct task* t) {
-  /* Loop through the dependencies and add them to a queue if
-         they are ready. */
-  for (int k = 0; k < t->nr_unlock_tasks; k++) {
-    struct task* t2 = t->unlock_tasks[k];
-    if (t2->skip) continue;
-    const int res = atomic_dec(&t2->wait);
-    if (res < 1) {
-      error("Negative wait!");
-    } else if (res == 1) {
-      scheduler_enqueue(s, t2);
-    }
-  }
-  return NULL;
-}
-
 extern void self_pp_offload_new(
     int periodic, float rmax_i, double min_trunc, const float* r_s_inv,
     const int* gcount_i, const int* gcount_padded_i, int ci_active,
@@ -272,9 +256,7 @@ void* runner_main(void* data) {
           if (t->subtype == task_subtype_grav) {
             runner_doself_grav_pp_task_new(r, ci, t, sched, ncells,
                                            max_cell_size);
-          }
-
-          else if (t->subtype == task_subtype_external_grav)
+          } else if (t->subtype == task_subtype_external_grav)
             runner_do_grav_external(r, ci, 1);
           else if (t->subtype == task_subtype_density)
             runner_dosub_self1_density(r, ci, /*below_h_max=*/0, 1);
@@ -329,7 +311,6 @@ void* runner_main(void* data) {
 
         case task_type_pair:
           if (t->subtype == task_subtype_grav) {
-
             runner_dopair_recursive_grav_new(
                 r, ci, cj, 1, r->gpu.gravity_gpu_values_send_pair,
                 r->gpu.gravity_gpu_values_send_pair_d,
@@ -337,7 +318,6 @@ void* runner_main(void* data) {
                 r->gpu.gravity_gpu_values_recv_pair_d, r->gpu.grav_cells_pair,
                 r->gpu.grav_tasks_pair, t, sched, ncells, max_cell_size,
                 &packed, r->gpu.stream);
-
           } else if (t->subtype == task_subtype_density)
             runner_dosub_pair1_density(r, ci, cj, /*below_h_max=*/0, 1);
 #ifdef EXTRA_HYDRO_LOOP
@@ -641,279 +621,16 @@ void* runner_main(void* data) {
       if (sched->queues[r->qid].gpu_self_tasks_left < 1) self_launch = 1;
       (void)lock_unlock(&sched->queues[r->qid].lock);
 
-      if (self_launch == 1 && r->gpu.grav_batch_self_count != 0) {
-        int ncells_flush_self = r->gpu.grav_batch_self_count;
-
-        {
-          TIMER_TIC;
-
-          // now copy all the arrays to the device
-          hipMemcpyAsync(r->gpu.gravity_gpu_values_send_self_d,
-                         r->gpu.gravity_gpu_values_send_self,
-                         ncells_flush_self * max_cell_size *
-                             sizeof(struct gravity_gpu_values_send),
-                         hipMemcpyHostToDevice, r->gpu.stream);
-          hipMemcpyAsync(r->gpu.gravity_gpu_values_recv_self_d,
-                         r->gpu.gravity_gpu_values_recv_self,
-                         ncells_flush_self * max_cell_size *
-                             sizeof(struct gravity_gpu_values_recv),
-                         hipMemcpyHostToDevice, r->gpu.stream);
-
-          hipError_t err4 = hipGetLastError();
-          if (err4 != hipSuccess)
-            printf("Error4: %s\n", hipGetErrorString(err4));
-
-          // run the GPU function
-          runner_doself_recursive_grav_new(
-              r, ci, 1, r->gpu.gravity_gpu_values_send_self_d,
-              r->gpu.gravity_gpu_values_recv_self_d, ncells_flush_self,
-              max_cell_size, r->gpu.stream);
-
-          // hipDeviceSynchronize();
-
-          // copy the arrays from device to host
-          hipMemcpyAsync(r->gpu.gravity_gpu_values_recv_self,
-                         r->gpu.gravity_gpu_values_recv_self_d,
-                         ncells_flush_self * max_cell_size *
-                             sizeof(struct gravity_gpu_values_recv),
-                         hipMemcpyDeviceToHost, r->gpu.stream);
-
-          hipStreamSynchronize(r->gpu.stream);  // THIS ONE IS NEEDED!
-
-          TIMER_TOC(timer_doself_grav_pp);
-        }  // TIMER_TOC(timer_gpu_copycalc);
-        hipError_t err5 = hipGetLastError();
-        if (err5 != hipSuccess) printf("Error5: %s\n", hipGetErrorString(err5));
-
-        {
-          TIMER_TIC;
-
-          /*send results back to relevant cell structs*/
-          for (int j = 0; j < ncells_flush_self; j++) {
-            while (cell_glocktree(r->gpu.grav_cells_self[j])) {
-              ; /* spin until we acquire the lock */
-            }
-            for (int i = 0;
-                 i <
-                 r->gpu.gravity_gpu_values_send_self[j * max_cell_size].gcounts;
-                 i++) {
-              r->gpu.grav_cells_self[j]->grav.parts[i].a_grav[0] +=
-                  r->gpu.gravity_gpu_values_recv_self[i + j * max_cell_size]
-                      .a_x_i;
-              r->gpu.grav_cells_self[j]->grav.parts[i].a_grav[1] +=
-                  r->gpu.gravity_gpu_values_recv_self[i + j * max_cell_size]
-                      .a_y_i;
-              r->gpu.grav_cells_self[j]->grav.parts[i].a_grav[2] +=
-                  r->gpu.gravity_gpu_values_recv_self[i + j * max_cell_size]
-                      .a_z_i;
-              r->gpu.grav_cells_self[j]->grav.parts[i].potential +=
-                  r->gpu.gravity_gpu_values_recv_self[i + j * max_cell_size]
-                      .pot_i;
-            }
-            cell_gunlocktree(r->gpu.grav_cells_self[j]);
-          }
-
-          TIMER_TOC(timer_doself_grav_pp);
-        }  // TIMER_TOC(timer_gpu_unpack);
-
-        for (int i = 0; i < ncells_flush_self; i++) {
-          scheduler_done(sched, r->gpu.grav_tasks_self[i]);
-        }
-
-        // reset counter for next pack
-        for (int i = 0; i < ncells_flush_self; i++) {
-          r->gpu.grav_cells_self[i] = NULL;
-          r->gpu.grav_tasks_self[i] = NULL;
-        }
-        r->gpu.grav_batch_self_count = 0;
-      }
+      if (self_launch == 1 && r->gpu.grav_batch_self_count != 0)
+        runner_gpu_flush_leftover_self(r, sched);
 
       int pair_launch = 0;
       lock_lock(&sched->queues[r->qid].lock);
-      // printf("qid:%i tasks left %i\n", r->qid,
-      // sched->queues[r->qid].gpu_pair_tasks_left); fflush(stdout);
       if (sched->queues[r->qid].gpu_pair_tasks_left < 1) pair_launch = 1;
       (void)lock_unlock(&sched->queues[r->qid].lock);
 
-      if (pair_launch == 1 && r->gpu.grav_batch_pair_count != 0) {
-        int ncells_flush_pair = r->gpu.grav_batch_pair_count;
-
-        {
-          TIMER_TIC;
-
-          // now copy all the arrays to the device
-          hipMemcpyAsync(r->gpu.gravity_gpu_values_send_pair_d,
-                         r->gpu.gravity_gpu_values_send_pair,
-                         ncells_flush_pair * max_cell_size *
-                             sizeof(struct gravity_gpu_values_send),
-                         hipMemcpyHostToDevice, r->gpu.stream);
-          hipMemcpyAsync(r->gpu.gravity_gpu_values_recv_pair_d,
-                         r->gpu.gravity_gpu_values_recv_pair,
-                         ncells_flush_pair * max_cell_size *
-                             sizeof(struct gravity_gpu_values_recv),
-                         hipMemcpyHostToDevice, r->gpu.stream);
-
-          hipError_t err4 = hipGetLastError();
-          if (err4 != hipSuccess)
-            printf("Error4: %s\n", hipGetErrorString(err4));
-
-          // run the GPU function
-          struct cell* ci_flush = r->gpu.grav_cells_pair[0];
-          struct cell* cj_flush = r->gpu.grav_cells_pair[1];
-
-          if (ci_flush == NULL || cj_flush == NULL)
-            error("pair flush: NULL packed cells");
-
-          const struct engine* engine_local = r->e;
-          const int periodic = engine_local->mesh->periodic;
-          const float dim[3] = {(float)engine_local->mesh->dim[0],
-                                (float)engine_local->mesh->dim[1],
-                                (float)engine_local->mesh->dim[2]};
-          const float r_s_inv = engine_local->mesh->r_s_inv;
-          const double min_trunc = engine_local->mesh->r_cut_min;
-
-          float dim_0 = dim[0];
-          float dim_1 = dim[1];
-          float dim_2 = dim[2];
-
-          TIMER_TIC;
-
-          /* Record activity status */
-          const int ci_active =
-              cell_is_active_gravity(ci_flush, engine_local) &&
-              (ci_flush->nodeID == engine_local->nodeID);
-          const int cj_active =
-              cell_is_active_gravity(cj_flush, engine_local) &&
-              (cj_flush->nodeID == engine_local->nodeID);
-
-          /* Recover the multipole info and shift the CoM locations */
-          const float rmax_i = ci_flush->grav.multipole->r_max;
-          const float rmax_j = cj_flush->grav.multipole->r_max;
-
-          /* Start by constructing particle caches */
-
-          /* Computed the padded counts */
-          const int gcount_i = ci_flush->grav.count;
-          const int gcount_j = cj_flush->grav.count;
-          const int gcount_padded_i =
-              gcount_i - (gcount_i % VEC_SIZE) + VEC_SIZE;
-          const int gcount_padded_j =
-              gcount_j - (gcount_j % VEC_SIZE) + VEC_SIZE;
-
-          pair_pp_offload_new(periodic, rmax_i, rmax_j, min_trunc, &r_s_inv,
-                              &gcount_i, &gcount_padded_i, &gcount_j,
-                              &gcount_padded_j, ci_active, cj_active, dim_0,
-                              dim_1, dim_2, /*symmetric =*/1,
-                              r->gpu.gravity_gpu_values_send_pair_d,
-                              r->gpu.gravity_gpu_values_recv_pair_d,
-                              ncells_flush_pair, max_cell_size, r->gpu.stream);
-
-          // copy the arrays from device to host
-          hipMemcpyAsync(r->gpu.gravity_gpu_values_recv_pair,
-                         r->gpu.gravity_gpu_values_recv_pair_d,
-                         ncells_flush_pair * max_cell_size *
-                             sizeof(struct gravity_gpu_values_recv),
-                         hipMemcpyDeviceToHost, r->gpu.stream);
-
-          hipStreamSynchronize(r->gpu.stream);  // THIS ONE IS NEEDED!
-
-          TIMER_TOC(timer_doself_grav_pp);
-        }  // TIMER_TOC(timer_gpu_copycalc);
-        hipError_t err5 = hipGetLastError();
-        if (err5 != hipSuccess) printf("Error5: %s\n", hipGetErrorString(err5));
-
-        {
-          TIMER_TIC;
-
-          /*send results back to relevant cell structs*/
-          for (int j = 0; j < ncells_flush_pair; j += 2) {
-            if (r->gpu.grav_cells_pair[j] == NULL ||
-                r->gpu.grav_cells_pair[j + 1] == NULL)
-              error("PAIR UNPACK: NULL cell j=%d packed=%d qid=%d", j,
-                    ncells_flush_pair, r->qid);
-
-            if (r->gpu.grav_tasks_pair[j / 2] == NULL)
-              error("PAIR UNPACK: NULL task k=%d (j=%d) packed=%d qid=%d",
-                    j / 2, j, ncells_flush_pair, r->qid);
-            struct cell* ci0 = r->gpu.grav_cells_pair[j];
-            struct cell* cj0 = r->gpu.grav_cells_pair[j + 1];
-            struct cell *a = ci0, *b = cj0;
-
-            if (a > b) {
-              struct cell* tmp = a;
-              a = b;
-              b = tmp;
-            }
-
-            while (cell_glocktree(a)) {
-              ;
-            }  //{printf("hunting for lock for cell %p\n", (void*)a); }
-            /*while (cell_glocktree(r->gpu.grav_cells_pair[j])) {
-            ; //spin until we acquire the lock
-            }*/
-            for (int i = 0;
-                 i <
-                 r->gpu.gravity_gpu_values_send_pair[j * max_cell_size].gcounts;
-                 i++) {
-              ci0->grav.parts[i].a_grav[0] +=
-                  r->gpu.gravity_gpu_values_recv_pair[i + j * max_cell_size]
-                      .a_x_i;
-              ci0->grav.parts[i].a_grav[1] +=
-                  r->gpu.gravity_gpu_values_recv_pair[i + j * max_cell_size]
-                      .a_y_i;
-              ci0->grav.parts[i].a_grav[2] +=
-                  r->gpu.gravity_gpu_values_recv_pair[i + j * max_cell_size]
-                      .a_z_i;
-              ci0->grav.parts[i].potential +=
-                  r->gpu.gravity_gpu_values_recv_pair[i + j * max_cell_size]
-                      .pot_i;
-            }
-            cell_gunlocktree(a);
-
-            while (cell_glocktree(b)) {
-              ;
-            }  // {printf("hunting for lock for cell %p\n", (void*)b);}
-            for (int i = 0;
-                 i <
-                 r->gpu.gravity_gpu_values_send_pair[(j + 1) * max_cell_size]
-                     .gcounts;
-                 i++) {
-              cj0->grav.parts[i].a_grav[0] +=
-                  r->gpu
-                      .gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size]
-                      .a_x_i;
-              cj0->grav.parts[i].a_grav[1] +=
-                  r->gpu
-                      .gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size]
-                      .a_y_i;
-              cj0->grav.parts[i].a_grav[2] +=
-                  r->gpu
-                      .gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size]
-                      .a_z_i;
-              cj0->grav.parts[i].potential +=
-                  r->gpu
-                      .gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size]
-                      .pot_i;
-            }
-            cell_gunlocktree(b);
-
-            scheduler_done(sched, r->gpu.grav_tasks_pair[j / 2]);
-          }
-
-          TIMER_TOC(timer_doself_grav_pp);
-        }  // TIMER_TOC(timer_gpu_unpack);
-
-        // reset counter for next pack
-        for (int i = 0; i < ncells_flush_pair; i += 2) {
-          r->gpu.grav_cells_pair[i] = NULL;
-          r->gpu.grav_cells_pair[i + 1] = NULL;
-          r->gpu.grav_tasks_pair[i / 2] = NULL;
-        }
-
-        lock_lock(&sched->queues[r->qid].lock);
-        r->gpu.grav_batch_pair_count = 0;
-        (void)lock_unlock(&sched->queues[r->qid].lock);
-      }
+      if (pair_launch == 1 && r->gpu.grav_batch_pair_count != 0)
+        runner_gpu_flush_leftover_pair(r, sched);
 
       r->active_time += (getticks() - task_beg);
 
@@ -934,17 +651,11 @@ void* runner_main(void* data) {
 
       /* We're done with this task, see if we get a next one. */
       prev = t;
-      // printf("pack_count= %i \n", pack_count);
+
       // Here we need an if statement that checks if I am a self gravity task
       // that is not finished packing
       if (t->subtype == task_subtype_grav && t->type == task_type_self) {
         // t->skip = 1;
-
-        /*fprintf(stderr,
-        "[DEFER] task=%p type=%d subtype=%d qid=%d pack_self=%d pack_pair=%d
-        waiting=%i\n", (void*)t, t->type, t->subtype, r->qid,
-        r->gpu.grav_batch_self_count, r->gpu.grav_batch_pair_count,
-        sched->waiting);*/
 
         t->toc = getticks();
         t->total_ticks += t->toc - t->tic;
@@ -953,19 +664,11 @@ void* runner_main(void* data) {
       } else if (t->subtype == task_subtype_grav && t->type == task_type_pair &&
                  packed == 1) {  // pass a bool into here to set if this applies
                                  // to cell - i.e. not just top level cell
-        // t->skip = 1;
-        /*fprintf(stderr,
-        "[DEFER] task=%p type=%d subtype=%d qid=%d pack_self=%d pack_pair=%d
-        waiting=%i\n", (void*)t, t->type, t->subtype, r->qid,
-        r->gpu.grav_batch_self_count, r->gpu.grav_batch_pair_count,
-        sched->waiting);*/
 
         t->toc = getticks();
         t->total_ticks += t->toc - t->tic;
         t = NULL;
         packed = 0;
-        // printf("qid:%i packed:%i \n", r->qid, packed);
-        // fflush(stdout);
 
       } else {
         t = scheduler_done(sched,

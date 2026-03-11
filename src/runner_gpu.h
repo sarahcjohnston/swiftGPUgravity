@@ -23,6 +23,7 @@
 
 struct cell;
 struct runner;
+struct scheduler;
 struct task;
 struct gravity_gpu_values_recv;
 struct gravity_gpu_values_send;
@@ -88,5 +89,21 @@ void runner_gpu_init(struct runner* r);
  * @param r The runner whose GPU state to clean.
  */
 void runner_gpu_clean(struct runner* r);
+
+/**
+ * @brief Flush any leftover packed self-gravity work owned by a runner.
+ *
+ * @param r The runner whose GPU batch should be flushed.
+ * @param sched The scheduler owning the queued tasks.
+ */
+void runner_gpu_flush_leftover_self(struct runner* r, struct scheduler* sched);
+
+/**
+ * @brief Flush any leftover packed pair-gravity work owned by a runner.
+ *
+ * @param r The runner whose GPU batch should be flushed.
+ * @param sched The scheduler owning the queued tasks.
+ */
+void runner_gpu_flush_leftover_pair(struct runner* r, struct scheduler* sched);
 
 #endif /* SWIFT_RUNNER_GPU_H */
