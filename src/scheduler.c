@@ -2371,6 +2371,8 @@ void scheduler_start(struct scheduler* s) {
   for (int i = 0; i < s->nr_queues; i++) {
     s->queues[i].gpu_self_tasks_left = 0;
     s->queues[i].gpu_pair_tasks_left = 0;
+    s->gpu_grav_batch_self_counts[i] = 0;
+    s->gpu_grav_batch_pair_counts[i] = 0;
   }
 
   /* Re-wait the tasks. */
@@ -3140,6 +3142,16 @@ void scheduler_init(struct scheduler* s, struct space* space, int nr_tasks,
   s->e = space->e;
   s->last_successful_task_fetch = 0LL;
 #endif
+
+  /* Intialise the per thread GPU offload batch counters. */
+  s->gpu_grav_batch_self_counts =
+      swift_malloc("gpu_grav_batch_self_counts", nr_queues * sizeof(int));
+  s->gpu_grav_batch_pair_counts =
+      swift_malloc("gpu_grav_batch_pair_counts", nr_queues * sizeof(int));
+  for (int i = 0; i < nr_queues; i++) {
+    s->gpu_grav_batch_self_counts[i] = 0;
+    s->gpu_grav_batch_pair_counts[i] = 0;
+  }
 }
 
 /**
@@ -3174,6 +3186,8 @@ void scheduler_clean(struct scheduler* s) {
   scheduler_free_tasks(s);
   swift_free("unlocks", s->unlocks);
   swift_free("unlock_ind", s->unlock_ind);
+  swift_free("gpu_grav_batch_self_counts", s->gpu_grav_batch_self_counts);
+  swift_free("gpu_grav_batch_pair_counts", s->gpu_grav_batch_pair_counts);
   for (int i = 0; i < s->nr_queues; ++i) queue_clean(&s->queues[i]);
   swift_free("queues", s->queues);
 }

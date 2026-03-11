@@ -509,8 +509,7 @@ void* runner_main(void* data) {
         ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv));
 
     // start counting packing operations
-    int pack_count_self = 0;  // how many packed in each operation
-    int packed_self = 0;      // how many tasks packed
+    int packed_self = 0;  // how many tasks packed
 
     // struct cell** grav_cells;
     // grav_cells = malloc(ncells * sizeof(struct cell*));
@@ -535,7 +534,6 @@ void* runner_main(void* data) {
 
     int ntasks;
 
-    int pack_count_pair = 0;
     int packed = 0;
 
     /* Loop while there are tasks... */
@@ -555,8 +553,10 @@ void* runner_main(void* data) {
         /* Did I get anything? */
         if (t == NULL) {
 
-          const int flush_count_self = pack_count_self;
-          const int flush_count_pair = pack_count_pair;
+          const int flush_count_self =
+              sched->gpu_grav_batch_self_counts[r->qid];
+          const int flush_count_pair =
+              sched->gpu_grav_batch_pair_counts[r->qid];
 
           const int flushed_self = runner_flush_packed_self_batch(
               r, sched, gravity_gpu_values_send_self,
@@ -570,8 +570,8 @@ void* runner_main(void* data) {
               gravity_gpu_values_recv_pair_d, grav_cells_pair, grav_tasks_pair,
               max_cell_size, stream, flush_count_pair);
 
-          if (flushed_self) pack_count_self = 0;
-          if (flushed_pair) pack_count_pair = 0;
+          if (flushed_self) sched->gpu_grav_batch_self_counts[r->qid] = 0;
+          if (flushed_pair) sched->gpu_grav_batch_pair_counts[r->qid] = 0;
 
           if (flushed_self || flushed_pair) continue;
 
@@ -670,65 +670,81 @@ void* runner_main(void* data) {
             {
               TIMER_TIC;
               for (int i = 0; i < gcount; i++) {
-                gravity_gpu_values_send_self[i +
-                                             pack_count_self * max_cell_size]
-                    .h_i = ci_cache->epsilon[i];
-                gravity_gpu_values_send_self[i +
-                                             pack_count_self * max_cell_size]
-                    .h_j = ci_cache->epsilon[i];
-                gravity_gpu_values_send_self[i +
-                                             pack_count_self * max_cell_size]
-                    .mass_i = ci_cache->m[i];
-                gravity_gpu_values_send_self[i +
-                                             pack_count_self * max_cell_size]
-                    .mass_j = ci_cache->m[i];
-                gravity_gpu_values_send_self[i +
-                                             pack_count_self * max_cell_size]
-                    .x_i = ci_cache->x[i];
-                gravity_gpu_values_send_self[i +
-                                             pack_count_self * max_cell_size]
-                    .x_j = ci_cache->x[i];
-                gravity_gpu_values_send_self[i +
-                                             pack_count_self * max_cell_size]
-                    .y_i = ci_cache->y[i];
-                gravity_gpu_values_send_self[i +
-                                             pack_count_self * max_cell_size]
-                    .y_j = ci_cache->y[i];
-                gravity_gpu_values_send_self[i +
-                                             pack_count_self * max_cell_size]
-                    .z_i = ci_cache->z[i];
-                gravity_gpu_values_send_self[i +
-                                             pack_count_self * max_cell_size]
-                    .z_j = ci_cache->z[i];
-                gravity_gpu_values_send_self[i +
-                                             pack_count_self * max_cell_size]
-                    .active_i = ci_cache->active[i];
-                gravity_gpu_values_send_self[i +
-                                             pack_count_self * max_cell_size]
-                    .active_j = ci_cache->active[i];
+                gravity_gpu_values_send_self
+                    [i +
+                     sched->gpu_grav_batch_self_counts[r->qid] * max_cell_size]
+                        .h_i = ci_cache->epsilon[i];
+                gravity_gpu_values_send_self
+                    [i +
+                     sched->gpu_grav_batch_self_counts[r->qid] * max_cell_size]
+                        .h_j = ci_cache->epsilon[i];
+                gravity_gpu_values_send_self
+                    [i +
+                     sched->gpu_grav_batch_self_counts[r->qid] * max_cell_size]
+                        .mass_i = ci_cache->m[i];
+                gravity_gpu_values_send_self
+                    [i +
+                     sched->gpu_grav_batch_self_counts[r->qid] * max_cell_size]
+                        .mass_j = ci_cache->m[i];
+                gravity_gpu_values_send_self
+                    [i +
+                     sched->gpu_grav_batch_self_counts[r->qid] * max_cell_size]
+                        .x_i = ci_cache->x[i];
+                gravity_gpu_values_send_self
+                    [i +
+                     sched->gpu_grav_batch_self_counts[r->qid] * max_cell_size]
+                        .x_j = ci_cache->x[i];
+                gravity_gpu_values_send_self
+                    [i +
+                     sched->gpu_grav_batch_self_counts[r->qid] * max_cell_size]
+                        .y_i = ci_cache->y[i];
+                gravity_gpu_values_send_self
+                    [i +
+                     sched->gpu_grav_batch_self_counts[r->qid] * max_cell_size]
+                        .y_j = ci_cache->y[i];
+                gravity_gpu_values_send_self
+                    [i +
+                     sched->gpu_grav_batch_self_counts[r->qid] * max_cell_size]
+                        .z_i = ci_cache->z[i];
+                gravity_gpu_values_send_self
+                    [i +
+                     sched->gpu_grav_batch_self_counts[r->qid] * max_cell_size]
+                        .z_j = ci_cache->z[i];
+                gravity_gpu_values_send_self
+                    [i +
+                     sched->gpu_grav_batch_self_counts[r->qid] * max_cell_size]
+                        .active_i = ci_cache->active[i];
+                gravity_gpu_values_send_self
+                    [i +
+                     sched->gpu_grav_batch_self_counts[r->qid] * max_cell_size]
+                        .active_j = ci_cache->active[i];
               }
 
               for (int i = 0; i < max_cell_size; i++) {
-                gravity_gpu_values_recv_self[i +
-                                             pack_count_self * max_cell_size]
-                    .a_x_i = 0;
-                gravity_gpu_values_recv_self[i +
-                                             pack_count_self * max_cell_size]
-                    .a_y_i = 0;
-                gravity_gpu_values_recv_self[i +
-                                             pack_count_self * max_cell_size]
-                    .a_z_i = 0;
-                gravity_gpu_values_recv_self[i +
-                                             pack_count_self * max_cell_size]
-                    .pot_i = 0;
+                gravity_gpu_values_recv_self
+                    [i +
+                     sched->gpu_grav_batch_self_counts[r->qid] * max_cell_size]
+                        .a_x_i = 0;
+                gravity_gpu_values_recv_self
+                    [i +
+                     sched->gpu_grav_batch_self_counts[r->qid] * max_cell_size]
+                        .a_y_i = 0;
+                gravity_gpu_values_recv_self
+                    [i +
+                     sched->gpu_grav_batch_self_counts[r->qid] * max_cell_size]
+                        .a_z_i = 0;
+                gravity_gpu_values_recv_self
+                    [i +
+                     sched->gpu_grav_batch_self_counts[r->qid] * max_cell_size]
+                        .pot_i = 0;
               }
 
               TIMER_TOC(timer_doself_grav_pp);
             }  // TIMER_TOC(timer_gpu_pack);
 
             // store the address of the cells and tasks we are working on
-            grav_cells_self[pack_count_self] = ci;
-            grav_tasks_self[pack_count_self] = t;
+            grav_cells_self[sched->gpu_grav_batch_self_counts[r->qid]] = ci;
+            grav_tasks_self[sched->gpu_grav_batch_self_counts[r->qid]] = t;
 
             /*gravity_gpu_values_h->cell_active[pack_count] =
             cell_is_active_gravity(ci, e); if
@@ -737,14 +753,18 @@ void* runner_main(void* data) {
             gravity_gpu_values_h->gcounts[pack_count] = gcount;*/
 
             for (int i = 0; i < gcount; i++) {
-              gravity_gpu_values_send_self[i + pack_count_self * max_cell_size]
-                  .cell_active = cell_is_active_gravity(ci, e);
-              gravity_gpu_values_send_self[i + pack_count_self * max_cell_size]
-                  .gcounts = gcount;
+              gravity_gpu_values_send_self
+                  [i +
+                   sched->gpu_grav_batch_self_counts[r->qid] * max_cell_size]
+                      .cell_active = cell_is_active_gravity(ci, e);
+              gravity_gpu_values_send_self
+                  [i +
+                   sched->gpu_grav_batch_self_counts[r->qid] * max_cell_size]
+                      .gcounts = gcount;
             }
 
             // update that we packed a cell into our array
-            pack_count_self += 1;
+            sched->gpu_grav_batch_self_counts[r->qid] += 1;
             packed_self += 1;
 
             gravity_cache_zero_output(ci_cache, gcount_padded);  // ADDED HERE?
@@ -772,9 +792,11 @@ void* runner_main(void* data) {
 #endif
 
             // set what happens when the pack count is reached
-            if (pack_count_self >= ncells) {
+            if (sched->gpu_grav_batch_self_counts[r->qid] >= ncells) {
               // printf("qid: %i send to GPU \n", r->qid);
               // printf("qid: %i Cells packed. GPU time\n", r->qid);
+              const int ncells_flush_self =
+                  sched->gpu_grav_batch_self_counts[r->qid];
               int ncells_orig = ncells;
 
               hipEvent_t startcopyH2D, stopcopyH2D;
@@ -791,12 +813,12 @@ void* runner_main(void* data) {
                 // ncells, max_cell_size, stream);
                 hipMemcpyAsync(gravity_gpu_values_send_self_d,
                                gravity_gpu_values_send_self,
-                               ncells * max_cell_size *
+                               ncells_flush_self * max_cell_size *
                                    sizeof(struct gravity_gpu_values_send),
                                hipMemcpyHostToDevice, stream);
                 hipMemcpyAsync(gravity_gpu_values_recv_self_d,
                                gravity_gpu_values_recv_self,
-                               ncells * max_cell_size *
+                               ncells_flush_self * max_cell_size *
                                    sizeof(struct gravity_gpu_values_recv),
                                hipMemcpyHostToDevice, stream);
 
@@ -830,10 +852,10 @@ void* runner_main(void* data) {
                 // ncells, max_cell_size, gravity_gpu_values_d->d_gcounts,
                 // gravity_gpu_values_d->d_cell_active, stream);
 
-                runner_doself_recursive_grav_new(r, ci, 1,
-                                                 gravity_gpu_values_send_self_d,
-                                                 gravity_gpu_values_recv_self_d,
-                                                 ncells, max_cell_size, stream);
+                runner_doself_recursive_grav_new(
+                    r, ci, 1, gravity_gpu_values_send_self_d,
+                    gravity_gpu_values_recv_self_d, ncells_flush_self,
+                    max_cell_size, stream);
 
                 hipEventRecord(stopker, stream);
 
@@ -850,7 +872,7 @@ void* runner_main(void* data) {
                 // ncells, max_cell_size, stream);
                 hipMemcpyAsync(gravity_gpu_values_recv_self,
                                gravity_gpu_values_recv_self_d,
-                               ncells * max_cell_size *
+                               ncells_flush_self * max_cell_size *
                                    sizeof(struct gravity_gpu_values_recv),
                                hipMemcpyDeviceToHost, stream);
 
@@ -897,7 +919,7 @@ void* runner_main(void* data) {
                 TIMER_TIC;
 
                 /*send results back to relevant cell structs*/
-                for (int j = 0; j < ncells; j++) {
+                for (int j = 0; j < ncells_flush_self; j++) {
                   while (cell_glocktree(grav_cells_self[j])) {
                     ; /* spin until we acquire the lock */
                   }
@@ -926,16 +948,16 @@ void* runner_main(void* data) {
 
               // hipDeviceSynchronize();
 
-              for (int i = 0; i < ncells; i++) {
+              for (int i = 0; i < ncells_flush_self; i++) {
                 scheduler_done(sched, grav_tasks_self[i]);
               }
 
               // reset counter for next pack
-              for (int i = 0; i < ncells; i++) {
+              for (int i = 0; i < ncells_flush_self; i++) {
                 grav_cells_self[i] = NULL;
                 grav_tasks_self[i] = NULL;
               }
-              pack_count_self = 0;
+              sched->gpu_grav_batch_self_counts[r->qid] = 0;
             }
 
           }
@@ -1000,8 +1022,8 @@ void* runner_main(void* data) {
                 r, ci, cj, 1, gravity_gpu_values_send_pair,
                 gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair,
                 gravity_gpu_values_recv_pair_d, grav_cells_pair,
-                grav_tasks_pair, t, sched, ncells, max_cell_size,
-                &pack_count_pair, &packed, stream);
+                grav_tasks_pair, t, sched, ncells, max_cell_size, &packed,
+                stream);
 
           } else if (t->subtype == task_subtype_density)
             runner_dosub_pair1_density(r, ci, cj, /*below_h_max=*/0, 1);
@@ -1308,10 +1330,10 @@ void* runner_main(void* data) {
       (void)lock_unlock(&sched->queues[r->qid].lock);
 
       const int current_self_completed_by_flush =
-          self_launch == 1 && pack_count_self != 0 &&
+          self_launch == 1 && sched->gpu_grav_batch_self_counts[r->qid] != 0 &&
           t->subtype == task_subtype_grav && t->type == task_type_self;
 
-      const int flush_count_self = pack_count_self;
+      const int flush_count_self = sched->gpu_grav_batch_self_counts[r->qid];
 
       if (self_launch == 1 && flush_count_self != 0) {
         runner_flush_packed_self_batch(
@@ -1319,7 +1341,7 @@ void* runner_main(void* data) {
             gravity_gpu_values_send_self_d, gravity_gpu_values_recv_self,
             gravity_gpu_values_recv_self_d, grav_cells_self, grav_tasks_self,
             max_cell_size, stream, flush_count_self);
-        pack_count_self = 0;
+        sched->gpu_grav_batch_self_counts[r->qid] = 0;
       }
 
       int pair_launch = 0;
@@ -1330,11 +1352,11 @@ void* runner_main(void* data) {
       (void)lock_unlock(&sched->queues[r->qid].lock);
 
       const int current_pair_completed_by_flush =
-          pair_launch == 1 && pack_count_pair != 0 &&
+          pair_launch == 1 && sched->gpu_grav_batch_pair_counts[r->qid] != 0 &&
           t->subtype == task_subtype_grav && t->type == task_type_pair &&
           packed == 1;
 
-      const int flush_count_pair = pack_count_pair;
+      const int flush_count_pair = sched->gpu_grav_batch_pair_counts[r->qid];
 
       if (pair_launch == 1 && flush_count_pair != 0) {
         runner_flush_packed_pair_batch(
@@ -1342,7 +1364,7 @@ void* runner_main(void* data) {
             gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair,
             gravity_gpu_values_recv_pair_d, grav_cells_pair, grav_tasks_pair,
             max_cell_size, stream, flush_count_pair);
-        pack_count_pair = 0;
+        sched->gpu_grav_batch_pair_counts[r->qid] = 0;
       }
 
       if (current_self_completed_by_flush || current_pair_completed_by_flush) {
@@ -1383,8 +1405,9 @@ void* runner_main(void* data) {
 
         /*fprintf(stderr,
         "[DEFER] task=%p type=%d subtype=%d qid=%d pack_self=%d pack_pair=%d
-        waiting=%i\n", (void*)t, t->type, t->subtype, r->qid, pack_count_self,
-        pack_count_pair, sched->waiting);*/
+        waiting=%i\n", (void*)t, t->type, t->subtype, r->qid,
+        sched->gpu_grav_batch_self_counts[r->qid],
+        sched->gpu_grav_batch_pair_counts[r->qid], sched->waiting);*/
 
         t->toc = getticks();
         t->total_ticks += t->toc - t->tic;
@@ -1396,8 +1419,9 @@ void* runner_main(void* data) {
         // t->skip = 1;
         /*fprintf(stderr,
         "[DEFER] task=%p type=%d subtype=%d qid=%d pack_self=%d pack_pair=%d
-        waiting=%i\n", (void*)t, t->type, t->subtype, r->qid, pack_count_self,
-        pack_count_pair, sched->waiting);*/
+        waiting=%i\n", (void*)t, t->type, t->subtype, r->qid,
+        sched->gpu_grav_batch_self_counts[r->qid],
+        sched->gpu_grav_batch_pair_counts[r->qid], sched->waiting);*/
 
         t->toc = getticks();
         t->total_ticks += t->toc - t->tic;
