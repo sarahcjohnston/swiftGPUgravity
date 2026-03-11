@@ -844,7 +844,7 @@ CUDA_LIBS="-lcudadevrt -lcudart -lcuda -lstdc++"
 CUDA_FLAGS="-arch=native -fmad=false"
 
 HIP_ROOT=""
-HIP_CPPFLAGS=""
+HIP_CPPFLAGS="-D__HIP_PLATFORM_AMD__"
 HIP_LDFLAGS=""
 HIP_LIBS="-lamdhip64 -lstdc++"
 HIP_FLAGS=""
@@ -903,7 +903,7 @@ if test "x$with_hip" != "xno"; then
       if test ! -x "$GPUCC"; then
          AC_MSG_ERROR([Could not find hipcc at $GPUCC])
       fi
-      HIP_CPPFLAGS="-I$HIP_ROOT/include"
+      HIP_CPPFLAGS="$HIP_CPPFLAGS -I$HIP_ROOT/include"
       if test -d "$HIP_ROOT/lib64"; then
          HIP_LDFLAGS="$HIP_LDFLAGS -L$HIP_ROOT/lib64"
       fi
