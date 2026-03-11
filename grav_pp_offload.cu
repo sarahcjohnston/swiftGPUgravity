@@ -1,38 +1,27 @@
-#include "externalfunctions_hip.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <iostream>
+#include <math.h>
+#include <time.h>
+#include <hip/hip_runtime.h>
+#include <unistd.h>
+
+#include "externalfunctions.cu"
 #include "multipole_struct.h"
 #include "periodic.h"
 
-#include <hip/hip_runtime.h>
-#include <iostream>
-#include <math.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <time.h>
-#include <unistd.h>
-
 /* Self gravity kernel. This is called by the pp_offload function */
-// PP ALL INTERACTIONS
-__global__ void self_grav_pp(int periodic, float rmax_i, double min_trunc,
-                             int* active_i, float* h_i, float* mass_i_arr,
-                             float r_s_inv, const float* x_i, const float* y_i,
-                             const float* z_i, float* a_x_i, float* a_y_i,
-                             float* a_z_i, float* pot_i, int gcount_i,
-                             int gcount_padded_i, int ci_active, int ncells,
-                             int max_cell_size, int* gcounts,
-                             int* cell_active) {
+//PP ALL INTERACTIONS
+__global__ void self_grav_pp(int periodic, float rmax_i, double min_trunc, int *active_i, float *h_i, float *mass_i_arr, float r_s_inv, const float *x_i, const float *y_i, const float *z_i, float *a_x_i, float *a_y_i, float *a_z_i, float *pot_i, int gcount_i, int gcount_padded_i, int ci_active, int ncells, int max_cell_size, int *gcounts, int *cell_active) {
 
-  // printf("ON GPU 1: %f %f %f %f %f %f %f \n", h_i[0], mass_i_arr[0], x_i[0],
-  // y_i[0], z_i[0], a_x_i[0], a_y_i[0]);
+  //printf("ON GPU 1: %f %f %f %f %f %f %f \n", h_i[0], mass_i_arr[0], x_i[0], y_i[0], z_i[0], a_x_i[0], a_y_i[0]);
 
   int max_r_decision = 0;
-
+  
   if (!periodic) {
 
     /* Not periodic -> Can always use Newtonian potential */
-    doself_grav_pp_full(active_i, h_i, mass_i_arr, x_i, y_i, z_i, a_x_i, a_y_i,
-                        a_z_i, pot_i, gcount_i, gcount_padded_i, periodic,
-                        ci_active, max_r_decision, ncells, max_cell_size,
-                        gcounts, cell_active);
+    doself_grav_pp_full(active_i, h_i, mass_i_arr, x_i, y_i, z_i, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size, gcounts, cell_active);
 
   } else {
 
@@ -40,50 +29,37 @@ __global__ void self_grav_pp(int periodic, float rmax_i, double min_trunc,
     if (rmax_i > min_trunc) {
 
       /* Periodic but far-away cells must use the truncated potential */
-      doself_grav_pp_truncated(
-          active_i, h_i, mass_i_arr, r_s_inv, x_i, y_i, z_i, a_x_i, a_y_i,
-          a_z_i, pot_i, gcount_i, gcount_padded_i, periodic, ci_active,
-          max_r_decision, ncells, max_cell_size, gcounts, cell_active);
+      doself_grav_pp_truncated(active_i, h_i, mass_i_arr, r_s_inv, x_i, y_i, z_i, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size, gcounts, cell_active);
+                                    
 
     } else {
-
-      max_r_decision = 1;
+    
+    max_r_decision = 1;
 
       /* Periodic but close-by cells can use the full Newtonian potential */
-      doself_grav_pp_full(active_i, h_i, mass_i_arr, x_i, y_i, z_i, a_x_i,
-                          a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_i,
-                          periodic, ci_active, max_r_decision, ncells,
-                          max_cell_size, gcounts, cell_active);
+      doself_grav_pp_full(active_i, h_i, mass_i_arr, x_i, y_i, z_i, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size, gcounts, cell_active);
     }
   }
-
-  // printf("ON GPU 2: %f %f %f %f %f %f %f \n", h_i[0], mass_i_arr[0], x_i[0],
-  // y_i[0], z_i[0], a_x_i[0], a_y_i[0]);
+  
+  //printf("ON GPU 2: %f %f %f %f %f %f %f \n", h_i[0], mass_i_arr[0], x_i[0], y_i[0], z_i[0], a_x_i[0], a_y_i[0]);
 }
 
+
 /* Self gravity kernel. This is called by the pp_offload function */
-// PP ALL INTERACTIONS
-static void self_grav_pp_new(
-    int periodic, float rmax_i, double min_trunc, float r_s_inv, int gcount_i,
-    int gcount_padded_i, int ci_active,
-    struct gravity_gpu_values_send* gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv_d, int ncells,
-    int max_cell_size, hipStream_t stream) {
+//PP ALL INTERACTIONS
+static void self_grav_pp_new(int periodic, float rmax_i, double min_trunc, float r_s_inv, int gcount_i, int gcount_padded_i, int ci_active, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells, int max_cell_size, hipStream_t stream) {
 
   int threads = 256;
-  dim3 block(threads);
-  dim3 grid(ncells, (max_cell_size + threads - 1) / threads);
-  size_t shmem = threads * sizeof(gravity_gpu_values_send);
+	dim3 block(threads);
+	dim3 grid(ncells, (max_cell_size + threads - 1) / threads);
+	size_t shmem = threads * sizeof(gravity_gpu_values_send);
 
   int max_r_decision = 0;
-
+  
   if (!periodic) {
 
     /* Not periodic -> Can always use Newtonian potential */
-    doself_grav_pp_full_new_refactor<<<grid, block, shmem, stream>>>(
-        gravity_gpu_values_send_d, gravity_gpu_values_recv_d, r_s_inv, gcount_i,
-        gcount_padded_i, periodic, ci_active, max_r_decision, ncells,
-        max_cell_size);
+    doself_grav_pp_full_new_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, r_s_inv, gcount_i, gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size);
 
   } else {
 
@@ -91,210 +67,148 @@ static void self_grav_pp_new(
     if (rmax_i > min_trunc) {
 
       /* Periodic but far-away cells must use the truncated potential */
-      doself_grav_pp_truncated_new_refactor<<<grid, block, shmem, stream>>>(
-          gravity_gpu_values_send_d, gravity_gpu_values_recv_d, r_s_inv,
-          gcount_i, gcount_padded_i, periodic, ci_active, max_r_decision,
-          ncells, max_cell_size);
+      doself_grav_pp_truncated_new_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, r_s_inv, gcount_i, gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size);
+                                    
 
     } else {
-
-      max_r_decision = 1;
+    
+    max_r_decision = 1;
 
       /* Periodic but close-by cells can use the full Newtonian potential */
-      doself_grav_pp_full_new_refactor<<<grid, block, shmem, stream>>>(
-          gravity_gpu_values_send_d, gravity_gpu_values_recv_d, r_s_inv,
-          gcount_i, gcount_padded_i, periodic, ci_active, max_r_decision,
-          ncells, max_cell_size);
+      doself_grav_pp_full_new_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, r_s_inv, gcount_i, gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size);
     }
   }
 }
 
+
+
 /* Pair gravity kernel. This is called by the pp_offload function */
-// PP ALL INTERACTIONS
-__global__ void pair_grav_pp(
-    int periodic, const float* CoM_i, const float* CoM_j, float rmax_i,
-    float rmax_j, double min_trunc, int* active_i, int* active_j, float dim_0,
-    float dim_1, float dim_2, float* h_i, float* h_j, float* mass_i_arr,
-    float* mass_j_arr, const float r_s_inv, const float* x_i, const float* x_j,
-    const float* y_i, const float* y_j, const float* z_i, const float* z_j,
-    float* a_x_i, float* a_y_i, float* a_z_i, float* a_x_j, float* a_y_j,
-    float* a_z_j, float* pot_i, float* pot_j, int gcount_i, int gcount_padded_i,
-    int gcount_j, int gcount_padded_j, int ci_active, int cj_active,
-    const int symmetric, float* epsilon) {
+//PP ALL INTERACTIONS
+__global__ void pair_grav_pp(int periodic, const float *CoM_i, const float *CoM_j, float rmax_i, float rmax_j, double min_trunc, int *active_i, int *active_j, float dim_0, float dim_1, float dim_2, float *h_i, float *h_j, float *mass_i_arr, float *mass_j_arr, const float r_s_inv, const float *x_i, const float *x_j, const float *y_i, const float *y_j, const float *z_i, const float *z_j, float *a_x_i, float *a_y_i, float *a_z_i, float *a_x_j, float *a_y_j, float *a_z_j, float *pot_i, float *pot_j, int gcount_i, int gcount_padded_i, int gcount_j, int gcount_padded_j, int ci_active, int cj_active, const int symmetric, float *epsilon) {
 
-  int max_r_decision = 0;
+   int max_r_decision = 0;
 
-  /* GPU-ported copy of the existing SWIFT decision tree
-     "Can we use the Newtonian version or do we need the truncated one ?"
+    /* GPU-ported copy of the existing SWIFT decision tree
+       "Can we use the Newtonian version or do we need the truncated one ?"
 
-      NON-PERIODIC BC
-     "Not periodic -> Can always use Newtonian potential
-     Let's updated the active cell(s) only" */
+	NON-PERIODIC BC
+       "Not periodic -> Can always use Newtonian potential
+       Let's updated the active cell(s) only" */
 
-  /* Full P2P */
-  pair_grav_pp_full(active_i, dim_0, dim_1, dim_2, h_i, h_j, mass_j_arr,
-                    r_s_inv, x_i, x_j, y_i, y_j, z_i, z_j, a_x_i, a_y_i, a_z_i,
-                    pot_i, gcount_i, gcount_padded_j, periodic, ci_active, 0,
-                    symmetric, max_r_decision);
+      /* Full P2P */
+      pair_grav_pp_full(active_i, dim_0, dim_1, dim_2, h_i, h_j, mass_j_arr, r_s_inv, x_i, x_j, y_i, y_j, z_i, z_j, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_j, periodic, ci_active, 0, symmetric, max_r_decision);
 
-  /* No M2P in GPU version */
+      /* No M2P in GPU version */
 
-  /* Full P2P */
-  pair_grav_pp_full(active_j, dim_0, dim_1, dim_2, h_j, h_i, mass_i_arr,
-                    r_s_inv, x_j, x_i, y_j, y_i, z_j, z_i, a_x_j, a_y_j, a_z_j,
-                    pot_j, gcount_j, gcount_padded_i, periodic, 0, cj_active,
-                    symmetric, max_r_decision);
+      /* Full P2P */
+      pair_grav_pp_full(active_j, dim_0, dim_1, dim_2, h_j, h_i, mass_i_arr, r_s_inv, x_j, x_i, y_j, y_i, z_j, z_i, a_x_j, a_y_j, a_z_j, pot_j, gcount_j, gcount_padded_i, periodic, 0, cj_active, symmetric, max_r_decision);
 
-  /* Periodic BC */
+    /* Periodic BC */
 
-  /* Get the relative distance between the CoMs */
-  double d[3] = {CoM_j[0] - CoM_i[0], CoM_j[1] - CoM_i[1], CoM_j[2] - CoM_i[2]};
+    /* Get the relative distance between the CoMs */
+    double d[3] = {CoM_j[0] - CoM_i[0], CoM_j[1] - CoM_i[1],
+                    CoM_j[2] - CoM_i[2]};
 
-  /* Correct for periodic BCs */
-  d[0] = nearestf1(d[0], dim_0);
-  d[1] = nearestf1(d[1], dim_1);
-  d[2] = nearestf1(d[2], dim_2);
+    /* Correct for periodic BCs */
+    d[0] = nearestf1(d[0], dim_0);
+    d[1] = nearestf1(d[1], dim_1);
+    d[2] = nearestf1(d[2], dim_2);
 
-  const double r2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    const double r2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
 
-  /* Get the maximal distance between any two particles */
-  const double max_r = sqrt(r2) + rmax_i + rmax_j;
+    /* Get the maximal distance between any two particles */
+    const double max_r = sqrt(r2) + rmax_i + rmax_j;
 
-  /* Apply decision for whether you need to use truncated interactions or not */
-  if (max_r > min_trunc) {
-    max_r_decision = 0;
-  } else {
-    max_r_decision = 1;
-  }
+    /* Apply decision for whether you need to use truncated interactions or not */
+    if (max_r > min_trunc) {
+	max_r_decision = 0;}
+    else {
+	max_r_decision = 1;}
 
-  /* "Do we need to use the truncated interactions ?
+    /* "Do we need to use the truncated interactions ?
+    
 
+       Periodic but far-away cells must use the truncated potential 
 
-     Periodic but far-away cells must use the truncated potential
+       Let's updated the active cell(s) only" */
 
-     Let's updated the active cell(s) only" */
+        /* Truncated P2P - cell i */
+        pair_grav_pp_truncated(active_i, dim_0, dim_1, dim_2, h_i, h_j, mass_j_arr, r_s_inv, x_i, x_j, y_i, y_j, z_i, z_j, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_j, periodic, ci_active, 0, symmetric, max_r_decision);
+	
 
-  /* Truncated P2P - cell i */
-  pair_grav_pp_truncated(active_i, dim_0, dim_1, dim_2, h_i, h_j, mass_j_arr,
-                         r_s_inv, x_i, x_j, y_i, y_j, z_i, z_j, a_x_i, a_y_i,
-                         a_z_i, pot_i, gcount_i, gcount_padded_j, periodic,
-                         ci_active, 0, symmetric, max_r_decision);
+        /* Truncated P2P - cell j */
+	pair_grav_pp_truncated(active_j, dim_0, dim_1, dim_2, h_j, h_i, mass_i_arr, r_s_inv, x_j, x_i, y_j, y_i, z_j, z_i, a_x_j, a_y_j, a_z_j, pot_j, gcount_j, gcount_padded_i, periodic, 0, cj_active, symmetric, max_r_decision);
 
-  /* Truncated P2P - cell j */
-  pair_grav_pp_truncated(active_j, dim_0, dim_1, dim_2, h_j, h_i, mass_i_arr,
-                         r_s_inv, x_j, x_i, y_j, y_i, z_j, z_i, a_x_j, a_y_j,
-                         a_z_j, pot_j, gcount_j, gcount_padded_i, periodic, 0,
-                         cj_active, symmetric, max_r_decision);
+        
 
-  /* "Periodic but close-by cells can use the full Newtonian potential
+      /* "Periodic but close-by cells can use the full Newtonian potential
 
-   Let's updated the active cell(s) only" */
+       Let's updated the active cell(s) only" */
 
-  /* Full P2P - cell i */
-  pair_grav_pp_full(active_i, dim_0, dim_1, dim_2, h_i, h_j, mass_j_arr,
-                    r_s_inv, x_i, x_j, y_i, y_j, z_i, z_j, a_x_i, a_y_i, a_z_i,
-                    pot_i, gcount_i, gcount_padded_j, periodic, ci_active, 0,
-                    symmetric, max_r_decision);
+        /* Full P2P - cell i */
+        pair_grav_pp_full(active_i, dim_0, dim_1, dim_2, h_i, h_j, mass_j_arr, r_s_inv, x_i, x_j, y_i, y_j, z_i, z_j, a_x_i, a_y_i, a_z_i, pot_i, gcount_i, gcount_padded_j, periodic, ci_active, 0, symmetric, max_r_decision);
 
-  /* Full P2P - cell j */
-  pair_grav_pp_full(active_j, dim_0, dim_1, dim_2, h_j, h_i, mass_i_arr,
-                    r_s_inv, x_j, x_i, y_j, y_i, z_j, z_i, a_x_j, a_y_j, a_z_j,
-                    pot_j, gcount_j, gcount_padded_i, periodic, 0, cj_active,
-                    symmetric, max_r_decision);
+        /* Full P2P - cell j */
+        pair_grav_pp_full(active_j, dim_0, dim_1, dim_2, h_j, h_i, mass_i_arr, r_s_inv, x_j, x_i, y_j, y_i, z_j, z_i, a_x_j, a_y_j, a_z_j, pot_j, gcount_j, gcount_padded_i, periodic, 0, cj_active, symmetric, max_r_decision);
+
 }
 
 /* C function which calls the GPU kernel */
-// Main definition of pp_offload function to go into normal SWIFT C code
-extern "C" void pair_pp_offload(
-    int periodic, const float* CoM_i, const float* CoM_j, float rmax_i,
-    float rmax_j, double min_trunc, int* active_i, int* active_j, float* dim,
-    const float* x_i, const float* x_j_arr, const float* y_i,
-    const float* y_j_arr, const float* z_i, const float* z_j_arr, float* pot_i,
-    float* pot_j, float* a_x_i, float* a_y_i, float* a_z_i, float* a_x_j,
-    float* a_y_j, float* a_z_j, float* mass_i_arr, float* mass_j_arr,
-    const float* r_s_inv, float* h_i, float* h_j_arr, const int* gcount_i,
-    const int* gcount_padded_i, const int* gcount_j, const int* gcount_padded_j,
-    int ci_active, int cj_active, const int symmetric, float* epsilon,
-    float* d_h_i, float* d_h_j, float* d_mass_i, float* d_mass_j, float* d_x_i,
-    float* d_x_j, float* d_y_i, float* d_y_j, float* d_z_i, float* d_z_j,
-    float* d_a_x_i, float* d_a_y_i, float* d_a_z_i, float* d_a_x_j,
-    float* d_a_y_j, float* d_a_z_j, float* d_pot_i, float* d_pot_j,
-    int* d_active_i, int* d_active_j, float* d_CoM_i, float* d_CoM_j) {
+//Main definition of pp_offload function to go into normal SWIFT C code
+extern "C" void pair_pp_offload(int periodic, const float *CoM_i, const float *CoM_j, float rmax_i, float rmax_j, double min_trunc, int* active_i, int* active_j, float *dim, const float *x_i, const float *x_j_arr, const float *y_i, const float *y_j_arr, const float *z_i, const float *z_j_arr, float *pot_i, float *pot_j, float *a_x_i, float *a_y_i, float *a_z_i, float *a_x_j, float *a_y_j, float *a_z_j, float *mass_i_arr, float *mass_j_arr, const float *r_s_inv, float *h_i, float *h_j_arr, const int *gcount_i, const int *gcount_padded_i, const int *gcount_j, const int *gcount_padded_j, int ci_active, int cj_active, const int symmetric, float *epsilon, float *d_h_i, float *d_h_j, float *d_mass_i, float *d_mass_j, float *d_x_i, float *d_x_j, float *d_y_i, float *d_y_j, float *d_z_i, float *d_z_j, float *d_a_x_i, float *d_a_y_i, float *d_a_z_i, float *d_a_x_j, float *d_a_y_j, float *d_a_z_j, float *d_pot_i, float *d_pot_j, int *d_active_i, int *d_active_j, float *d_CoM_i, float *d_CoM_j){
 
-  /* memory allocation was here - this is all done in runner_main now */
+	/* memory allocation was here - this is all done in runner_main now */
+	
+	//call kernel function
+	pair_grav_pp<<<32,256>>>(periodic, d_CoM_i, d_CoM_j, rmax_i, rmax_j, min_trunc, d_active_i, d_active_j, dim[0], dim[1], dim[2], d_h_i, d_h_j, d_mass_i, d_mass_j, *r_s_inv, d_x_i, d_x_j, d_y_i, d_y_j, d_z_i, d_z_j, d_a_x_i, d_a_y_i, d_a_z_i, d_a_x_j, d_a_y_j, d_a_z_j, d_pot_i, d_pot_j, *gcount_i, *gcount_padded_i, *gcount_j, *gcount_padded_j, ci_active, cj_active, symmetric, epsilon);
 
-  // call kernel function
-  pair_grav_pp<<<32, 256>>>(
-      periodic, d_CoM_i, d_CoM_j, rmax_i, rmax_j, min_trunc, d_active_i,
-      d_active_j, dim[0], dim[1], dim[2], d_h_i, d_h_j, d_mass_i, d_mass_j,
-      *r_s_inv, d_x_i, d_x_j, d_y_i, d_y_j, d_z_i, d_z_j, d_a_x_i, d_a_y_i,
-      d_a_z_i, d_a_x_j, d_a_y_j, d_a_z_j, d_pot_i, d_pot_j, *gcount_i,
-      *gcount_padded_i, *gcount_j, *gcount_padded_j, ci_active, cj_active,
-      symmetric, epsilon);
 
-  hipError_t err2 = hipGetLastError();
-  if (err2 != hipSuccess)
-    printf("Error - pair_pp: %s\n", hipGetErrorString(err2));
+	hipError_t err2 = hipGetLastError();
+    	if (err2 != hipSuccess)
+	printf("Error - pair_pp: %s\n", hipGetErrorString(err2));
 
-  /* memory transfer was here - this is all done in runner_main now */
+	/* memory transfer was here - this is all done in runner_main now */	
 }
 
-// self grav pp offload
-extern "C" void self_pp_offload(int periodic, float rmax_i, double min_trunc,
-                                const float* r_s_inv, const int* gcount_i,
-                                const int* gcount_padded_i, int ci_active,
-                                float* d_h_i, float* d_mass_i, float* d_x_i,
-                                float* d_y_i, float* d_z_i, float* d_a_x_i,
-                                float* d_a_y_i, float* d_a_z_i, float* d_pot_i,
-                                int* d_active_i, int ncells, int max_cell_size,
-                                int* gcounts, int* cell_active,
-                                hipStream_t stream) {
 
-  /* memory allocation was here - this is all done in runner_main now */
+//self grav pp offload
+extern "C" void self_pp_offload(int periodic, float rmax_i, double min_trunc, const float *r_s_inv, const int *gcount_i, const int *gcount_padded_i, int ci_active, float *d_h_i, float *d_mass_i, float *d_x_i, float *d_y_i, float *d_z_i, float *d_a_x_i, float *d_a_y_i, float *d_a_z_i, float *d_pot_i, int *d_active_i, int ncells, int max_cell_size, int *gcounts, int *cell_active, hipStream_t stream){
 
-  // call kernel function
-  // int nblocks = gcount_i/256;
-  self_grav_pp<<<32, 256, 0, stream>>>(
-      periodic, rmax_i, min_trunc, d_active_i, d_h_i, d_mass_i, *r_s_inv, d_x_i,
-      d_y_i, d_z_i, d_a_x_i, d_a_y_i, d_a_z_i, d_pot_i, *gcount_i,
-      *gcount_padded_i, ci_active, ncells, max_cell_size, gcounts, cell_active);
-  // check if thread idx has a particle
+	/* memory allocation was here - this is all done in runner_main now */
 
-  // hipDeviceSynchronize();
+	//call kernel function 
+	//int nblocks = gcount_i/256;
+	self_grav_pp<<<32,256, 0, stream>>>(periodic, rmax_i, min_trunc, d_active_i, d_h_i, d_mass_i, *r_s_inv, d_x_i, d_y_i, d_z_i, d_a_x_i, d_a_y_i, d_a_z_i, d_pot_i, *gcount_i, *gcount_padded_i, ci_active, ncells, max_cell_size, gcounts, cell_active);
+	//check if thread idx has a particle
+	
+	//hipDeviceSynchronize();
 
-  hipError_t err2 = hipGetLastError();
-  if (err2 != hipSuccess)
-    printf("Error - self_pp: %s\n", hipGetErrorString(err2));
-
-  /* memory transfer was here - this is all done in runner_main now */
+	hipError_t err2 = hipGetLastError();
+    	if (err2 != hipSuccess)
+	printf("Error - self_pp: %s\n", hipGetErrorString(err2));
+	
+	/* memory transfer was here - this is all done in runner_main now */
 }
 
-// self grav pp offload
-extern "C" void self_pp_offload_new(
-    int periodic, float rmax_i, double min_trunc, const float* r_s_inv,
-    const int* gcount_i, const int* gcount_padded_i, int ci_active,
-    struct gravity_gpu_values_send* gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv_d, int ncells,
-    int max_cell_size, hipStream_t stream) {
 
-  /* memory allocation was here - this is all done in runner_main now */
+//self grav pp offload
+extern "C" void self_pp_offload_new(int periodic, float rmax_i, double min_trunc, const float *r_s_inv, const int *gcount_i, const int *gcount_padded_i, int ci_active, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells, int max_cell_size, hipStream_t stream){
 
-  // call kernel function
-  // int nblocks = gcount_i/256;
-  int threads = 256;
-  dim3 block(threads);
-  dim3 grid(ncells, (max_cell_size + threads - 1) / threads);
-  size_t shmem = 0;  // threads * sizeof(gravity_gpu_values_send);
+	/* memory allocation was here - this is all done in runner_main now */
 
-  int max_r_decision = 0;
-
-  if (!periodic) {
+	//call kernel function 
+	//int nblocks = gcount_i/256;
+	int threads = 256;
+	dim3 block(threads);
+	dim3 grid(ncells, (max_cell_size + threads - 1) / threads);
+	size_t shmem = 0;//threads * sizeof(gravity_gpu_values_send);
+	
+	int max_r_decision = 0;
+	
+	if (!periodic) {
 
     /* Not periodic -> Can always use Newtonian potential */
-    doself_grav_pp_full_new_refactor<<<grid, block, shmem, stream>>>(
-        gravity_gpu_values_send_d, gravity_gpu_values_recv_d, *r_s_inv,
-        *gcount_i, *gcount_padded_i, periodic, ci_active, max_r_decision,
-        ncells, max_cell_size);
+    doself_grav_pp_full_new_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, *r_s_inv, *gcount_i, *gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size);
 
   } else {
 
@@ -302,149 +216,115 @@ extern "C" void self_pp_offload_new(
     if (rmax_i > min_trunc) {
 
       /* Periodic but far-away cells must use the truncated potential */
-      doself_grav_pp_truncated_new_refactor<<<grid, block, shmem, stream>>>(
-          gravity_gpu_values_send_d, gravity_gpu_values_recv_d, *r_s_inv,
-          *gcount_i, *gcount_padded_i, periodic, ci_active, max_r_decision,
-          ncells, max_cell_size);
+      doself_grav_pp_truncated_new_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, *r_s_inv, *gcount_i, *gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size);
+                                    
 
     } else {
-
-      max_r_decision = 1;
+    
+    max_r_decision = 1;
 
       /* Periodic but close-by cells can use the full Newtonian potential */
-      doself_grav_pp_full_new_refactor<<<grid, block, shmem, stream>>>(
-          gravity_gpu_values_send_d, gravity_gpu_values_recv_d, *r_s_inv,
-          *gcount_i, *gcount_padded_i, periodic, ci_active, max_r_decision,
-          ncells, max_cell_size);
+      doself_grav_pp_full_new_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, *r_s_inv, *gcount_i, *gcount_padded_i, periodic, ci_active, max_r_decision, ncells, max_cell_size);
     }
   }
 
-  // self_grav_pp_new<<<grid,block, shmem, stream>>>(periodic, rmax_i,
-  // min_trunc, *r_s_inv,*gcount_i, *gcount_padded_i, ci_active,
-  // gravity_gpu_values_send_d,  gravity_gpu_values_recv_d, ncells,
-  // max_cell_size, stream); check if thread idx has a particle
+	//self_grav_pp_new<<<grid,block, shmem, stream>>>(periodic, rmax_i, min_trunc, *r_s_inv,*gcount_i, *gcount_padded_i, ci_active, gravity_gpu_values_send_d,  gravity_gpu_values_recv_d, ncells, max_cell_size, stream);
+	//check if thread idx has a particle
 
-  hipError_t err2 = hipGetLastError();
-  if (err2 != hipSuccess)
-    printf("Error - self_pp: %s\n", hipGetErrorString(err2));
-
-  /* memory transfer was here - this is all done in runner_main now */
+	hipError_t err2 = hipGetLastError();
+    	if (err2 != hipSuccess)
+	printf("Error - self_pp: %s\n", hipGetErrorString(err2));
+	
+	/* memory transfer was here - this is all done in runner_main now */
 }
 
-// self grav pp offload
-extern "C" void pair_pp_offload_new(
-    int periodic, float rmax_i, float rmax_j, double min_trunc,
-    const float* r_s_inv, const int* gcount_i, const int* gcount_padded_i,
-    const int* gcount_j, const int* gcount_padded_j, int ci_active,
-    int cj_active, float dim_0, float dim_1, float dim_2, int symmetric,
-    struct gravity_gpu_values_send* gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv_d, int ncells,
-    int max_cell_size, hipStream_t stream) {
+//self grav pp offload
+extern "C" void pair_pp_offload_new(int periodic, float rmax_i, float rmax_j, double min_trunc, const float *r_s_inv, const int *gcount_i, const int *gcount_padded_i, const int *gcount_j, const int *gcount_padded_j, int ci_active, int cj_active, float dim_0, float dim_1, float dim_2, int symmetric, struct gravity_gpu_values_send *gravity_gpu_values_send_d, struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells, int max_cell_size, hipStream_t stream){
 
-  int threads = 256;
-  dim3 block(threads);
-  int npairs = ncells / 2;
-  dim3 grid(npairs, (max_cell_size + threads - 1) / threads);
-  size_t shmem = 0;  // threads * sizeof(gravity_gpu_values_send);
+	int threads = 256;
+	dim3 block(threads);
+	int npairs = ncells/2;
+	dim3 grid(npairs, (max_cell_size + threads - 1) / threads);
+	size_t shmem = 0;//threads * sizeof(gravity_gpu_values_send);
+	
+	// update ci
+	pair_grav_pp_kernel<<<grid, block, 0, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, periodic, *r_s_inv, symmetric, /*swap=*/0, dim_0, dim_1, dim_2, max_cell_size, ncells);
+	
+	//printf("PAIRRR \n");
+	
+	hipError_t err = hipPeekAtLastError();
+if (err != hipSuccess) printf("KERNEL LAUNCH ERROR: %s\n", hipGetErrorString(err));
 
-  // update ci
-  pair_grav_pp_kernel<<<grid, block, 0, stream>>>(
-      gravity_gpu_values_send_d, gravity_gpu_values_recv_d, periodic, *r_s_inv,
-      symmetric, /*swap=*/0, dim_0, dim_1, dim_2, max_cell_size, ncells);
-
-  // printf("PAIRRR \n");
-
-  hipError_t err = hipPeekAtLastError();
-  if (err != hipSuccess)
-    printf("KERNEL LAUNCH ERROR: %s\n", hipGetErrorString(err));
-
-  // update cj
-  if (symmetric) {
-    pair_grav_pp_kernel<<<grid, block, 0, stream>>>(
-        gravity_gpu_values_send_d, gravity_gpu_values_recv_d, periodic,
-        *r_s_inv, symmetric, /*swap=*/1, dim_0, dim_1, dim_2, max_cell_size,
-        ncells);
-  }
+	// update cj
+  	if (symmetric) {
+    	pair_grav_pp_kernel<<<grid, block, 0, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, periodic, *r_s_inv, symmetric, /*swap=*/1, dim_0, dim_1, dim_2, max_cell_size, ncells);
+  	}
+  	
 }
+  	
+	//PREVIOUSSSSSS VERSION
+	//int max_r_decision = 0;
 
-// PREVIOUSSSSSS VERSION
-// int max_r_decision = 0;
+    /* GPU-ported copy of the existing SWIFT decision tree
+       "Can we use the Newtonian version or do we need the truncated one ?"
 
-/* GPU-ported copy of the existing SWIFT decision tree
-   "Can we use the Newtonian version or do we need the truncated one ?"
+	NON-PERIODIC BC
+       "Not periodic -> Can always use Newtonian potential
+       Let's updated the active cell(s) only" */
 
-    NON-PERIODIC BC
-   "Not periodic -> Can always use Newtonian potential
-   Let's updated the active cell(s) only" */
+      /* Full P2P */
+      //pair_grav_pp_full_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, dim_0, dim_1, dim_2, *r_s_inv, *gcount_i, *gcount_padded_j, periodic, ci_active, cj_active, symmetric, max_r_decision, ncells, max_cell_size);
 
-/* Full P2P */
-// pair_grav_pp_full_refactor<<<grid,block, shmem,
-// stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, dim_0, dim_1,
-// dim_2, *r_s_inv, *gcount_i, *gcount_padded_j, periodic, ci_active, cj_active,
-// symmetric, max_r_decision, ncells, max_cell_size);
+      /* No M2P in GPU version */
 
-/* No M2P in GPU version */
+      /* Full P2P */
+      //pair_grav_pp_full_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, dim_0, dim_1, dim_2, *r_s_inv, *gcount_i, *gcount_padded_j, periodic, ci_active, cj_active, symmetric, max_r_decision, ncells, max_cell_size);
 
-/* Full P2P */
-// pair_grav_pp_full_refactor<<<grid,block, shmem,
-// stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, dim_0, dim_1,
-// dim_2, *r_s_inv, *gcount_i, *gcount_padded_j, periodic, ci_active, cj_active,
-// symmetric, max_r_decision, ncells, max_cell_size);
+    /* Periodic BC */
 
-/* Periodic BC */
+    /* Get the relative distance between the CoMs */
+    //double d[3] = {CoM_j[0] - CoM_i[0], CoM_j[1] - CoM_i[1],
+      //              CoM_j[2] - CoM_i[2]};
 
-/* Get the relative distance between the CoMs */
-// double d[3] = {CoM_j[0] - CoM_i[0], CoM_j[1] - CoM_i[1],
-//               CoM_j[2] - CoM_i[2]};
+    /* Correct for periodic BCs */
+    //d[0] = nearestf(d[0], dim_0);
+    //d[1] = nearestf(d[1], dim_1);
+    //d[2] = nearestf(d[2], dim_2);
 
-/* Correct for periodic BCs */
-// d[0] = nearestf(d[0], dim_0);
-// d[1] = nearestf(d[1], dim_1);
-// d[2] = nearestf(d[2], dim_2);
+    //const double r2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
 
-// const double r2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    /* Get the maximal distance between any two particles */
+    //const double max_r = sqrt(r2) + rmax_i + rmax_j;
 
-/* Get the maximal distance between any two particles */
-// const double max_r = sqrt(r2) + rmax_i + rmax_j;
+    /* Apply decision for whether you need to use truncated interactions or not */
+    //if (max_r > min_trunc) {
+	//max_r_decision = 0;}
+    //else {
+	//max_r_decision = 1;}
 
-/* Apply decision for whether you need to use truncated interactions or not */
-// if (max_r > min_trunc) {
-// max_r_decision = 0;}
-// else {
-// max_r_decision = 1;}
+    /* "Do we need to use the truncated interactions ?
+    
 
-/* "Do we need to use the truncated interactions ?
+       Periodic but far-away cells must use the truncated potential 
 
+       Let's updated the active cell(s) only" */
 
-   Periodic but far-away cells must use the truncated potential
+        /* Truncated P2P - cell i */
+       // pair_grav_pp_truncated_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, dim_0, dim_1, dim_2, *r_s_inv, *gcount_i, *gcount_padded_j, periodic, ci_active, cj_active, symmetric, max_r_decision, ncells, max_cell_size);
+	
 
-   Let's updated the active cell(s) only" */
+        /* Truncated P2P - cell j */
+	//pair_grav_pp_truncated_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, dim_0, dim_1, dim_2, *r_s_inv, *gcount_i, *gcount_padded_j, periodic, ci_active, cj_active, symmetric, max_r_decision, ncells, max_cell_size);
 
-/* Truncated P2P - cell i */
-// pair_grav_pp_truncated_refactor<<<grid,block, shmem,
-// stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, dim_0, dim_1,
-// dim_2, *r_s_inv, *gcount_i, *gcount_padded_j, periodic, ci_active, cj_active,
-// symmetric, max_r_decision, ncells, max_cell_size);
+        
 
-/* Truncated P2P - cell j */
-// pair_grav_pp_truncated_refactor<<<grid,block, shmem,
-// stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, dim_0, dim_1,
-// dim_2, *r_s_inv, *gcount_i, *gcount_padded_j, periodic, ci_active, cj_active,
-// symmetric, max_r_decision, ncells, max_cell_size);
+      /* "Periodic but close-by cells can use the full Newtonian potential
 
-/* "Periodic but close-by cells can use the full Newtonian potential
+       Let's updated the active cell(s) only" */
 
- Let's updated the active cell(s) only" */
+        /* Full P2P - cell i */
+        //pair_grav_pp_full_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, dim_0, dim_1, dim_2, *r_s_inv, *gcount_i, *gcount_padded_j, periodic, ci_active, cj_active, symmetric, max_r_decision, ncells, max_cell_size);
 
-/* Full P2P - cell i */
-// pair_grav_pp_full_refactor<<<grid,block, shmem,
-// stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, dim_0, dim_1,
-// dim_2, *r_s_inv, *gcount_i, *gcount_padded_j, periodic, ci_active, cj_active,
-// symmetric, max_r_decision, ncells, max_cell_size);
-
-/* Full P2P - cell j */
-// pair_grav_pp_full_refactor<<<grid,block, shmem,
-// stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, dim_0, dim_1,
-// dim_2, *r_s_inv, *gcount_i, *gcount_padded_j, periodic, ci_active, cj_active,
-// symmetric, max_r_decision, ncells, max_cell_size);
+        /* Full P2P - cell j */
+       // pair_grav_pp_full_refactor<<<grid,block, shmem, stream>>>(gravity_gpu_values_send_d, gravity_gpu_values_recv_d, dim_0, dim_1, dim_2, *r_s_inv, *gcount_i, *gcount_padded_j, periodic, ci_active, cj_active, symmetric, max_r_decision, ncells, max_cell_size);
 //}

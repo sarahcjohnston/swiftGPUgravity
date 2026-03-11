@@ -25,63 +25,6 @@ We suggest that you use the latest release branch of SWIFT, rather than the
 current master branch as this will change rapidly. We do, however, like to
 ensure that the master branch will build and run.
 
-Installing for GPU
-------------------
-
-This branch can now be configured against either CUDA or HIP at configure
-time. The GPU backends are mutually exclusive, so pass either `--with-cuda`
-or `--with-hip` together with the root of that installation.
-
-The configure interface also accepts backend-specific extra flags:
-
-- `--with-cuda-flags="..."` appends extra CUDA compiler flags to the default
-  CUDA flags.
-- `--with-hip-flags="..."` appends extra HIP compiler flags to the default
-  HIP flags.
-
-The current default CUDA toolchain payload remains equivalent to the existing
-hard-coded build setup:
-
-```bash
-CUDA include: -I/usr/local/cuda/include
-CUDA ldflags: -L/cosma/local/Nvidia-hpc-sdk/2025_253/Linux_x86_64/25.3/cuda/lib64 -L/usr/local/cuda/lib64
-CUDA flags: -arch=native -fmad=false
-CUDA libs : -lcudadevrt -lcudart -lcuda -lstdc++
-```
-
-Typical CUDA build:
-
-```bash
-./configure --with-cuda=/usr/local/cuda
-make -j
-```
-
-CUDA build with extra backend flags:
-
-```bash
-./configure --with-cuda=/usr/local/cuda \
-  --with-cuda-flags="-lineinfo"
-make -j
-```
-
-Typical HIP build:
-
-```bash
-./configure --with-hip=/opt/rocm
-make -j
-```
-
-HIP build with extra backend flags:
-
-```bash
-./configure --with-hip=/opt/rocm \
-  --with-hip-flags="--offload-arch=gfx90a"
-make -j
-```
-
-If you pass both `--with-cuda` and `--with-hip`, configure will stop with an
-error.
-
 This GitHub repository is designed to be an issue tracker, and a space for
 the public to submit patches through pull requests. It is synchronised with
 the main development repository that is available on the

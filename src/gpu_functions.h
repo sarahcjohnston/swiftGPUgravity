@@ -72,13 +72,11 @@ struct gravity_gpu_values_device {
 max_cell_size * sizeof(float)); hipMallocHost((void
 **)&gravity_gpu_values->mass_i, ncells * max_cell_size * sizeof(float));
         hipMallocHost((void **)&gravity_gpu_values->mass_j, ncells *
-max_cell_size * sizeof(float)); hipMallocHost((void **)&gravity_gpu_values->x_i,
-ncells * max_cell_size * sizeof(float)); hipMallocHost((void
+max_cell_size * sizeof(float)); hipMallocHost((void **)&gravity_gpu_values->x_i, ncells * max_cell_size * sizeof(float)); hipMallocHost((void
 **)&gravity_gpu_values->x_j, ncells * max_cell_size * sizeof(float));
         hipMallocHost((void **)&gravity_gpu_values->y_i, ncells * max_cell_size
 * sizeof(float)); hipMallocHost((void **)&gravity_gpu_values->y_j, ncells *
-max_cell_size * sizeof(float)); hipMallocHost((void **)&gravity_gpu_values->z_i,
-ncells * max_cell_size * sizeof(float)); hipMallocHost((void
+max_cell_size * sizeof(float)); hipMallocHost((void **)&gravity_gpu_values->z_i, ncells * max_cell_size * sizeof(float)); hipMallocHost((void
 **)&gravity_gpu_values->z_j, ncells * max_cell_size * sizeof(float));
         hipMallocHost((void **)&gravity_gpu_values->a_x_i, ncells *
 max_cell_size * sizeof(float)); hipMallocHost((void
