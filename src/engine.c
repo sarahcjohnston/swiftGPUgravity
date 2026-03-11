@@ -3948,7 +3948,7 @@ void engine_clean(struct engine* e, const int fof, const int restart) {
   for (int k = 0; k < e->nr_threads; k++) {
     if (pthread_join(e->runners[k].thread, /*retval=*/NULL) != 0)
       error("Failed to join runner %i.", k);
-    runner_gpu_clean(&e->runners[k].gpu);
+    runner_gpu_clean(&e->runners[k]);
 #ifdef WITH_VECTORIZATION
     cache_clean(&e->runners[k].ci_cache);
     cache_clean(&e->runners[k].cj_cache);

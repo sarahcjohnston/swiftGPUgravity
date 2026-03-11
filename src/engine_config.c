@@ -989,7 +989,7 @@ void engine_config(int restart, int fof, struct engine* e,
   for (int k = 0; k < e->nr_threads; k++) {
     e->runners[k].id = k;
     e->runners[k].e = e;
-    runner_gpu_init(&e->runners[k].gpu);
+    runner_gpu_init(&e->runners[k]);
 
     /* Try to pin the runner to a given core */
     if (with_aff &&
