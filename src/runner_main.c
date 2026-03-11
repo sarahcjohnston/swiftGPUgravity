@@ -419,6 +419,22 @@ static void runner_finish_leaked_implicit_task(struct scheduler* sched,
   t->skip = 1;
 }
 
+static void runner_finish_leaked_nonwork_task(struct scheduler* sched,
+                                              struct task* t) {
+
+  if (!t->implicit) task_unlock(t);
+
+  if (!t->skip) t->skip = 1;
+
+  t->toc = getticks();
+  t->total_ticks += t->toc - t->tic;
+
+  pthread_mutex_lock(&sched->sleep_mutex);
+  atomic_dec(&sched->waiting);
+  pthread_cond_broadcast(&sched->sleep_cond);
+  pthread_mutex_unlock(&sched->sleep_mutex);
+}
+
 /**
  * @brief The #runner main thread routine.
  *
@@ -597,6 +613,13 @@ void* runner_main(void* data) {
       /* Get the cells. */
       struct cell* ci = t->ci;
       struct cell* cj = t->cj;
+
+      if (t->type == task_type_none || t->skip) {
+        runner_finish_leaked_nonwork_task(sched, t);
+        prev = NULL;
+        t = NULL;
+        continue;
+      }
 
       if (t->implicit) {
         runner_finish_leaked_implicit_task(sched, t);
