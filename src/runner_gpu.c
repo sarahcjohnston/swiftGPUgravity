@@ -82,6 +82,10 @@ void runner_gpu_init(struct runner* r) {
       gpu->grav_tasks_self == NULL || gpu->grav_tasks_pair == NULL ||
       gpu->cell_active == NULL)
     error("Failed to allocate runner GPU host metadata arrays.");
+
+  const hipError_t err = hipGetLastError();
+  if (err != hipSuccess)
+    error("runner_gpu_init failed: %s", hipGetErrorString(err));
 }
 
 /**

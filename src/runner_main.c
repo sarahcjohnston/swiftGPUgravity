@@ -204,10 +204,7 @@ void* runner_main(void* data) {
   // define number of cells to transfer
   // int ncells = 10;
 
-
   // int max_cell_size = 10000;
-
-  int selfgravs = 0;
 
   /* Main loop. */
   while (1) {
@@ -224,9 +221,6 @@ void* runner_main(void* data) {
 
     r->gpu.grav_batch_self_count = 0;
     r->gpu.grav_batch_pair_count = 0;
-
-    hipError_t err = hipGetLastError();
-    if (err != hipSuccess) printf("Error1: %s\n", hipGetErrorString(err));
 
     int ntasks;
 
@@ -313,8 +307,6 @@ void* runner_main(void* data) {
 
         case task_type_self:
           if (t->subtype == task_subtype_grav) {
-            // printf("self grav \n");
-            selfgravs++;
 
             // make long arrays with all the values
             struct gravity_cache* const ci_cache = &r->ci_gravity_cache;
@@ -1973,58 +1965,6 @@ r->gpu.grav_batch_pair_count);*/
       }
 
     } /* main loop. */
-
-    /*hipFreeHost(gravity_gpu_values_h->h_i);
-    hipFreeHost(gravity_gpu_values_h->h_j);
-    hipFreeHost(gravity_gpu_values_h->mass_i);
-    hipFreeHost(gravity_gpu_values_h->mass_j);
-    hipFreeHost(gravity_gpu_values_h->x_i);
-    hipFreeHost(gravity_gpu_values_h->x_j);
-    hipFreeHost(gravity_gpu_values_h->y_i);
-    hipFreeHost(gravity_gpu_values_h->y_j);
-    hipFreeHost(gravity_gpu_values_h->z_i);
-    hipFreeHost(gravity_gpu_values_h->z_j);
-    hipFreeHost(gravity_gpu_values_h->a_x_i);
-    hipFreeHost(gravity_gpu_values_h->a_y_i);
-    hipFreeHost(gravity_gpu_values_h->a_z_i);
-    hipFreeHost(gravity_gpu_values_h->a_x_j);
-    hipFreeHost(gravity_gpu_values_h->a_y_j);
-    hipFreeHost(gravity_gpu_values_h->a_z_j);
-    hipFreeHost(gravity_gpu_values_h->pot_i);
-    hipFreeHost(gravity_gpu_values_h->pot_j);
-    hipFreeHost(gravity_gpu_values_h->active_i);
-    hipFreeHost(gravity_gpu_values_h->active_j);
-    hipFreeHost(gravity_gpu_values_h->CoM_i);
-    hipFreeHost(gravity_gpu_values_h->CoM_j);
-    hipFreeHost(gravity_gpu_values_h->gcounts);
-    free(gravity_gpu_values_h);
-
-    hipFree(gravity_gpu_values_d->d_h_i);
-    hipFree(gravity_gpu_values_d->d_h_j);
-    hipFree(gravity_gpu_values_d->d_mass_i);
-    hipFree(gravity_gpu_values_d->d_mass_j);
-    hipFree(gravity_gpu_values_d->d_x_i);
-    hipFree(gravity_gpu_values_d->d_x_j);
-    hipFree(gravity_gpu_values_d->d_y_i);
-    hipFree(gravity_gpu_values_d->d_y_j);
-    hipFree(gravity_gpu_values_d->d_z_i);
-    hipFree(gravity_gpu_values_d->d_z_j);
-    hipFree(gravity_gpu_values_d->d_a_x_i);
-    hipFree(gravity_gpu_values_d->d_a_y_i);
-    hipFree(gravity_gpu_values_d->d_a_z_i);
-    hipFree(gravity_gpu_values_d->d_a_x_j);
-    hipFree(gravity_gpu_values_d->d_a_y_j);
-    hipFree(gravity_gpu_values_d->d_a_z_j);
-    hipFree(gravity_gpu_values_d->d_pot_i);
-    hipFree(gravity_gpu_values_d->d_pot_j);
-    hipFree(gravity_gpu_values_d->d_active_i);
-    hipFree(gravity_gpu_values_d->d_active_j);
-    hipFree(gravity_gpu_values_d->d_CoM_i);
-    hipFree(gravity_gpu_values_d->d_CoM_j);
-    hipFree(gravity_gpu_values_d->d_gcounts);
-    free(gravity_gpu_values_d);*/
-
-    // printf("qid: %i selfgravs %i\n", r->qid, selfgravs);
   }
   /* Be kind, rewind. */
   return NULL;
