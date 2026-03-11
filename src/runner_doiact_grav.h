@@ -95,7 +95,7 @@ void runner_dopair_grav_pp_new(
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_d,
     struct cell** grav_cells_pair, struct task** grav_tasks_pair,
     struct task* t, struct scheduler* sched, int ncells, int max_cell_size,
-    int* pack_count_pair, hipStream_t stream);
+    hipStream_t stream);
 
 void runner_dopair_recursive_grav_new(
     struct runner* r, struct cell* ci, struct cell* cj, const int gettimer,
@@ -105,6 +105,6 @@ void runner_dopair_recursive_grav_new(
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_d,
     struct cell** grav_cells_pair, struct task** grav_tasks_pair,
     struct task* t, struct scheduler* sched, int ncells, int max_cell_size,
-    int* pack_count_pair, int* packed, hipStream_t stream);
+    int* packed, hipStream_t stream);
 
 #endif /* SWIFT_RUNNER_DOIACT_GRAV_H */

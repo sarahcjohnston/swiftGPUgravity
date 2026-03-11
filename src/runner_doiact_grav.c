@@ -1712,7 +1712,7 @@ void runner_dopair_grav_pp_new(
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair_d,
     struct cell** grav_cells_pair, struct task** grav_tasks_pair,
     struct task* t, struct scheduler* sched, int ncells, int max_cell_size,
-    int* pack_count_pair, hipStream_t stream) {
+    hipStream_t stream) {
 
   // printf("in the pp function! \n");
 
@@ -1833,114 +1833,114 @@ void runner_dopair_grav_pp_new(
   {
     TIMER_TIC;
     for (int i = 0; i < gcount_i; i++) {
-      gravity_gpu_values_send_pair[i + *pack_count_pair * max_cell_size].h_i =
+      gravity_gpu_values_send_pair[i + r->gpu.grav_batch_pair_count * max_cell_size].h_i =
           ci_cache->epsilon[i];
-      gravity_gpu_values_send_pair[i + *pack_count_pair * max_cell_size]
+      gravity_gpu_values_send_pair[i + r->gpu.grav_batch_pair_count * max_cell_size]
           .mass_i = ci_cache->m[i];
-      gravity_gpu_values_send_pair[i + *pack_count_pair * max_cell_size].x_i =
+      gravity_gpu_values_send_pair[i + r->gpu.grav_batch_pair_count * max_cell_size].x_i =
           ci_cache->x[i];
-      gravity_gpu_values_send_pair[i + *pack_count_pair * max_cell_size].y_i =
+      gravity_gpu_values_send_pair[i + r->gpu.grav_batch_pair_count * max_cell_size].y_i =
           ci_cache->y[i];
-      gravity_gpu_values_send_pair[i + *pack_count_pair * max_cell_size].z_i =
+      gravity_gpu_values_send_pair[i + r->gpu.grav_batch_pair_count * max_cell_size].z_i =
           ci_cache->z[i];
-      gravity_gpu_values_send_pair[i + *pack_count_pair * max_cell_size]
+      gravity_gpu_values_send_pair[i + r->gpu.grav_batch_pair_count * max_cell_size]
           .active_i = ci_cache->active[i];
 
-      gravity_gpu_values_send_pair[i + *pack_count_pair * max_cell_size].h_j =
+      gravity_gpu_values_send_pair[i + r->gpu.grav_batch_pair_count * max_cell_size].h_j =
           ci_cache->epsilon[i];
-      gravity_gpu_values_send_pair[i + *pack_count_pair * max_cell_size]
+      gravity_gpu_values_send_pair[i + r->gpu.grav_batch_pair_count * max_cell_size]
           .mass_j = ci_cache->m[i];
-      gravity_gpu_values_send_pair[i + *pack_count_pair * max_cell_size].x_j =
+      gravity_gpu_values_send_pair[i + r->gpu.grav_batch_pair_count * max_cell_size].x_j =
           ci_cache->x[i];
-      gravity_gpu_values_send_pair[i + *pack_count_pair * max_cell_size].y_j =
+      gravity_gpu_values_send_pair[i + r->gpu.grav_batch_pair_count * max_cell_size].y_j =
           ci_cache->y[i];
-      gravity_gpu_values_send_pair[i + *pack_count_pair * max_cell_size].z_j =
+      gravity_gpu_values_send_pair[i + r->gpu.grav_batch_pair_count * max_cell_size].z_j =
           ci_cache->z[i];
-      gravity_gpu_values_send_pair[i + *pack_count_pair * max_cell_size]
+      gravity_gpu_values_send_pair[i + r->gpu.grav_batch_pair_count * max_cell_size]
           .active_j = ci_cache->active[i];
     }
 
     for (int i = 0; i < gcount_j; i++) {
-      gravity_gpu_values_send_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_send_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .h_j = cj_cache->epsilon[i];
-      gravity_gpu_values_send_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_send_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .mass_j = cj_cache->m[i];
-      gravity_gpu_values_send_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_send_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .x_j = cj_cache->x[i];
-      gravity_gpu_values_send_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_send_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .y_j = cj_cache->y[i];
-      gravity_gpu_values_send_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_send_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .z_j = cj_cache->z[i];
-      gravity_gpu_values_send_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_send_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .active_j = cj_cache->active[i];
 
-      gravity_gpu_values_send_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_send_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .h_i = cj_cache->epsilon[i];
-      gravity_gpu_values_send_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_send_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .mass_i = cj_cache->m[i];
-      gravity_gpu_values_send_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_send_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .x_i = cj_cache->x[i];
-      gravity_gpu_values_send_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_send_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .y_i = cj_cache->y[i];
-      gravity_gpu_values_send_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_send_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .z_i = cj_cache->z[i];
-      gravity_gpu_values_send_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_send_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .active_i = cj_cache->active[i];
     }
 
     for (int i = 0; i < max_cell_size; i++) {
-      gravity_gpu_values_recv_pair[i + *pack_count_pair * max_cell_size].a_x_i =
+      gravity_gpu_values_recv_pair[i + r->gpu.grav_batch_pair_count * max_cell_size].a_x_i =
           0;
-      gravity_gpu_values_recv_pair[i + *pack_count_pair * max_cell_size].a_y_i =
+      gravity_gpu_values_recv_pair[i + r->gpu.grav_batch_pair_count * max_cell_size].a_y_i =
           0;
-      gravity_gpu_values_recv_pair[i + *pack_count_pair * max_cell_size].a_z_i =
+      gravity_gpu_values_recv_pair[i + r->gpu.grav_batch_pair_count * max_cell_size].a_z_i =
           0;
-      gravity_gpu_values_recv_pair[i + *pack_count_pair * max_cell_size].pot_i =
+      gravity_gpu_values_recv_pair[i + r->gpu.grav_batch_pair_count * max_cell_size].pot_i =
           0;
-      gravity_gpu_values_recv_pair[i + *pack_count_pair * max_cell_size].a_x_j =
+      gravity_gpu_values_recv_pair[i + r->gpu.grav_batch_pair_count * max_cell_size].a_x_j =
           0;
-      gravity_gpu_values_recv_pair[i + *pack_count_pair * max_cell_size].a_y_j =
+      gravity_gpu_values_recv_pair[i + r->gpu.grav_batch_pair_count * max_cell_size].a_y_j =
           0;
-      gravity_gpu_values_recv_pair[i + *pack_count_pair * max_cell_size].a_z_j =
+      gravity_gpu_values_recv_pair[i + r->gpu.grav_batch_pair_count * max_cell_size].a_z_j =
           0;
-      gravity_gpu_values_recv_pair[i + *pack_count_pair * max_cell_size].pot_j =
+      gravity_gpu_values_recv_pair[i + r->gpu.grav_batch_pair_count * max_cell_size].pot_j =
           0;
     }
 
     for (int i = 0; i < max_cell_size; i++) {
-      gravity_gpu_values_recv_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_recv_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .a_x_i = 0;
-      gravity_gpu_values_recv_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_recv_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .a_y_i = 0;
-      gravity_gpu_values_recv_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_recv_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .a_z_i = 0;
-      gravity_gpu_values_recv_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_recv_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .pot_i = 0;
-      gravity_gpu_values_recv_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_recv_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .a_x_j = 0;
-      gravity_gpu_values_recv_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_recv_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .a_y_j = 0;
-      gravity_gpu_values_recv_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_recv_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .a_z_j = 0;
-      gravity_gpu_values_recv_pair[i + (*pack_count_pair + 1) * max_cell_size]
+      gravity_gpu_values_recv_pair[i + (r->gpu.grav_batch_pair_count + 1) * max_cell_size]
           .pot_j = 0;
     }
     TIMER_TOC(timer_doself_grav_pp);
   }
 
   // store the address of the cells and tasks we are working on
-  grav_cells_pair[*pack_count_pair] = ci;
-  grav_cells_pair[*pack_count_pair + 1] = cj;
-  grav_tasks_pair[*pack_count_pair / 2] = t;
+  grav_cells_pair[r->gpu.grav_batch_pair_count] = ci;
+  grav_cells_pair[r->gpu.grav_batch_pair_count + 1] = cj;
+  grav_tasks_pair[r->gpu.grav_batch_pair_count / 2] = t;
 
-  gravity_gpu_values_send_pair[*pack_count_pair * max_cell_size].cell_active =
+  gravity_gpu_values_send_pair[r->gpu.grav_batch_pair_count * max_cell_size].cell_active =
       cell_is_active_gravity(ci, e);
-  gravity_gpu_values_send_pair[(*pack_count_pair + 1) * max_cell_size]
+  gravity_gpu_values_send_pair[(r->gpu.grav_batch_pair_count + 1) * max_cell_size]
       .cell_active = cell_is_active_gravity(cj, e);
 
-  gravity_gpu_values_send_pair[*pack_count_pair * max_cell_size].gcounts =
+  gravity_gpu_values_send_pair[r->gpu.grav_batch_pair_count * max_cell_size].gcounts =
       gcount_i;
-  gravity_gpu_values_send_pair[(*pack_count_pair + 1) * max_cell_size].gcounts =
+  gravity_gpu_values_send_pair[(r->gpu.grav_batch_pair_count + 1) * max_cell_size].gcounts =
       gcount_j;
 
   int use_full = 1;
@@ -1957,20 +1957,20 @@ void runner_dopair_grav_pp_new(
   }
 
   // store decision on BOTH blocks
-  gravity_gpu_values_send_pair[*pack_count_pair * max_cell_size].use_full =
+  gravity_gpu_values_send_pair[r->gpu.grav_batch_pair_count * max_cell_size].use_full =
       use_full;
-  gravity_gpu_values_send_pair[(*pack_count_pair + 1) * max_cell_size]
+  gravity_gpu_values_send_pair[(r->gpu.grav_batch_pair_count + 1) * max_cell_size]
       .use_full = use_full;
 
   // update that we packed a cell into our array
-  // printf("qid:%i pack count: %i ncells:%i \n", r->qid, *pack_count_pair,
+  // printf("qid:%i pack count: %i ncells:%i \n", r->qid, r->gpu.grav_batch_pair_count,
   // ncells);
-  *pack_count_pair += 2;
-  // printf("qid:%i pack count: %i ncells:%i \n", r->qid, *pack_count_pair,
+  r->gpu.grav_batch_pair_count += 2;
+  // printf("qid:%i pack count: %i ncells:%i \n", r->qid, r->gpu.grav_batch_pair_count,
   // ncells);
 
   /*printf("PACK: qid=%d t=%p pack_count=%d ci=%p cj=%p\n",
-  r->qid, (void*)t, *pack_count_pair, (void*)ci, (void*)cj);*/
+  r->qid, (void*)t, r->gpu.grav_batch_pair_count, (void*)ci, (void*)cj);*/
 
   gravity_cache_zero_output(ci_cache, gcount_padded_i);
   gravity_cache_zero_output(cj_cache, gcount_padded_j);
@@ -1982,10 +1982,10 @@ void runner_dopair_grav_pp_new(
   sched->queues[r->qid].gpu_pair_tasks_left--;
   (void)lock_unlock(&sched->queues[r->qid].lock);
 
-  // printf("qid:%i Packed: %i \n", r->qid, *pack_count_pair);
+  // printf("qid:%i Packed: %i \n", r->qid, r->gpu.grav_batch_pair_count);
   // fflush(stdout);
 
-  if (*pack_count_pair >= ncells) {
+  if (r->gpu.grav_batch_pair_count >= ncells) {
     // printf("its pack send time! \n");
     int ncells_orig = ncells;
 
@@ -2196,7 +2196,7 @@ void runner_dopair_grav_pp_new(
       grav_cells_pair[i + 1] = NULL;
       grav_tasks_pair[i / 2] = NULL;
     }
-    *pack_count_pair = 0;
+    r->gpu.grav_batch_pair_count = 0;
   }
 
   TIMER_TOC(timer_dopair_grav_pp);
@@ -3263,7 +3263,7 @@ void runner_dopair_recursive_grav_new(
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair_d,
     struct cell** grav_cells_pair, struct task** grav_tasks_pair,
     struct task* t, struct scheduler* sched, int ncells, int max_cell_size,
-    int* pack_count_pair, int* packed, hipStream_t stream) {
+    int* packed, hipStream_t stream) {
 
   if (ci == NULL || cj == NULL)
     error("runner_dopair_recursive_grav_new got NULL cell");
@@ -3403,7 +3403,7 @@ void runner_dopair_recursive_grav_new(
         gravity_gpu_values_send_pair, gravity_gpu_values_send_pair_d,
         gravity_gpu_values_recv_pair, gravity_gpu_values_recv_pair_d,
         grav_cells_pair, grav_tasks_pair, t, sched, ncells, max_cell_size,
-        pack_count_pair, stream);
+        stream);
 
     *packed = 1;
 
@@ -3432,7 +3432,7 @@ void runner_dopair_recursive_grav_new(
                 gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair,
                 gravity_gpu_values_recv_pair_d, grav_cells_pair,
                 grav_tasks_pair, t, sched, ncells, max_cell_size,
-                pack_count_pair, packed, stream);
+                packed, stream);
           }
         }
 
@@ -3450,7 +3450,7 @@ void runner_dopair_recursive_grav_new(
                 gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair,
                 gravity_gpu_values_recv_pair_d, grav_cells_pair,
                 grav_tasks_pair, t, sched, ncells, max_cell_size,
-                pack_count_pair, packed, stream);
+                packed, stream);
           }
         }
       }
@@ -3468,7 +3468,7 @@ void runner_dopair_recursive_grav_new(
                 gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair,
                 gravity_gpu_values_recv_pair_d, grav_cells_pair,
                 grav_tasks_pair, t, sched, ncells, max_cell_size,
-                pack_count_pair, packed, stream);
+                packed, stream);
           }
         }
 
@@ -3486,7 +3486,7 @@ void runner_dopair_recursive_grav_new(
                 gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair,
                 gravity_gpu_values_recv_pair_d, grav_cells_pair,
                 grav_tasks_pair, t, sched, ncells, max_cell_size,
-                pack_count_pair, packed, stream);
+                packed, stream);
           }
         }
       }
