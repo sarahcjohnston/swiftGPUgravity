@@ -48,9 +48,8 @@ static void runner_gpu_complete_self_task(struct runner* r,
   scheduler_done(sched, t);
 }
 
-static void runner_gpu_complete_pair_task(struct runner* r,
-                                          struct scheduler* sched,
-                                          struct task* t) {
+void runner_gpu_complete_pair_task(struct runner* r, struct scheduler* sched,
+                                   struct task* t) {
   lock_lock(&sched->queues[r->qid].lock);
   sched->queues[r->qid].gpu_pair_tasks_left--;
   (void)lock_unlock(&sched->queues[r->qid].lock);
@@ -88,45 +87,41 @@ void runner_gpu_complete_pair_batch(struct runner* r, struct scheduler* sched) {
 }
 
 /**
- * @brief Computes the interaction of all the particles in a cell with all the
- * particles of another cell.
+ * @brief Pack one leaf pair-gravity interaction into the runner GPU batch.
  *
- * This function switches between the full potential and the truncated one
- * depending on needs. It will also use the M2P (multipole) interaction
- * for the subset of particles in either cell for which the distance criterion
- * is valid.
- *
- * This function starts by constructing the require #gravity_cache for both
- * cells and then call the specialised functions doing the actual work on
- * the caches. It then write the data back to the particles.
+ * This function populates the gravity caches for both cells and copies the
+ * particle data into the next available slot in the pair batch buffer.  The
+ * batch counter is incremented but no GPU work is launched; the caller is
+ * responsible for checking whether the batch is full and calling
+ * runner_dopair_grav_pp_flush() when appropriate.
  *
  * @param r The #runner.
  * @param ci The first #cell.
  * @param cj The other #cell.
  * @param symmetric Are we updating both cells (1) or just ci (0) ?
  * @param allow_mpole Are we allowing the use of M2P interactions ?
+ * @param gravity_gpu_values_send_pair Host send buffer for this batch.
+ * @param gravity_gpu_values_recv_pair Host receive buffer for this batch.
+ * @param grav_cells_pair Array of cell pointers for this batch.
+ * @param grav_tasks_pair Array of task pointers for this batch.
+ * @param t The top-level #task currently being processed.
+ * @param max_cell_size The maximum number of particles per packed cell.
+ * @param stream The HIP stream used for timing events.
  */
-enum runner_gpu_task_type runner_dopair_grav_pp_new(
+static void runner_dopair_grav_pp_pack(
     struct runner* r, struct cell* ci, struct cell* cj, const int symmetric,
     const int allow_mpole,
     struct gravity_gpu_values_send* gravity_gpu_values_send_pair,
-    struct gravity_gpu_values_send* gravity_gpu_values_send_pair_d,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair_d,
     struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    struct task* t, int ncells, int max_cell_size, hipStream_t stream) {
+    struct task* t, int max_cell_size, hipStream_t stream) {
 
   /* Recover some useful constants */
   const struct engine* e = r->e;
   const int periodic = e->mesh->periodic;
   const float dim[3] = {(float)e->mesh->dim[0], (float)e->mesh->dim[1],
                         (float)e->mesh->dim[2]};
-  const float r_s_inv = e->mesh->r_s_inv;
   const double min_trunc = e->mesh->r_cut_min;
-
-  float dim_0 = dim[0];
-  float dim_1 = dim[1];
-  float dim_2 = dim[2];
 
   TIMER_TIC;
 
@@ -136,7 +131,13 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
   const int cj_active =
       cell_is_active_gravity(cj, e) && (cj->nodeID == e->nodeID);
 
+  (void)cj_active; /* used only by debug checks below */
+  (void)ci_active;
+
 #ifdef SWIFT_DEBUG_CHECKS
+  /* Check that we are not doing something stupid */
+  if (ci->split || cj->split) error("Running P-P on splitable cells");
+
   /* Let's start by checking things are drifted */
   if (!cell_are_gpart_drifted(ci, e)) error("Un-drifted gparts");
   if (!cell_are_gpart_drifted(cj, e)) error("Un-drifted gparts");
@@ -219,6 +220,7 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
 
   hipEventRecord(startpack, stream);
 
+  /* ---- Pack ci data into the send buffer ---- */
   {
     TIMER_TIC;
     for (int i = 0; i < gcount_i; i++) {
@@ -261,6 +263,7 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
           .active_j = ci_cache->active[i];
     }
 
+    /* ---- Pack cj data into the send buffer ---- */
     for (int i = 0; i < gcount_j; i++) {
       gravity_gpu_values_send_pair[i + (r->gpu.grav_batch_pair_count + 1) *
                                            max_cell_size]
@@ -301,6 +304,7 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
           .active_i = cj_cache->active[i];
     }
 
+    /* ---- Zero the receive buffer for ci slot ---- */
     for (int i = 0; i < max_cell_size; i++) {
       gravity_gpu_values_recv_pair[i +
                                    r->gpu.grav_batch_pair_count * max_cell_size]
@@ -328,6 +332,7 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
           .pot_j = 0;
     }
 
+    /* ---- Zero the receive buffer for cj slot ---- */
     for (int i = 0; i < max_cell_size; i++) {
       gravity_gpu_values_recv_pair[i + (r->gpu.grav_batch_pair_count + 1) *
                                            max_cell_size]
@@ -387,14 +392,14 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
     use_full = (max_r <= min_trunc);
   }
 
-  // store decision on BOTH blocks
+  /* Store decision on BOTH blocks */
   gravity_gpu_values_send_pair[r->gpu.grav_batch_pair_count * max_cell_size]
       .use_full = use_full;
   gravity_gpu_values_send_pair[(r->gpu.grav_batch_pair_count + 1) *
                                max_cell_size]
       .use_full = use_full;
 
-  // update that we packed a cell into our array
+  /* Update that we packed a pair into our array */
   r->gpu.grav_batch_pair_count += 2;
 
   gravity_cache_zero_output(ci_cache, gcount_padded_i);
@@ -402,164 +407,224 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
 
   cell_gunlocktree(b);
   cell_gunlocktree(a);
+}
+
+/**
+ * @brief Flush a full pair-gravity GPU batch: H2D copy, kernel launch, D2H
+ *        copy, stream synchronisation, and result unpacking to particles.
+ *
+ * After unpacking, any tasks from *previous* top-level calls that were packed
+ * into this batch are completed via scheduler_done().  The task pointed to
+ * by @p current_task is assumed to still be in progress and is skipped.
+ * The batch counter and metadata arrays are reset to zero so the buffer can
+ * be reused immediately.
+ *
+ * @param r The #runner.
+ * @param gravity_gpu_values_send_pair Host send buffer.
+ * @param gravity_gpu_values_send_pair_d Device send buffer.
+ * @param gravity_gpu_values_recv_pair Host receive buffer.
+ * @param gravity_gpu_values_recv_pair_d Device receive buffer.
+ * @param grav_cells_pair Array of cell pointers for this batch.
+ * @param grav_tasks_pair Array of task pointers for this batch.
+ * @param current_task The top-level task currently being walked (not
+ * completed).
+ * @param ncells The batch capacity (number of cell slots).
+ * @param max_cell_size The maximum number of particles per packed cell.
+ * @param stream The HIP stream to use.
+ */
+static void runner_dopair_grav_pp_flush(
+    struct runner* r,
+    struct gravity_gpu_values_send* gravity_gpu_values_send_pair,
+    struct gravity_gpu_values_send* gravity_gpu_values_send_pair_d,
+    struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair,
+    struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair_d,
+    struct cell** grav_cells_pair, struct task** grav_tasks_pair,
+    struct task* current_task, int ncells, int max_cell_size,
+    hipStream_t stream) {
+
+  const int ncells_flush = r->gpu.grav_batch_pair_count;
+  if (ncells_flush == 0) return;
+
+  /* Retrieve kernel parameters from the first pair in the batch. */
+  struct cell* ci_flush = grav_cells_pair[0];
+  struct cell* cj_flush = grav_cells_pair[1];
+
+  if (ci_flush == NULL || cj_flush == NULL)
+    error("pair flush: NULL packed cells");
+
+  const struct engine* e = r->e;
+  const int periodic = e->mesh->periodic;
+  const float r_s_inv = e->mesh->r_s_inv;
+  const double min_trunc = e->mesh->r_cut_min;
+
+  const int ci_active =
+      cell_is_active_gravity(ci_flush, e) && (ci_flush->nodeID == e->nodeID);
+  const int cj_active =
+      cell_is_active_gravity(cj_flush, e) && (cj_flush->nodeID == e->nodeID);
+  const float rmax_i = ci_flush->grav.multipole->r_max;
+  const float rmax_j = cj_flush->grav.multipole->r_max;
+  const int gcount_i = ci_flush->grav.count;
+  const int gcount_j = cj_flush->grav.count;
+  const int gcount_padded_i = gcount_i - (gcount_i % VEC_SIZE) + VEC_SIZE;
+  const int gcount_padded_j = gcount_j - (gcount_j % VEC_SIZE) + VEC_SIZE;
+  const float dim_0 = (float)e->mesh->dim[0];
+  const float dim_1 = (float)e->mesh->dim[1];
+  const float dim_2 = (float)e->mesh->dim[2];
+
+  /* ---- H2D copy ---- */
+  {
+    TIMER_TIC;
+
+    hipMemcpyAsync(
+        gravity_gpu_values_send_pair_d, gravity_gpu_values_send_pair,
+        ncells_flush * max_cell_size * sizeof(struct gravity_gpu_values_send),
+        hipMemcpyHostToDevice, stream);
+    hipMemcpyAsync(
+        gravity_gpu_values_recv_pair_d, gravity_gpu_values_recv_pair,
+        ncells_flush * max_cell_size * sizeof(struct gravity_gpu_values_recv),
+        hipMemcpyHostToDevice, stream);
+
+    hipError_t err2 = hipGetLastError();
+    if (err2 != hipSuccess)
+      printf("Error (flush H2D): %s\n", hipGetErrorString(err2));
+
+    /* ---- Kernel launch ---- */
+    pair_pp_offload_new(
+        periodic, rmax_i, rmax_j, min_trunc, &r_s_inv, &gcount_i,
+        &gcount_padded_i, &gcount_j, &gcount_padded_j, ci_active, cj_active,
+        dim_0, dim_1, dim_2, /*symmetric=*/1, gravity_gpu_values_send_pair_d,
+        gravity_gpu_values_recv_pair_d, ncells_flush, max_cell_size, stream);
+
+    /* ---- D2H copy ---- */
+    hipMemcpyAsync(
+        gravity_gpu_values_recv_pair, gravity_gpu_values_recv_pair_d,
+        ncells_flush * max_cell_size * sizeof(struct gravity_gpu_values_recv),
+        hipMemcpyDeviceToHost, stream);
+
+    hipStreamSynchronize(stream);
+
+    TIMER_TOC(timer_doself_grav_pp);
+  }
+
+  hipError_t err3 = hipGetLastError();
+  if (err3 != hipSuccess)
+    printf("Error (flush kernel): %s\n", hipGetErrorString(err3));
+
+  /* ---- Unpack results back to particles ---- */
+  {
+    TIMER_TIC;
+
+    for (int j = 0; j < ncells_flush; j += 2) {
+
+      if (grav_cells_pair[j] == NULL || grav_cells_pair[j + 1] == NULL)
+        error("PAIR UNPACK: NULL cell j=%d packed=%d qid=%d", j, ncells_flush,
+              r->qid);
+
+      if (grav_tasks_pair[j / 2] == NULL)
+        error("PAIR UNPACK: NULL task k=%d (j=%d) packed=%d qid=%d", j / 2, j,
+              ncells_flush, r->qid);
+
+      struct cell* ci_pair = grav_cells_pair[j];
+      struct cell* cj_pair = grav_cells_pair[j + 1];
+      struct cell *a_pair = ci_pair, *b_pair = cj_pair;
+
+      if (a_pair > b_pair) {
+        struct cell* tmp = a_pair;
+        a_pair = b_pair;
+        b_pair = tmp;
+      }
+
+      while (cell_glocktree(a_pair)) {
+        ;
+      }
+      for (int i = 0;
+           i < gravity_gpu_values_send_pair[j * max_cell_size].gcounts; i++) {
+        ci_pair->grav.parts[i].a_grav[0] +=
+            gravity_gpu_values_recv_pair[i + j * max_cell_size].a_x_i;
+        ci_pair->grav.parts[i].a_grav[1] +=
+            gravity_gpu_values_recv_pair[i + j * max_cell_size].a_y_i;
+        ci_pair->grav.parts[i].a_grav[2] +=
+            gravity_gpu_values_recv_pair[i + j * max_cell_size].a_z_i;
+        ci_pair->grav.parts[i].potential +=
+            gravity_gpu_values_recv_pair[i + j * max_cell_size].pot_i;
+      }
+      cell_gunlocktree(a_pair);
+
+      while (cell_glocktree(b_pair)) {
+        ;
+      }
+      for (int i = 0;
+           i < gravity_gpu_values_send_pair[(j + 1) * max_cell_size].gcounts;
+           i++) {
+        cj_pair->grav.parts[i].a_grav[0] +=
+            gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size].a_x_i;
+        cj_pair->grav.parts[i].a_grav[1] +=
+            gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size].a_y_i;
+        cj_pair->grav.parts[i].a_grav[2] +=
+            gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size].a_z_i;
+        cj_pair->grav.parts[i].potential +=
+            gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size].pot_i;
+      }
+      cell_gunlocktree(b_pair);
+    }
+
+    TIMER_TOC(timer_doself_grav_pp);
+  }
+
+  /* Complete any tasks from previous top-level calls that were packed
+     into this batch, but skip current_task (still being walked). */
+  struct scheduler* sched = &r->e->sched;
+  struct task* prev_task = NULL;
+  for (int j = 0; j < ncells_flush; j += 2) {
+    struct task* batch_task = grav_tasks_pair[j / 2];
+    if (batch_task != prev_task && batch_task != current_task) {
+      runner_gpu_complete_pair_task(r, sched, batch_task);
+      prev_task = batch_task;
+    }
+    grav_cells_pair[j] = NULL;
+    grav_cells_pair[j + 1] = NULL;
+    grav_tasks_pair[j / 2] = NULL;
+  }
+
+  /* Reset the batch counter so the buffer can be reused. */
+  r->gpu.grav_batch_pair_count = 0;
+}
+
+/**
+ * @brief Pack a leaf pair-gravity interaction and flush if the batch is full.
+ *
+ * This is the main entry point called from runner_dopair_recursive_grav_new()
+ * when two unsplit leaf cells are reached. It packs the pair, and if the batch
+ * is now full it flushes the GPU work before returning.
+ *
+ * @param r The #runner.
+ * @param ci The first #cell.
+ * @param cj The other #cell.
+ * @param symmetric Are we updating both cells (1) or just ci (0) ?
+ * @param allow_mpole Are we allowing the use of M2P interactions ?
+ */
+enum runner_gpu_task_type runner_dopair_grav_pp_new(
+    struct runner* r, struct cell* ci, struct cell* cj, const int symmetric,
+    const int allow_mpole,
+    struct gravity_gpu_values_send* gravity_gpu_values_send_pair,
+    struct gravity_gpu_values_send* gravity_gpu_values_send_pair_d,
+    struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair,
+    struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair_d,
+    struct cell** grav_cells_pair, struct task** grav_tasks_pair,
+    struct task* t, int ncells, int max_cell_size, hipStream_t stream) {
+
+  /* Pack the pair into the batch buffer. */
+  runner_dopair_grav_pp_pack(r, ci, cj, symmetric, allow_mpole,
+                             gravity_gpu_values_send_pair,
+                             gravity_gpu_values_recv_pair, grav_cells_pair,
+                             grav_tasks_pair, t, max_cell_size, stream);
 
   /* If we have filled our batch, flush it and reset the count. */
   if (r->gpu.grav_batch_pair_count >= ncells) {
-    hipEvent_t startcopyH2D, stopcopyH2D;
-    hipEventCreate(&startcopyH2D);
-    hipEventCreate(&stopcopyH2D);
-
-    hipEventRecord(startcopyH2D, stream);
-
-    {
-      TIMER_TIC;
-
-      /* Now copy all the arrays to the device */
-      hipMemcpyAsync(
-          gravity_gpu_values_send_pair_d, gravity_gpu_values_send_pair,
-          ncells * max_cell_size * sizeof(struct gravity_gpu_values_send),
-          hipMemcpyHostToDevice, stream);
-      hipMemcpyAsync(
-          gravity_gpu_values_recv_pair_d, gravity_gpu_values_recv_pair,
-          ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv),
-          hipMemcpyHostToDevice, stream);
-
-      hipEventRecord(stopcopyH2D, stream);
-
-      hipError_t err2 = hipGetLastError();
-      if (err2 != hipSuccess) printf("Error2: %s\n", hipGetErrorString(err2));
-
-      hipEvent_t startker, stopker;
-      hipEventCreate(&startker);
-      hipEventCreate(&stopker);
-
-      hipEventRecord(startker, stream);
-
-      // run the GPU function
-      pair_pp_offload_new(
-          periodic, rmax_i, rmax_j, min_trunc, &r_s_inv, &gcount_i,
-          &gcount_padded_i, &gcount_j, &gcount_padded_j, ci_active, cj_active,
-          dim_0, dim_1, dim_2, symmetric, gravity_gpu_values_send_pair_d,
-          gravity_gpu_values_recv_pair_d, ncells, max_cell_size, stream);
-
-      hipEventRecord(stopker, stream);
-
-      // hipDeviceSynchronize();
-
-      hipEvent_t startcopyD2H, stopcopyD2H;
-      hipEventCreate(&startcopyD2H);
-      hipEventCreate(&stopcopyD2H);
-
-      hipEventRecord(startcopyD2H, stream);
-
-      // copy the arrays from device to host
-      // gravity_gpu_D2H(gravity_gpu_values_h, gravity_gpu_values_d, ncells,
-      // max_cell_size, stream);
-      hipMemcpyAsync(
-          gravity_gpu_values_recv_pair, gravity_gpu_values_recv_pair_d,
-          ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv),
-          hipMemcpyDeviceToHost, stream);
-
-      hipEventRecord(stopcopyD2H, stream);
-
-      hipStreamSynchronize(stream);  // THIS ONE IS NEEDED!
-
-      TIMER_TOC(timer_doself_grav_pp);
-    }  // TIMER_TOC(timer_gpu_copycalc);
-
-    // TIMINGS RECORDING
-    /*printf("Pack Time: %f ms\n", timer_gpu_pack);
-    FILE *f1 = fopen("packtime_a30.txt", "a");
-    fprintf(f1, "%f\n", timer_gpu_pack);
-    fclose(f1);
-
-    float copytimeH2D = 0;
-    hipEventElapsedTime(&copytimeH2D, startcopyH2D, stopcopyH2D);
-    printf("Copy Time: %f ms\n", copytimeH2D);
-    FILE *f2 = fopen("copytimeH2D_a30.txt", "a");
-    fprintf(f2, "%f\n", copytimeH2D);
-    fclose(f2);
-
-    float kerneltime = 0;
-    hipEventElapsedTime(&kerneltime, startker, stopker);
-    printf("Kernel Time: %f ms\n", kerneltime);
-    FILE *f3 = fopen("kerneltime_a30.txt", "a");
-    fprintf(f3, "%f\n", kerneltime);
-    fclose(f3);
-
-    float copytimeD2H = 0;
-    hipEventElapsedTime(&copytimeD2H, startcopyD2H, stopcopyD2H);
-    printf("Copy Time: %f ms\n", copytimeD2H);
-    FILE *f4 = fopen("copytimeD2H_a30.txt", "a");
-    fprintf(f4, "%f\n", copytimeD2H);
-    fclose(f4);*/
-
-    // hipDeviceSynchronize();
-    hipError_t err3 = hipGetLastError();
-    if (err3 != hipSuccess) printf("Error3: %s\n", hipGetErrorString(err3));
-
-    {
-      TIMER_TIC;
-
-      /*send results back to relevant cell structs*/
-      for (int j = 0; j < ncells; j += 2) {
-
-        if (grav_cells_pair[j] == NULL || grav_cells_pair[j + 1] == NULL)
-          error("PAIR UNPACK: NULL cell j=%d packed=%d qid=%d", j, ncells,
-                r->qid);
-
-        if (grav_tasks_pair[j / 2] == NULL)
-          error("PAIR UNPACK: NULL task k=%d (j=%d) packed=%d qid=%d", j / 2, j,
-                ncells, r->qid);
-
-        struct cell* ci_pair = grav_cells_pair[j];
-        struct cell* cj_pair = grav_cells_pair[j + 1];
-        struct cell *a_pair = ci_pair, *b_pair = cj_pair;
-
-        if (a_pair > b_pair) {
-          struct cell* tmp = a_pair;
-          a_pair = b_pair;
-          b_pair = tmp;
-        }
-
-        while (cell_glocktree(a_pair)) {
-          ;
-        }
-        // printf("hunting for lock for cell %p\n", (void*)a); }
-        for (int i = 0;
-             i < gravity_gpu_values_send_pair[j * max_cell_size].gcounts; i++) {
-          ci_pair->grav.parts[i].a_grav[0] +=
-              gravity_gpu_values_recv_pair[i + j * max_cell_size].a_x_i;
-          ci_pair->grav.parts[i].a_grav[1] +=
-              gravity_gpu_values_recv_pair[i + j * max_cell_size].a_y_i;
-          ci_pair->grav.parts[i].a_grav[2] +=
-              gravity_gpu_values_recv_pair[i + j * max_cell_size].a_z_i;
-          ci_pair->grav.parts[i].potential +=
-              gravity_gpu_values_recv_pair[i + j * max_cell_size].pot_i;
-        }
-        cell_gunlocktree(a_pair);
-
-        while (cell_glocktree(b_pair)) {
-          ;
-        }  // {printf("hunting for lock for cell %p\n", (void*)b);}
-        for (int i = 0;
-             i < gravity_gpu_values_send_pair[(j + 1) * max_cell_size].gcounts;
-             i++) {
-          cj_pair->grav.parts[i].a_grav[0] +=
-              gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size].a_x_i;
-          cj_pair->grav.parts[i].a_grav[1] +=
-              gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size].a_y_i;
-          cj_pair->grav.parts[i].a_grav[2] +=
-              gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size].a_z_i;
-          cj_pair->grav.parts[i].potential +=
-              gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size].pot_i;
-        }
-        cell_gunlocktree(b_pair);
-      }
-
-      TIMER_TOC(timer_doself_grav_pp);
-    }
-
+    runner_dopair_grav_pp_flush(
+        r, gravity_gpu_values_send_pair, gravity_gpu_values_send_pair_d,
+        gravity_gpu_values_recv_pair, gravity_gpu_values_recv_pair_d,
+        grav_cells_pair, grav_tasks_pair, t, ncells, max_cell_size, stream);
     return flushed_pair_task;
   }
 
@@ -831,10 +896,6 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
 
   const struct engine* e = r->e;
 
-  /* Initialise the task type to regular, this gets updated if we decide to
-   * offload to the GPU. */
-  enum runner_gpu_task_type task_type = regular_task;
-
   if (!cell_are_gpart_drifted(ci, e))
     cell_drift_gpart(ci, e, /*force=*/1, NULL);
   if (!cell_are_gpart_drifted(cj, e))
@@ -918,7 +979,7 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
       accumulate_add_ll(&multi_j->pot.num_interacted_pm,
                         multi_i->m_pole.num_gpart);
 #endif
-    return task_type;
+    return regular_task;
   }
 
   /* OK, we actually need to compute this pair. Let's find the cheapest
@@ -926,8 +987,11 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
 
   if (ci->grav.count <= 1 || cj->grav.count <= 1) {
 
+    // printf("BEING CHEAP \n");
+
     /* We have two cheap cells. Go P-P. */
     runner_dopair_recursive_grav(r, ci, cj, 0);
+    return regular_task;
 
     /* Can we use M-M interactions ? */
   } else if (gravity_M2L_accept_symmetric(e->gravity_properties, multi_i,
@@ -936,21 +1000,132 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
 
     /* Go M-M */
     runner_dopair_recursive_grav(r, ci, cj, 0);
+    return regular_task;
 
-    /* Otherwise, we know we are at the desired level already in the tasks. */
-  } else {
+    /* Did we reach the bottom? */
+  } else if (!ci->split && !cj->split) {
 
-    /* We have two leaves. Go P-P on the GPU. This will pack and flush if
-     * the time is right. */
-    task_type = runner_dopair_grav_pp_new(
+    /* We have two leaves. Go P-P. */
+    return runner_dopair_grav_pp_new(
         r, ci, cj, /*symmetric*/ 1, /*allow_mpoles=*/1,
         gravity_gpu_values_send_pair, gravity_gpu_values_send_pair_d,
         gravity_gpu_values_recv_pair, gravity_gpu_values_recv_pair_d,
         grav_cells_pair, grav_tasks_pair, t, ncells, max_cell_size, stream);
+
+  } else {
+
+    enum runner_gpu_task_type task_type = regular_task;
+
+    /* Alright, we'll have to split and recurse. */
+    /* We know at least one of ci and cj is splittable */
+
+    const double ri_max = multi_i->r_max;
+    const double rj_max = multi_j->r_max;
+
+    /* Split the larger of the two cells and start over again */
+    if (ri_max > rj_max) {
+
+      /* Can we actually split that interaction ? */
+      if (ci->split) {
+
+        /* Loop over ci's children */
+        for (int k = 0; k < 8; k++) {
+          if (ci->progeny[k] != NULL) {
+            // runner_dopair_recursive_grav(r, ci->progeny[k], cj, 0);
+            enum runner_gpu_task_type child_type =
+                runner_dopair_recursive_grav_new(
+                    r, ci->progeny[k], cj, 0, gravity_gpu_values_send_pair,
+                    gravity_gpu_values_send_pair_d,
+                    gravity_gpu_values_recv_pair,
+                    gravity_gpu_values_recv_pair_d, grav_cells_pair,
+                    grav_tasks_pair, t, ncells, max_cell_size, stream);
+            if (child_type > task_type) task_type = child_type;
+          }
+        }
+
+      } else {
+        /* cj is split */
+
+        /* MATTHIEU: This could maybe be replaced by P-M interactions ?  */
+
+        /* Loop over cj's children */
+        for (int k = 0; k < 8; k++) {
+          if (cj->progeny[k] != NULL) {
+            // runner_dopair_recursive_grav(r, ci, cj->progeny[k], 0);
+            enum runner_gpu_task_type child_type =
+                runner_dopair_recursive_grav_new(
+                    r, ci, cj->progeny[k], 0, gravity_gpu_values_send_pair,
+                    gravity_gpu_values_send_pair_d,
+                    gravity_gpu_values_recv_pair,
+                    gravity_gpu_values_recv_pair_d, grav_cells_pair,
+                    grav_tasks_pair, t, ncells, max_cell_size, stream);
+            if (child_type > task_type) task_type = child_type;
+          }
+        }
+      }
+    } else {
+
+      /* Can we actually split that interaction ? */
+      if (cj->split) {
+
+        /* Loop over cj's children */
+        for (int k = 0; k < 8; k++) {
+          if (cj->progeny[k] != NULL) {
+            // runner_dopair_recursive_grav(r, ci, cj->progeny[k], 0);
+            enum runner_gpu_task_type child_type =
+                runner_dopair_recursive_grav_new(
+                    r, ci, cj->progeny[k], 0, gravity_gpu_values_send_pair,
+                    gravity_gpu_values_send_pair_d,
+                    gravity_gpu_values_recv_pair,
+                    gravity_gpu_values_recv_pair_d, grav_cells_pair,
+                    grav_tasks_pair, t, ncells, max_cell_size, stream);
+            if (child_type > task_type) task_type = child_type;
+          }
+        }
+
+      } else {
+        /* ci is split */
+
+        /* MATTHIEU: This could maybe be replaced by P-M interactions ?  */
+
+        /* Loop over ci's children */
+        for (int k = 0; k < 8; k++) {
+          if (ci->progeny[k] != NULL) {
+            // runner_dopair_recursive_grav(r, ci->progeny[k], cj, 0);
+            enum runner_gpu_task_type child_type =
+                runner_dopair_recursive_grav_new(
+                    r, ci->progeny[k], cj, 0, gravity_gpu_values_send_pair,
+                    gravity_gpu_values_send_pair_d,
+                    gravity_gpu_values_recv_pair,
+                    gravity_gpu_values_recv_pair_d, grav_cells_pair,
+                    grav_tasks_pair, t, ncells, max_cell_size, stream);
+            if (child_type > task_type) task_type = child_type;
+          }
+        }
+      }
+    }
+
+    /* Determine the return type based on the actual batch state rather
+       than the propagated child return types, since mid-walk flushes
+       reset the counter but subsequent children may pack more data. */
+    enum runner_gpu_task_type final_type;
+    if (r->gpu.grav_batch_pair_count > 0) {
+      /* There are unflushed pairs in the buffer. */
+      final_type = packed_task;
+    } else if (task_type >= flushed_pair_task) {
+      /* The buffer is empty and at least one flush happened. */
+      final_type = flushed_pair_task;
+    } else {
+      /* No leaf pairs were produced at all (all M-M or truncated). */
+      final_type = regular_task;
+    }
+
+    if (gettimer) TIMER_TOC(timer_dosub_pair_grav);
+    return final_type;
   }
 
   if (gettimer) TIMER_TOC(timer_dosub_pair_grav);
-  return task_type;
+  return regular_task;
 }
 
 /**

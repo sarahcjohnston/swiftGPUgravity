@@ -659,7 +659,16 @@ void* runner_main(void* data) {
               "batch (tasks waiting: %d).",
               r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype],
               sched->waiting);*/
-          runner_gpu_complete_pair_batch(r, sched);
+          if (r->gpu.grav_batch_pair_count > 0) {
+            /* There are leftover pairs from after the last mid-walk flush.
+               Flush them and complete all tasks in the batch. */
+            runner_gpu_flush_leftover_pair(r);
+            runner_gpu_complete_pair_batch(r, sched);
+          } else {
+            /* The batch is empty (last mid-walk flush drained it exactly).
+               The current task still needs to be completed. */
+            runner_gpu_complete_pair_task(r, sched, t);
+          }
           t = NULL;
           break;
 

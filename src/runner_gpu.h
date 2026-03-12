@@ -174,6 +174,12 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_pair(struct runner* r);
 void runner_gpu_complete_self_batch(struct runner* r, struct scheduler* sched);
 
 /**
+ * @brief Complete a single pair task (decrement queue counter and mark done).
+ */
+void runner_gpu_complete_pair_task(struct runner* r, struct scheduler* sched,
+                                   struct task* t);
+
+/**
  * @brief Complete all unique pair tasks currently stored in the runner GPU
  * batch.
  */
