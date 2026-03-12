@@ -3358,12 +3358,11 @@ void runner_dopair_recursive_grav(struct runner* r, struct cell* ci,
   const int periodic = e->mesh->periodic;
   const double dim[3] = {e->mesh->dim[0], e->mesh->dim[1], e->mesh->dim[2]};
   const double max_distance = e->mesh->r_cut_max;
-  int flushed = 0;
 
   /* Anything to do here? */
   if (!((cell_is_active_gravity(ci, e) && ci->nodeID == nodeID) ||
         (cell_is_active_gravity(cj, e) && cj->nodeID == nodeID)))
-    return 0;
+    return;
 
 #ifdef SWIFT_DEBUG_CHECKS
 
@@ -3557,6 +3556,7 @@ int runner_dopair_recursive_grav_new(
   const int periodic = e->mesh->periodic;
   const double dim[3] = {e->mesh->dim[0], e->mesh->dim[1], e->mesh->dim[2]};
   const double max_distance = e->mesh->r_cut_max;
+  int flushed = 0;
 
   /* Anything to do here? */
   if (!((cell_is_active_gravity(ci, e) && ci->nodeID == nodeID) ||
@@ -3626,7 +3626,7 @@ int runner_dopair_recursive_grav_new(
       accumulate_add_ll(&multi_j->pot.num_interacted_pm,
                         multi_i->m_pole.num_gpart);
 #endif
-    return;
+    return 0;
   }
 
   /* OK, we actually need to compute this pair. Let's find the cheapest
