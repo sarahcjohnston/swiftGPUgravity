@@ -39,6 +39,54 @@ extern void pair_pp_offload_new(
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_d, int ncells,
     int max_cell_size, hipStream_t stream);
 
+static void runner_gpu_complete_self_task(struct runner* r,
+                                          struct scheduler* sched,
+                                          struct task* t) {
+  lock_lock(&sched->queues[r->qid].lock);
+  sched->queues[r->qid].gpu_self_tasks_left--;
+  (void)lock_unlock(&sched->queues[r->qid].lock);
+  scheduler_done(sched, t);
+}
+
+static void runner_gpu_complete_pair_task(struct runner* r,
+                                          struct scheduler* sched,
+                                          struct task* t) {
+  lock_lock(&sched->queues[r->qid].lock);
+  sched->queues[r->qid].gpu_pair_tasks_left--;
+  (void)lock_unlock(&sched->queues[r->qid].lock);
+  scheduler_done(sched, t);
+}
+
+void runner_gpu_complete_self_batch(struct runner* r, struct scheduler* sched) {
+  const int count = r->gpu.grav_batch_self_count;
+
+  for (int i = 0; i < count; i++) {
+    runner_gpu_complete_self_task(r, sched, r->gpu.grav_tasks_self[i]);
+    r->gpu.grav_cells_self[i] = NULL;
+    r->gpu.grav_tasks_self[i] = NULL;
+  }
+
+  r->gpu.grav_batch_self_count = 0;
+}
+
+void runner_gpu_complete_pair_batch(struct runner* r, struct scheduler* sched) {
+  const int count = r->gpu.grav_batch_pair_count;
+  struct task* prev_task = NULL;
+
+  for (int i = 0; i < count; i += 2) {
+    struct task* task = r->gpu.grav_tasks_pair[i / 2];
+    if (task != prev_task) {
+      runner_gpu_complete_pair_task(r, sched, task);
+      prev_task = task;
+    }
+    r->gpu.grav_cells_pair[i] = NULL;
+    r->gpu.grav_cells_pair[i + 1] = NULL;
+    r->gpu.grav_tasks_pair[i / 2] = NULL;
+  }
+
+  r->gpu.grav_batch_pair_count = 0;
+}
+
 /**
  * @brief Computes the interaction of all the particles in a cell with all the
  * particles of another cell.
@@ -58,7 +106,7 @@ extern void pair_pp_offload_new(
  * @param symmetric Are we updating both cells (1) or just ci (0) ?
  * @param allow_mpole Are we allowing the use of M2P interactions ?
  */
-void runner_dopair_grav_pp_new(
+enum runner_gpu_task_type runner_dopair_grav_pp_new(
     struct runner* r, struct cell* ci, struct cell* cj, const int symmetric,
     const int allow_mpole,
     struct gravity_gpu_values_send* gravity_gpu_values_send_pair,
@@ -66,8 +114,7 @@ void runner_dopair_grav_pp_new(
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair_d,
     struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    struct task* t, struct scheduler* sched, int ncells, int max_cell_size,
-    hipStream_t stream) {
+    struct task* t, int ncells, int max_cell_size, hipStream_t stream) {
 
   // printf("in the pp function! \n");
 
@@ -359,24 +406,13 @@ void runner_dopair_grav_pp_new(
       .use_full = use_full;
 
   // update that we packed a cell into our array
-  // printf("qid:%i pack count: %i ncells:%i \n", r->qid,
-  // r->gpu.grav_batch_pair_count, ncells);
   r->gpu.grav_batch_pair_count += 2;
-  // printf("qid:%i pack count: %i ncells:%i \n", r->qid,
-  // r->gpu.grav_batch_pair_count, ncells);
-
-  /*printf("PACK: qid=%d t=%p pack_count=%d ci=%p cj=%p\n",
-  r->qid, (void*)t, r->gpu.grav_batch_pair_count, (void*)ci, (void*)cj);*/
 
   gravity_cache_zero_output(ci_cache, gcount_padded_i);
   gravity_cache_zero_output(cj_cache, gcount_padded_j);
 
   cell_gunlocktree(b);
   cell_gunlocktree(a);
-
-  lock_lock(&sched->queues[r->qid].lock);
-  sched->queues[r->qid].gpu_pair_tasks_left--;
-  (void)lock_unlock(&sched->queues[r->qid].lock);
 
   /* If we have filled our batch, flush it and reset the count. */
   if (r->gpu.grav_batch_pair_count >= ncells) {
@@ -539,15 +575,10 @@ void runner_dopair_grav_pp_new(
       TIMER_TOC(timer_doself_grav_pp);
     }
 
-    // Reset counter for next pack
-    for (int i = 0; i < ncells; i += 2) {
-      scheduler_done(sched, grav_tasks_pair[i / 2]);
-      grav_cells_pair[i] = NULL;
-      grav_cells_pair[i + 1] = NULL;
-      grav_tasks_pair[i / 2] = NULL;
-    }
-    r->gpu.grav_batch_pair_count = 0;
+    return flushed_pair_task;
   }
+
+  return packed_task;
 }
 
 /**
@@ -556,13 +587,15 @@ void runner_dopair_grav_pp_new(
  * @param r The #runner.
  * @param ci The #cell to pack.
  * @param t The #task being executed.
- * @param sched The #scheduler owning the task.
  * @param ncells The batch capacity in cells.
  * @param max_cell_size The maximum number of particles per packed cell.
+ * @return The outcome of the GPU wrapper for this task.
  */
-void runner_doself_grav_pp_task_new(struct runner* r, struct cell* ci,
-                                    struct task* t, struct scheduler* sched,
-                                    int ncells, int max_cell_size) {
+enum runner_gpu_task_type runner_doself_grav_pp_task_new(struct runner* r,
+                                                         struct cell* ci,
+                                                         struct task* t,
+                                                         int ncells,
+                                                         int max_cell_size) {
 
   const struct engine* e = r->e;
   struct gravity_cache* const ci_cache = &r->ci_gravity_cache;
@@ -687,10 +720,6 @@ void runner_doself_grav_pp_task_new(struct runner* r, struct cell* ci,
   gravity_cache_zero_output(ci_cache, gcount_padded);
   cell_gunlocktree(ci);
 
-  lock_lock(&sched->queues[r->qid].lock);
-  sched->queues[r->qid].gpu_self_tasks_left--;
-  (void)lock_unlock(&sched->queues[r->qid].lock);
-
 #ifdef SWIFT_DEBUG_CHECKS
   for (int j = 0; j < gcount; j++) {
     for (int i = 0; i < gcount; i++) {
@@ -782,13 +811,10 @@ void runner_doself_grav_pp_task_new(struct runner* r, struct cell* ci,
       TIMER_TOC(timer_doself_grav_pp);
     }
 
-    for (int i = 0; i < ncells; i++) {
-      scheduler_done(sched, r->gpu.grav_tasks_self[i]);
-      r->gpu.grav_cells_self[i] = NULL;
-      r->gpu.grav_tasks_self[i] = NULL;
-    }
-    r->gpu.grav_batch_self_count = 0;
+    return flushed_self_task;
   }
+
+  return packed_task;
 }
 
 /**
@@ -806,15 +832,14 @@ void runner_doself_grav_pp_task_new(struct runner* r, struct cell* ci,
  * @param cj The other #cell.
  * @param gettimer Are we timing this ?
  */
-void runner_dopair_recursive_grav_new(
+enum runner_gpu_task_type runner_dopair_recursive_grav_new(
     struct runner* r, struct cell* ci, struct cell* cj, const int gettimer,
     struct gravity_gpu_values_send* gravity_gpu_values_send_pair,
     struct gravity_gpu_values_send* gravity_gpu_values_send_pair_d,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair_d,
     struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    struct task* t, struct scheduler* sched, int ncells, int max_cell_size,
-    int* packed, hipStream_t stream) {
+    struct task* t, int ncells, int max_cell_size, hipStream_t stream) {
 
   if (ci == NULL || cj == NULL)
     error("runner_dopair_recursive_grav_new got NULL cell");
@@ -839,7 +864,7 @@ void runner_dopair_recursive_grav_new(
   /* Anything to do here? */
   if (!((cell_is_active_gravity(ci, e) && ci->nodeID == nodeID) ||
         (cell_is_active_gravity(cj, e) && cj->nodeID == nodeID)))
-    return;
+    return regular_task;
 
 #ifdef SWIFT_DEBUG_CHECKS
 
@@ -904,7 +929,7 @@ void runner_dopair_recursive_grav_new(
       accumulate_add_ll(&multi_j->pot.num_interacted_pm,
                         multi_i->m_pole.num_gpart);
 #endif
-    return;
+    return regular_task;
   }
 
   /* OK, we actually need to compute this pair. Let's find the cheapest
@@ -916,10 +941,7 @@ void runner_dopair_recursive_grav_new(
 
     /* We have two cheap cells. Go P-P. */
     runner_dopair_recursive_grav(r, ci, cj, 0);
-
-    lock_lock(&sched->queues[r->qid].lock);
-    sched->queues[r->qid].gpu_pair_tasks_left--;
-    (void)lock_unlock(&sched->queues[r->qid].lock);
+    return regular_task;
 
     /* Can we use M-M interactions ? */
   } else if (gravity_M2L_accept_symmetric(e->gravity_properties, multi_i,
@@ -932,10 +954,7 @@ void runner_dopair_recursive_grav_new(
 
     /* Go M-M */
     runner_dopair_recursive_grav(r, ci, cj, 0);
-
-    lock_lock(&sched->queues[r->qid].lock);
-    sched->queues[r->qid].gpu_pair_tasks_left--;
-    (void)lock_unlock(&sched->queues[r->qid].lock);
+    return regular_task;
 
     /* Did we reach the bottom? */
   } else if (!ci->split && !cj->split) {
@@ -948,16 +967,15 @@ void runner_dopair_recursive_grav_new(
     // printf("qid:%i tree condition met\n", r->qid);}
 
     /* We have two leaves. Go P-P. */
-    runner_dopair_grav_pp_new(
+    return runner_dopair_grav_pp_new(
         r, ci, cj, /*symmetric*/ 1, /*allow_mpoles=*/1,
         gravity_gpu_values_send_pair, gravity_gpu_values_send_pair_d,
         gravity_gpu_values_recv_pair, gravity_gpu_values_recv_pair_d,
-        grav_cells_pair, grav_tasks_pair, t, sched, ncells, max_cell_size,
-        stream);
-
-    *packed = 1;
+        grav_cells_pair, grav_tasks_pair, t, ncells, max_cell_size, stream);
 
   } else {
+
+    enum runner_gpu_task_type task_type = regular_task;
 
     // printf("qid:%i recursing\n", r->qid);
 
@@ -977,12 +995,14 @@ void runner_dopair_recursive_grav_new(
         for (int k = 0; k < 8; k++) {
           if (ci->progeny[k] != NULL) {
             // runner_dopair_recursive_grav(r, ci->progeny[k], cj, 0);
-            runner_dopair_recursive_grav_new(
-                r, ci->progeny[k], cj, 0, gravity_gpu_values_send_pair,
-                gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair,
-                gravity_gpu_values_recv_pair_d, grav_cells_pair,
-                grav_tasks_pair, t, sched, ncells, max_cell_size, packed,
-                stream);
+            enum runner_gpu_task_type child_type =
+                runner_dopair_recursive_grav_new(
+                    r, ci->progeny[k], cj, 0, gravity_gpu_values_send_pair,
+                    gravity_gpu_values_send_pair_d,
+                    gravity_gpu_values_recv_pair,
+                    gravity_gpu_values_recv_pair_d, grav_cells_pair,
+                    grav_tasks_pair, t, ncells, max_cell_size, stream);
+            if (child_type > task_type) task_type = child_type;
           }
         }
 
@@ -995,12 +1015,14 @@ void runner_dopair_recursive_grav_new(
         for (int k = 0; k < 8; k++) {
           if (cj->progeny[k] != NULL) {
             // runner_dopair_recursive_grav(r, ci, cj->progeny[k], 0);
-            runner_dopair_recursive_grav_new(
-                r, ci, cj->progeny[k], 0, gravity_gpu_values_send_pair,
-                gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair,
-                gravity_gpu_values_recv_pair_d, grav_cells_pair,
-                grav_tasks_pair, t, sched, ncells, max_cell_size, packed,
-                stream);
+            enum runner_gpu_task_type child_type =
+                runner_dopair_recursive_grav_new(
+                    r, ci, cj->progeny[k], 0, gravity_gpu_values_send_pair,
+                    gravity_gpu_values_send_pair_d,
+                    gravity_gpu_values_recv_pair,
+                    gravity_gpu_values_recv_pair_d, grav_cells_pair,
+                    grav_tasks_pair, t, ncells, max_cell_size, stream);
+            if (child_type > task_type) task_type = child_type;
           }
         }
       }
@@ -1013,12 +1035,14 @@ void runner_dopair_recursive_grav_new(
         for (int k = 0; k < 8; k++) {
           if (cj->progeny[k] != NULL) {
             // runner_dopair_recursive_grav(r, ci, cj->progeny[k], 0);
-            runner_dopair_recursive_grav_new(
-                r, ci, cj->progeny[k], 0, gravity_gpu_values_send_pair,
-                gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair,
-                gravity_gpu_values_recv_pair_d, grav_cells_pair,
-                grav_tasks_pair, t, sched, ncells, max_cell_size, packed,
-                stream);
+            enum runner_gpu_task_type child_type =
+                runner_dopair_recursive_grav_new(
+                    r, ci, cj->progeny[k], 0, gravity_gpu_values_send_pair,
+                    gravity_gpu_values_send_pair_d,
+                    gravity_gpu_values_recv_pair,
+                    gravity_gpu_values_recv_pair_d, grav_cells_pair,
+                    grav_tasks_pair, t, ncells, max_cell_size, stream);
+            if (child_type > task_type) task_type = child_type;
           }
         }
 
@@ -1031,19 +1055,25 @@ void runner_dopair_recursive_grav_new(
         for (int k = 0; k < 8; k++) {
           if (ci->progeny[k] != NULL) {
             // runner_dopair_recursive_grav(r, ci->progeny[k], cj, 0);
-            runner_dopair_recursive_grav_new(
-                r, ci->progeny[k], cj, 0, gravity_gpu_values_send_pair,
-                gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair,
-                gravity_gpu_values_recv_pair_d, grav_cells_pair,
-                grav_tasks_pair, t, sched, ncells, max_cell_size, packed,
-                stream);
+            enum runner_gpu_task_type child_type =
+                runner_dopair_recursive_grav_new(
+                    r, ci->progeny[k], cj, 0, gravity_gpu_values_send_pair,
+                    gravity_gpu_values_send_pair_d,
+                    gravity_gpu_values_recv_pair,
+                    gravity_gpu_values_recv_pair_d, grav_cells_pair,
+                    grav_tasks_pair, t, ncells, max_cell_size, stream);
+            if (child_type > task_type) task_type = child_type;
           }
         }
       }
     }
+
+    if (gettimer) TIMER_TOC(timer_dosub_pair_grav);
+    return task_type;
   }
 
   if (gettimer) TIMER_TOC(timer_dosub_pair_grav);
+  return regular_task;
 }
 
 /**
@@ -1195,14 +1225,14 @@ void runner_gpu_clean(struct runner* r) {
  * @brief Flush any leftover packed self-gravity work owned by a runner.
  *
  * @param r The runner whose GPU batch should be flushed.
- * @param sched The scheduler owning the queued tasks.
+ * @return The outcome of the leftover flush attempt.
  */
-void runner_gpu_flush_leftover_self(struct runner* r, struct scheduler* sched) {
+enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner* r) {
 
   const int ncells_flush_self = r->gpu.grav_batch_self_count;
   const int max_cell_size = r->gpu.grav_max_cell_size;
 
-  if (ncells_flush_self == 0) return;
+  if (ncells_flush_self == 0) return regular_task;
 
   {
     TIMER_TIC;
@@ -1265,27 +1295,21 @@ void runner_gpu_flush_leftover_self(struct runner* r, struct scheduler* sched) {
     TIMER_TOC(timer_doself_grav_pp);
   }
 
-  for (int i = 0; i < ncells_flush_self; i++) {
-    scheduler_done(sched, r->gpu.grav_tasks_self[i]);
-    r->gpu.grav_cells_self[i] = NULL;
-    r->gpu.grav_tasks_self[i] = NULL;
-  }
-
-  r->gpu.grav_batch_self_count = 0;
+  return flushed_self_task;
 }
 
 /**
  * @brief Flush any leftover packed pair-gravity work owned by a runner.
  *
  * @param r The runner whose GPU batch should be flushed.
- * @param sched The scheduler owning the queued tasks.
+ * @return The outcome of the leftover flush attempt.
  */
-void runner_gpu_flush_leftover_pair(struct runner* r, struct scheduler* sched) {
+enum runner_gpu_task_type runner_gpu_flush_leftover_pair(struct runner* r) {
 
   const int ncells_flush_pair = r->gpu.grav_batch_pair_count;
   const int max_cell_size = r->gpu.grav_max_cell_size;
 
-  if (ncells_flush_pair == 0) return;
+  if (ncells_flush_pair == 0) return regular_task;
 
   {
     TIMER_TIC;
@@ -1410,18 +1434,10 @@ void runner_gpu_flush_leftover_pair(struct runner* r, struct scheduler* sched) {
                 .pot_i;
       }
       cell_gunlocktree(b);
-
-      scheduler_done(sched, r->gpu.grav_tasks_pair[j / 2]);
     }
 
     TIMER_TOC(timer_doself_grav_pp);
   }
 
-  for (int i = 0; i < ncells_flush_pair; i += 2) {
-    r->gpu.grav_cells_pair[i] = NULL;
-    r->gpu.grav_cells_pair[i + 1] = NULL;
-    r->gpu.grav_tasks_pair[i / 2] = NULL;
-  }
-
-  r->gpu.grav_batch_pair_count = 0;
+  return flushed_pair_task;
 }
