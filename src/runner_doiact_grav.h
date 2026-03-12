@@ -83,42 +83,7 @@ void runner_doself_grav_pp_new(
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_d, int ncells,
     int max_cell_size, hipStream_t stream);
 
-/**
- * @brief Pack, launch, and unpack a batched self-gravity GPU task.
- *
- * @param r The #runner.
- * @param c The #cell to pack.
- * @param t The #task being executed.
- * @param sched The #scheduler owning the task.
- * @param ncells The batch capacity in cells.
- * @param max_cell_size The maximum number of particles per packed cell.
- */
-void runner_doself_grav_pp_task_new(struct runner* r, struct cell* c,
-                                    struct task* t, struct scheduler* sched,
-                                    int ncells, int max_cell_size);
-
 void runner_dopair_grav_pp(struct runner* r, struct cell* ci, struct cell* cj,
                            const int symmetric, const int allow_mpole);
-
-void runner_dopair_grav_pp_new(
-    struct runner* r, struct cell* ci, struct cell* cj, const int symmetric,
-    const int allow_mpole,
-    struct gravity_gpu_values_send* gravity_gpu_values_send,
-    struct gravity_gpu_values_send* gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv_d,
-    struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    struct task* t, struct scheduler* sched, int ncells, int max_cell_size,
-    hipStream_t stream);
-
-void runner_dopair_recursive_grav_new(
-    struct runner* r, struct cell* ci, struct cell* cj, const int gettimer,
-    struct gravity_gpu_values_send* gravity_gpu_values_send,
-    struct gravity_gpu_values_send* gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv_d,
-    struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    struct task* t, struct scheduler* sched, int ncells, int max_cell_size,
-    int* packed, hipStream_t stream);
 
 #endif /* SWIFT_RUNNER_DOIACT_GRAV_H */
