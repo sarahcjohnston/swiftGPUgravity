@@ -190,19 +190,14 @@ void* runner_main(void* data) {
         /* Did I get anything? */
         if (t == NULL) {
 
-          int flushed = 0;
-
           if (runner_gpu_flush_leftover_self(r) == flushed_self_task) {
             runner_gpu_complete_self_batch(r, sched);
-            flushed = 1;
+            prev = NULL;
+            continue;
           }
 
           if (runner_gpu_flush_leftover_pair(r) == flushed_pair_task) {
             runner_gpu_complete_pair_batch(r, sched);
-            flushed = 1;
-          }
-
-          if (flushed) {
             prev = NULL;
             continue;
           }
@@ -628,15 +623,19 @@ void* runner_main(void* data) {
       switch (gpu_task_type) {
         case regular_task:
           message(
-              "Runner %d completed task %s/%s and cleaning up as regular task.",
-              r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype]);
+              "Runner %d completed task %s/%s and cleaning up as regular task "
+              "(tasks waiting: %d).",
+              r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype],
+              sched->waiting);
           t = scheduler_done(sched, t);
           break;
 
         case packed_task:
           message(
-              "Runner %d completed task %s/%s and cleaning up as packed task.",
-              r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype]);
+              "Runner %d completed task %s/%s and cleaning up as packed task "
+              "(tasks waiting: %d).",
+              r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype],
+              sched->waiting);
           t->toc = getticks();
           t->total_ticks += t->toc - t->tic;
           t = NULL;
@@ -645,8 +644,9 @@ void* runner_main(void* data) {
         case flushed_self_task:
           message(
               "Runner %d completed task %s/%s and cleaning up as flushed self "
-              "batch.",
-              r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype]);
+              "batch (tasks waiting: %d).",
+              r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype],
+              sched->waiting);
           runner_gpu_complete_self_batch(r, sched);
           t = NULL;
           break;
@@ -654,8 +654,9 @@ void* runner_main(void* data) {
         case flushed_pair_task:
           message(
               "Runner %d completed task %s/%s and cleaning up as flushed pair "
-              "batch.",
-              r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype]);
+              "batch (tasks waiting: %d).",
+              r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype],
+              sched->waiting);
           runner_gpu_complete_pair_batch(r, sched);
           t = NULL;
           break;
