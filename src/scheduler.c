@@ -1475,7 +1475,7 @@ static void scheduler_splittask_gravity(struct task* t, struct scheduler* s) {
         /* NOTE: we want both cells to be smaller than this size to fit on
          * the GPU so we don't use the product like master would. */
         if (scheduler_dosub &&
-            (gcount_i < ((long long)space_subsize_self_grav) ||
+            (gcount_i < ((long long)space_subsize_self_grav) &&
              gcount_j < ((long long)space_subsize_self_grav))) {
           /* Otherwise, split it. */
         } else {
