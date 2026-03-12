@@ -94,6 +94,9 @@ GPU_DLINK_OBJECT = @GPU_DLINK_OBJECT@
 if HAVEGPU
 GPU_OBJECTS = gpu_grav.o $(GPU_DLINK_OBJECT)
 
+swift_DEPENDENCIES = $(GPU_OBJECTS)
+swift_mpi_DEPENDENCIES = $(GPU_OBJECTS)
+
 gpu_grav.o: grav_pp_offload.cu
 	$(GPUCC) $(GPU_COMPILE_MODE_FLAGS) grav_pp_offload.cu -o gpu_grav.o $(GPU_CPPFLAGS) $(GPU_FLAGS) -I./src -I.
 
