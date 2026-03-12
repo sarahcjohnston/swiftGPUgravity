@@ -29,6 +29,23 @@ struct gravity_gpu_values_recv;
 struct gravity_gpu_values_send;
 
 /**
+ * @brief Enumeration of the types of operation a GPU task can have performed.
+ *
+ * `regular_task` means the task completed normally and should be finished with
+ * the standard scheduler path.
+ * `packed_task` means the task was packed into a GPU batch but the batch was
+ * not flushed yet.
+ * `flushed_self_task` means a self-gravity GPU batch was flushed.
+ * `flushed_pair_task` means a pair-gravity GPU batch was flushed.
+ */
+enum runner_gpu_task_type {
+  regular_task = 0,
+  packed_task = 1,
+  flushed_self_task = 2,
+  flushed_pair_task = 3
+};
+
+/**
  * @brief GPU-specific state owned by a single runner.
  */
 struct gpu_runner {
@@ -96,18 +113,22 @@ void runner_gpu_clean(struct runner* r);
  * @param r The #runner.
  * @param c The #cell to pack.
  * @param t The #task being executed.
- * @param sched The #scheduler owning the task.
  * @param ncells The batch capacity in cells.
  * @param max_cell_size The maximum number of particles per packed cell.
+ * @return The outcome of the GPU wrapper for this task.
  */
-void runner_doself_grav_pp_task_new(struct runner* r, struct cell* c,
-                                    struct task* t, struct scheduler* sched,
-                                    int ncells, int max_cell_size);
+enum runner_gpu_task_type runner_doself_grav_pp_task_new(struct runner* r,
+                                                         struct cell* c,
+                                                         struct task* t,
+                                                         int ncells,
+                                                         int max_cell_size);
 
 /**
  * @brief Pack one leaf pair-gravity interaction into the runner GPU batch.
+ *
+ * @return The outcome of the GPU wrapper for this task.
  */
-void runner_dopair_grav_pp_new(
+enum runner_gpu_task_type runner_dopair_grav_pp_new(
     struct runner* r, struct cell* ci, struct cell* cj, const int symmetric,
     const int allow_mpole,
     struct gravity_gpu_values_send* gravity_gpu_values_send,
@@ -115,36 +136,47 @@ void runner_dopair_grav_pp_new(
     struct gravity_gpu_values_recv* gravity_gpu_values_recv,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_d,
     struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    struct task* t, struct scheduler* sched, int ncells, int max_cell_size,
-    hipStream_t stream);
+    struct task* t, int ncells, int max_cell_size, hipStream_t stream);
 
 /**
  * @brief Recursively process a pair-gravity task with GPU batching.
+ *
+ * @return The outcome of the GPU wrapper for this task.
  */
-void runner_dopair_recursive_grav_new(
+enum runner_gpu_task_type runner_dopair_recursive_grav_new(
     struct runner* r, struct cell* ci, struct cell* cj, const int gettimer,
     struct gravity_gpu_values_send* gravity_gpu_values_send,
     struct gravity_gpu_values_send* gravity_gpu_values_send_d,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_d,
     struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    struct task* t, struct scheduler* sched, int ncells, int max_cell_size,
-    int* packed, hipStream_t stream);
+    struct task* t, int ncells, int max_cell_size, hipStream_t stream);
 
 /**
  * @brief Flush any leftover packed self-gravity work owned by a runner.
  *
  * @param r The runner whose GPU batch should be flushed.
- * @param sched The scheduler owning the queued tasks.
+ * @return The outcome of the leftover flush attempt.
  */
-void runner_gpu_flush_leftover_self(struct runner* r, struct scheduler* sched);
+enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner* r);
 
 /**
  * @brief Flush any leftover packed pair-gravity work owned by a runner.
  *
  * @param r The runner whose GPU batch should be flushed.
- * @param sched The scheduler owning the queued tasks.
+ * @return The outcome of the leftover flush attempt.
  */
-void runner_gpu_flush_leftover_pair(struct runner* r, struct scheduler* sched);
+enum runner_gpu_task_type runner_gpu_flush_leftover_pair(struct runner* r);
+
+/**
+ * @brief Complete all self tasks currently stored in the runner GPU batch.
+ */
+void runner_gpu_complete_self_batch(struct runner* r, struct scheduler* sched);
+
+/**
+ * @brief Complete all unique pair tasks currently stored in the runner GPU
+ * batch.
+ */
+void runner_gpu_complete_pair_batch(struct runner* r, struct scheduler* sched);
 
 #endif /* SWIFT_RUNNER_GPU_H */
