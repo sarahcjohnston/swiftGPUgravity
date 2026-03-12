@@ -191,12 +191,14 @@ void* runner_main(void* data) {
         if (t == NULL) {
 
           if (runner_gpu_flush_leftover_self(r) == flushed_self_task) {
+            message("Flushed leftover self batch in runner %d.", r->id);
             runner_gpu_complete_self_batch(r, sched);
             prev = NULL;
             continue;
           }
 
           if (runner_gpu_flush_leftover_pair(r) == flushed_pair_task) {
+            message("Flushed leftover pair batch in runner %d.", r->id);
             runner_gpu_complete_pair_batch(r, sched);
             prev = NULL;
             continue;
