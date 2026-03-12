@@ -624,41 +624,21 @@ void* runner_main(void* data) {
 
       switch (gpu_task_type) {
         case regular_task:
-          message(
-              "Runner %d completed task %s/%s and cleaning up as regular task "
-              "(tasks waiting: %d).",
-              r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype],
-              sched->waiting);
           t = scheduler_done(sched, t);
           break;
 
         case packed_task:
-          message(
-              "Runner %d completed task %s/%s and cleaning up as packed task "
-              "(tasks waiting: %d).",
-              r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype],
-              sched->waiting);
           t->toc = getticks();
           t->total_ticks += t->toc - t->tic;
           t = NULL;
           break;
 
         case flushed_self_task:
-          message(
-              "Runner %d completed task %s/%s and cleaning up as flushed self "
-              "batch (tasks waiting: %d).",
-              r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype],
-              sched->waiting);
           runner_gpu_complete_self_batch(r, sched);
           t = NULL;
           break;
 
         case flushed_pair_task:
-          message(
-              "Runner %d completed task %s/%s and cleaning up as flushed pair "
-              "batch (tasks waiting: %d).",
-              r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype],
-              sched->waiting);
           if (r->gpu.grav_batch_pair_count > 0) {
             /* There are leftover pairs from after the last mid-walk flush.
                Flush them and complete all tasks in the batch. */
