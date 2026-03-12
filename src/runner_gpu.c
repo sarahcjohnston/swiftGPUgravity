@@ -521,12 +521,6 @@ void runner_dopair_grav_pp_new(
               gravity_gpu_values_recv_pair[i + j * max_cell_size].a_z_i;
           ci_pair->grav.parts[i].potential +=
               gravity_gpu_values_recv_pair[i + j * max_cell_size].pot_i;
-
-          /*if (ci0->grav.parts[i].a_grav[0] == 0){
-          printf("cell:%i part:%i gcount:%i acceleration: [%f %f %f]\n", j, i,
-          gravity_gpu_values_send_pair[j*max_cell_size].gcounts,
-          ci0->grav.parts[i].a_grav[0], ci0->grav.parts[i].a_grav[1],
-          ci0->grav.parts[i].a_grav[2]);}*/
         }
         cell_gunlocktree(a_pair);
 
@@ -546,14 +540,13 @@ void runner_dopair_grav_pp_new(
               gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size].pot_i;
         }
         cell_gunlocktree(b_pair);
-
-        scheduler_done(sched, grav_tasks_pair[j / 2]);
       }
 
       TIMER_TOC(timer_doself_grav_pp);
     }
-    // reset counter for next pack
+    // Reset counter for next pack
     for (int i = 0; i < ncells; i += 2) {
+      scheduler_done(sched, grav_tasks_pair[i / 2]);
       grav_cells_pair[i] = NULL;
       grav_cells_pair[i + 1] = NULL;
       grav_tasks_pair[i / 2] = NULL;
