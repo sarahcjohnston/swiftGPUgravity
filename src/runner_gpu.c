@@ -544,12 +544,6 @@ void runner_dopair_grav_pp_new(
               gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size].a_z_i;
           cj_pair->grav.parts[i].potential +=
               gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size].pot_i;
-
-          /*if (cj0->grav.parts[i].a_grav[0] == 0){
-          printf("cell:%i part:%i gcount:%i acceleration: [%f %f %f]\n", j, i,
-          gravity_gpu_values_send_pair[j*max_cell_size].gcounts,
-          cj0->grav.parts[i].a_grav[0], cj0->grav.parts[i].a_grav[1],
-          cj0->grav.parts[i].a_grav[2]);}*/
         }
         cell_gunlocktree(b_pair);
 
