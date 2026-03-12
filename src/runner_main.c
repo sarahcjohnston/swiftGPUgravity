@@ -627,21 +627,35 @@ void* runner_main(void* data) {
 
       switch (gpu_task_type) {
         case regular_task:
+          message(
+              "Runner %d completed task %s/%s and cleaning up as regular task.",
+              r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype]);
           t = scheduler_done(sched, t);
           break;
 
         case packed_task:
+          message(
+              "Runner %d completed task %s/%s and cleaning up as packed task.",
+              r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype]);
           t->toc = getticks();
           t->total_ticks += t->toc - t->tic;
           t = NULL;
           break;
 
         case flushed_self_task:
+          message(
+              "Runner %d completed task %s/%s and cleaning up as flushed self "
+              "batch.",
+              r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype]);
           runner_gpu_complete_self_batch(r, sched);
           t = NULL;
           break;
 
         case flushed_pair_task:
+          message(
+              "Runner %d completed task %s/%s and cleaning up as flushed pair "
+              "batch.",
+              r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype]);
           runner_gpu_complete_pair_batch(r, sched);
           t = NULL;
           break;
