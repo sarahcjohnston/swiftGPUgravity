@@ -3363,7 +3363,7 @@ void runner_dopair_recursive_grav(struct runner* r, struct cell* ci,
   /* Anything to do here? */
   if (!((cell_is_active_gravity(ci, e) && ci->nodeID == nodeID) ||
         (cell_is_active_gravity(cj, e) && cj->nodeID == nodeID)))
-    return;
+    return 0;
 
 #ifdef SWIFT_DEBUG_CHECKS
 
