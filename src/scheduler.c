@@ -2961,25 +2961,6 @@ struct task* scheduler_gettask(struct scheduler* s, int qid,
           /* Get a pointer to the queue we're stealing from */
           struct queue* q_stl = &s->queues[qstl_id];
 
-          /* Can we lock our own queue? */
-          // if (lock_trylock(&q->lock) != 0) {
-
-          /* No --> continue and try a different queue */
-          // continue;
-
-          // } else {
-
-          /* Yes --> Try locking the queue we steal from */
-          // if (lock_trylock(&q_stl->lock) != 0) {
-
-          /* Failed? --> Unlock the 1st queue and
-             try again */
-          // if (lock_unlock(&q->lock) != 0)
-          //  error("Unlocking our queue failed");
-          // continue;
-          //}
-          //}
-
           /* We now have locked q and q_stl */
 
           /* Try to get a task from that random queue */
@@ -2992,13 +2973,7 @@ struct task* scheduler_gettask(struct scheduler* s, int qid,
           /* Lucky? i.e. did we actually get a task? */
           if (res != NULL) {
 
-            /*fprintf(stderr,
-        "[STEAL] thief=%d victim=%d task=%p type=%d subtype=%d waiting=%i\n",
-        qid, qstl_id, (void*)res, res->type, res->subtype,
-        s->waiting);*/
-
             /* For GPU tasks: Move counter from the robbed to the robber */
-
             enum task_subtypes subtype = res->subtype;
             enum task_types type = res->type;
 
@@ -3012,23 +2987,21 @@ struct task* scheduler_gettask(struct scheduler* s, int qid,
               atomic_dec(&q_stl->gpu_pair_tasks_left);
             }
 
-            /* Run with the task */
-            /*if (lock_unlock(&q->lock) != 0) error("Unlocking our queue
-            failed"); if (lock_unlock(&q_stl->lock) != 0) error("Unlocking the
-            stealing queue failed");*/ //maybe need this bit?
-
             break;
           } else {
 
             /* Reduce the size of the list of non-empty queues */
             qids[ind] = qids[--count];
           }
-
-          /*if (lock_unlock(&q->lock) != 0) error("Unlocking our queue failed");
-          if (lock_unlock(&q_stl->lock) != 0)
-            error("Unlocking the stealing queue failed");*/
         }
         if (res != NULL) break;
+      }
+      /* If we failed, but have batched tasks on the GPU, Avoid sleeping, we
+       * will flush them in runner_main. */
+      if (res == NULL) {
+        if (q->gpu_self_tasks_left > 0 || q->gpu_pair_tasks_left > 0) {
+          return NULL;
+        }
       }
     }
 
