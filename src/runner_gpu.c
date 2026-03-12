@@ -22,12 +22,12 @@
 #include "engine.h"
 #include "error.h"
 #include "gpu_functions.h"
+#include "gpu_mapping.h"
 #include "runner.h"
 #include "runner_doiact_grav.h"
 #include "scheduler.h"
 #include "timers.h"
 
-#include <hip/hip_runtime_api.h>
 #include <stdlib.h>
 
 extern void pair_pp_offload_new(
@@ -37,7 +37,7 @@ extern void pair_pp_offload_new(
     int cj_active, float dim_0, float dim_1, float dim_2, int symmetric,
     struct gravity_gpu_values_send* gravity_gpu_values_send_d,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_d, int ncells,
-    int max_cell_size, hipStream_t stream);
+    int max_cell_size, GPUStream stream);
 
 static void runner_gpu_complete_self_task(struct runner* r,
                                           struct scheduler* sched,
@@ -106,7 +106,7 @@ void runner_gpu_complete_pair_batch(struct runner* r, struct scheduler* sched) {
  * @param grav_tasks_pair Array of task pointers for this batch.
  * @param t The top-level #task currently being processed.
  * @param max_cell_size The maximum number of particles per packed cell.
- * @param stream The HIP stream used for timing events.
+ * @param stream The GPU stream used for timing events.
  */
 static void runner_dopair_grav_pp_pack(
     struct runner* r, struct cell* ci, struct cell* cj, const int symmetric,
@@ -114,7 +114,7 @@ static void runner_dopair_grav_pp_pack(
     struct gravity_gpu_values_send* gravity_gpu_values_send_pair,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair,
     struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    struct task* t, int max_cell_size, hipStream_t stream) {
+    struct task* t, int max_cell_size, GPUStream stream) {
 
   /* Recover some useful constants */
   const struct engine* e = r->e;
@@ -214,11 +214,11 @@ static void runner_dopair_grav_pp_pack(
     ;
   }
 
-  hipEvent_t startpack, stoppack;
-  hipEventCreate(&startpack);
-  hipEventCreate(&stoppack);
+  GPUEvent startpack, stoppack;
+  GPUEventCreate(&startpack);
+  GPUEventCreate(&stoppack);
 
-  hipEventRecord(startpack, stream);
+  GPUEventRecord(startpack, stream);
 
   /* ---- Pack ci data into the send buffer ---- */
   {
@@ -430,7 +430,7 @@ static void runner_dopair_grav_pp_pack(
  * completed).
  * @param ncells The batch capacity (number of cell slots).
  * @param max_cell_size The maximum number of particles per packed cell.
- * @param stream The HIP stream to use.
+ * @param stream The GPU stream to use.
  */
 static void runner_dopair_grav_pp_flush(
     struct runner* r,
@@ -440,7 +440,7 @@ static void runner_dopair_grav_pp_flush(
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair_d,
     struct cell** grav_cells_pair, struct task** grav_tasks_pair,
     struct task* current_task, int ncells, int max_cell_size,
-    hipStream_t stream) {
+    GPUStream stream) {
 
   const int ncells_flush = r->gpu.grav_batch_pair_count;
   if (ncells_flush == 0) return;
@@ -475,18 +475,18 @@ static void runner_dopair_grav_pp_flush(
   {
     TIMER_TIC;
 
-    hipMemcpyAsync(
+    GPUMemcpyAsync(
         gravity_gpu_values_send_pair_d, gravity_gpu_values_send_pair,
         ncells_flush * max_cell_size * sizeof(struct gravity_gpu_values_send),
-        hipMemcpyHostToDevice, stream);
-    hipMemcpyAsync(
+        GPU_MEMCPY_HOST_TO_DEVICE, stream);
+    GPUMemcpyAsync(
         gravity_gpu_values_recv_pair_d, gravity_gpu_values_recv_pair,
         ncells_flush * max_cell_size * sizeof(struct gravity_gpu_values_recv),
-        hipMemcpyHostToDevice, stream);
+        GPU_MEMCPY_HOST_TO_DEVICE, stream);
 
-    hipError_t err2 = hipGetLastError();
-    if (err2 != hipSuccess)
-      printf("Error (flush H2D): %s\n", hipGetErrorString(err2));
+    GPUError err2 = GPUGetLastError();
+    if (err2 != GPU_SUCCESS)
+      printf("Error (flush H2D): %s\n", GPUGetErrorString(err2));
 
     /* ---- Kernel launch ---- */
     pair_pp_offload_new(
@@ -496,19 +496,19 @@ static void runner_dopair_grav_pp_flush(
         gravity_gpu_values_recv_pair_d, ncells_flush, max_cell_size, stream);
 
     /* ---- D2H copy ---- */
-    hipMemcpyAsync(
+    GPUMemcpyAsync(
         gravity_gpu_values_recv_pair, gravity_gpu_values_recv_pair_d,
         ncells_flush * max_cell_size * sizeof(struct gravity_gpu_values_recv),
-        hipMemcpyDeviceToHost, stream);
+        GPU_MEMCPY_DEVICE_TO_HOST, stream);
 
-    hipStreamSynchronize(stream);
+    GPUStreamSynchronize(stream);
 
     TIMER_TOC(timer_doself_grav_pp);
   }
 
-  hipError_t err3 = hipGetLastError();
-  if (err3 != hipSuccess)
-    printf("Error (flush kernel): %s\n", hipGetErrorString(err3));
+  GPUError err3 = GPUGetLastError();
+  if (err3 != GPU_SUCCESS)
+    printf("Error (flush kernel): %s\n", GPUGetErrorString(err3));
 
   /* ---- Unpack results back to particles ---- */
   {
@@ -611,7 +611,7 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair_d,
     struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    struct task* t, int ncells, int max_cell_size, hipStream_t stream) {
+    struct task* t, int ncells, int max_cell_size, GPUStream stream) {
 
   /* Pack the pair into the batch buffer. */
   runner_dopair_grav_pp_pack(r, ci, cj, symmetric, allow_mpole,
@@ -671,10 +671,10 @@ enum runner_gpu_task_type runner_doself_grav_pp_task_new(struct runner* r,
     ;
   }
 
-  hipEvent_t startpack, stoppack;
-  hipEventCreate(&startpack);
-  hipEventCreate(&stoppack);
-  hipEventRecord(startpack, r->gpu.stream);
+  GPUEvent startpack, stoppack;
+  GPUEventCreate(&startpack);
+  GPUEventCreate(&stoppack);
+  GPUEventRecord(startpack, r->gpu.stream);
 
   {
     TIMER_TIC;
@@ -780,61 +780,61 @@ enum runner_gpu_task_type runner_doself_grav_pp_task_new(struct runner* r,
 #endif
 
   if (r->gpu.grav_batch_self_count >= ncells) {
-    hipEvent_t startcopyH2D, stopcopyH2D;
-    hipEventCreate(&startcopyH2D);
-    hipEventCreate(&stopcopyH2D);
-    hipEventRecord(startcopyH2D, r->gpu.stream);
+    GPUEvent startcopyH2D, stopcopyH2D;
+    GPUEventCreate(&startcopyH2D);
+    GPUEventCreate(&stopcopyH2D);
+    GPUEventRecord(startcopyH2D, r->gpu.stream);
 
     {
       TIMER_TIC;
 
-      hipMemcpyAsync(
+      GPUMemcpyAsync(
           r->gpu.gravity_gpu_values_send_self_d,
           r->gpu.gravity_gpu_values_send_self,
           ncells * max_cell_size * sizeof(struct gravity_gpu_values_send),
-          hipMemcpyHostToDevice, r->gpu.stream);
-      hipMemcpyAsync(
+          GPU_MEMCPY_HOST_TO_DEVICE, r->gpu.stream);
+      GPUMemcpyAsync(
           r->gpu.gravity_gpu_values_recv_self_d,
           r->gpu.gravity_gpu_values_recv_self,
           ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv),
-          hipMemcpyHostToDevice, r->gpu.stream);
+          GPU_MEMCPY_HOST_TO_DEVICE, r->gpu.stream);
 
-      hipEventRecord(stopcopyH2D, r->gpu.stream);
+      GPUEventRecord(stopcopyH2D, r->gpu.stream);
 
-      hipError_t err2 = hipGetLastError();
-      if (err2 != hipSuccess) printf("Error2: %s\n", hipGetErrorString(err2));
+      GPUError err2 = GPUGetLastError();
+      if (err2 != GPU_SUCCESS) printf("Error2: %s\n", GPUGetErrorString(err2));
 
-      hipEvent_t startker, stopker;
-      hipEventCreate(&startker);
-      hipEventCreate(&stopker);
-      hipEventRecord(startker, r->gpu.stream);
+      GPUEvent startker, stopker;
+      GPUEventCreate(&startker);
+      GPUEventCreate(&stopker);
+      GPUEventRecord(startker, r->gpu.stream);
 
       runner_doself_recursive_grav_new(r, ci, 1,
                                        r->gpu.gravity_gpu_values_send_self_d,
                                        r->gpu.gravity_gpu_values_recv_self_d,
                                        ncells, max_cell_size, r->gpu.stream);
 
-      hipEventRecord(stopker, r->gpu.stream);
+      GPUEventRecord(stopker, r->gpu.stream);
 
-      hipEvent_t startcopyD2H, stopcopyD2H;
-      hipEventCreate(&startcopyD2H);
-      hipEventCreate(&stopcopyD2H);
-      hipEventRecord(startcopyD2H, r->gpu.stream);
+      GPUEvent startcopyD2H, stopcopyD2H;
+      GPUEventCreate(&startcopyD2H);
+      GPUEventCreate(&stopcopyD2H);
+      GPUEventRecord(startcopyD2H, r->gpu.stream);
 
-      hipMemcpyAsync(
+      GPUMemcpyAsync(
           r->gpu.gravity_gpu_values_recv_self,
           r->gpu.gravity_gpu_values_recv_self_d,
           ncells * max_cell_size * sizeof(struct gravity_gpu_values_recv),
-          hipMemcpyDeviceToHost, r->gpu.stream);
+          GPU_MEMCPY_DEVICE_TO_HOST, r->gpu.stream);
 
-      hipEventRecord(stopcopyD2H, r->gpu.stream);
-      hipStreamSynchronize(r->gpu.stream);
+      GPUEventRecord(stopcopyD2H, r->gpu.stream);
+      GPUStreamSynchronize(r->gpu.stream);
 
       TIMER_TOC(timer_doself_grav_pp);
     }
 
-    hipError_t err3 = hipGetLastError();
-    if (err3 != hipSuccess) printf("Error3: %s\n", hipGetErrorString(err3));
+    GPUError err3 = GPUGetLastError();
+    if (err3 != GPU_SUCCESS) printf("Error3: %s\n", GPUGetErrorString(err3));
 
     {
       TIMER_TIC;
@@ -889,7 +889,7 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair_d,
     struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    struct task* t, int ncells, int max_cell_size, hipStream_t stream) {
+    struct task* t, int ncells, int max_cell_size, GPUStream stream) {
 
   if (ci == NULL || cj == NULL)
     error("runner_dopair_recursive_grav_new got NULL cell");
@@ -1139,10 +1139,10 @@ void runner_gpu_init(struct runner* r) {
   struct gpu_runner* gpu = &r->gpu;
   struct engine* e = r->e;
 
-  hipSetDevice(0);
+  GPUSetDevice(0);
 
-  hipDeviceProp_t prop;
-  hipGetDeviceProperties(&prop, 0);
+  GPUDeviceProp prop;
+  GPUGetDeviceProperties(&prop, 0);
 
   const float tot_gpu_mem = (float)prop.totalGlobalMem;
   const float avail_gpu_mem = 0.8f * tot_gpu_mem;
@@ -1177,36 +1177,36 @@ void runner_gpu_init(struct runner* r) {
   gpu->grav_batch_self_count = 0;
   gpu->grav_batch_pair_count = 0;
 
-  hipStreamCreate(&gpu->stream);
+  GPUStreamCreate(&gpu->stream);
 
-  hipMalloc((void**)&gpu->gravity_gpu_values_send_self_d,
+  GPUMalloc((void**)&gpu->gravity_gpu_values_send_self_d,
             gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                 sizeof(struct gravity_gpu_values_send));
-  hipHostMalloc((void**)&gpu->gravity_gpu_values_send_self,
+  GPUHostMalloc((void**)&gpu->gravity_gpu_values_send_self,
                 gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                     sizeof(struct gravity_gpu_values_send),
                 0);
 
-  hipMalloc((void**)&gpu->gravity_gpu_values_send_pair_d,
+  GPUMalloc((void**)&gpu->gravity_gpu_values_send_pair_d,
             gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                 sizeof(struct gravity_gpu_values_send));
-  hipHostMalloc((void**)&gpu->gravity_gpu_values_send_pair,
+  GPUHostMalloc((void**)&gpu->gravity_gpu_values_send_pair,
                 gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                     sizeof(struct gravity_gpu_values_send),
                 0);
 
-  hipMalloc((void**)&gpu->gravity_gpu_values_recv_self_d,
+  GPUMalloc((void**)&gpu->gravity_gpu_values_recv_self_d,
             gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                 sizeof(struct gravity_gpu_values_recv));
-  hipHostMalloc((void**)&gpu->gravity_gpu_values_recv_self,
+  GPUHostMalloc((void**)&gpu->gravity_gpu_values_recv_self,
                 gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                     sizeof(struct gravity_gpu_values_recv),
                 0);
 
-  hipMalloc((void**)&gpu->gravity_gpu_values_recv_pair_d,
+  GPUMalloc((void**)&gpu->gravity_gpu_values_recv_pair_d,
             gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                 sizeof(struct gravity_gpu_values_recv));
-  hipHostMalloc((void**)&gpu->gravity_gpu_values_recv_pair,
+  GPUHostMalloc((void**)&gpu->gravity_gpu_values_recv_pair,
                 gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                     sizeof(struct gravity_gpu_values_recv),
                 0);
@@ -1222,9 +1222,9 @@ void runner_gpu_init(struct runner* r) {
       gpu->cell_active == NULL)
     error("Failed to allocate runner GPU host metadata arrays.");
 
-  const hipError_t err = hipGetLastError();
-  if (err != hipSuccess)
-    error("runner_gpu_init failed: %s", hipGetErrorString(err));
+  const GPUError err = GPUGetLastError();
+  if (err != GPU_SUCCESS)
+    error("runner_gpu_init failed: %s", GPUGetErrorString(err));
 }
 
 /**
@@ -1236,15 +1236,15 @@ void runner_gpu_clean(struct runner* r) {
 
   struct gpu_runner* gpu = &r->gpu;
 
-  hipFreeHost(gpu->gravity_gpu_values_send_self);
-  hipFreeHost(gpu->gravity_gpu_values_recv_self);
-  hipFree(gpu->gravity_gpu_values_send_self_d);
-  hipFree(gpu->gravity_gpu_values_recv_self_d);
+  GPUFreeHost(gpu->gravity_gpu_values_send_self);
+  GPUFreeHost(gpu->gravity_gpu_values_recv_self);
+  GPUFree(gpu->gravity_gpu_values_send_self_d);
+  GPUFree(gpu->gravity_gpu_values_recv_self_d);
 
-  hipFreeHost(gpu->gravity_gpu_values_send_pair);
-  hipFreeHost(gpu->gravity_gpu_values_recv_pair);
-  hipFree(gpu->gravity_gpu_values_send_pair_d);
-  hipFree(gpu->gravity_gpu_values_recv_pair_d);
+  GPUFreeHost(gpu->gravity_gpu_values_send_pair);
+  GPUFreeHost(gpu->gravity_gpu_values_recv_pair);
+  GPUFree(gpu->gravity_gpu_values_send_pair_d);
+  GPUFree(gpu->gravity_gpu_values_recv_pair_d);
 
   free(gpu->grav_cells_self);
   free(gpu->grav_tasks_self);
@@ -1252,7 +1252,7 @@ void runner_gpu_clean(struct runner* r) {
   free(gpu->grav_tasks_pair);
   free(gpu->cell_active);
 
-  hipStreamDestroy(gpu->stream);
+  GPUStreamDestroy(gpu->stream);
 
   gpu->gravity_gpu_values_send_self = NULL;
   gpu->gravity_gpu_values_send_self_d = NULL;
@@ -1290,38 +1290,38 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner* r) {
   {
     TIMER_TIC;
 
-    hipMemcpyAsync(r->gpu.gravity_gpu_values_send_self_d,
+    GPUMemcpyAsync(r->gpu.gravity_gpu_values_send_self_d,
                    r->gpu.gravity_gpu_values_send_self,
                    ncells_flush_self * max_cell_size *
                        sizeof(struct gravity_gpu_values_send),
-                   hipMemcpyHostToDevice, r->gpu.stream);
-    hipMemcpyAsync(r->gpu.gravity_gpu_values_recv_self_d,
+                   GPU_MEMCPY_HOST_TO_DEVICE, r->gpu.stream);
+    GPUMemcpyAsync(r->gpu.gravity_gpu_values_recv_self_d,
                    r->gpu.gravity_gpu_values_recv_self,
                    ncells_flush_self * max_cell_size *
                        sizeof(struct gravity_gpu_values_recv),
-                   hipMemcpyHostToDevice, r->gpu.stream);
+                   GPU_MEMCPY_HOST_TO_DEVICE, r->gpu.stream);
 
-    hipError_t err4 = hipGetLastError();
-    if (err4 != hipSuccess) printf("Error4: %s\n", hipGetErrorString(err4));
+    GPUError err4 = GPUGetLastError();
+    if (err4 != GPU_SUCCESS) printf("Error4: %s\n", GPUGetErrorString(err4));
 
     runner_doself_recursive_grav_new(
         r, r->gpu.grav_cells_self[0], 1, r->gpu.gravity_gpu_values_send_self_d,
         r->gpu.gravity_gpu_values_recv_self_d, ncells_flush_self, max_cell_size,
         r->gpu.stream);
 
-    hipMemcpyAsync(r->gpu.gravity_gpu_values_recv_self,
+    GPUMemcpyAsync(r->gpu.gravity_gpu_values_recv_self,
                    r->gpu.gravity_gpu_values_recv_self_d,
                    ncells_flush_self * max_cell_size *
                        sizeof(struct gravity_gpu_values_recv),
-                   hipMemcpyDeviceToHost, r->gpu.stream);
+                   GPU_MEMCPY_DEVICE_TO_HOST, r->gpu.stream);
 
-    hipStreamSynchronize(r->gpu.stream);
+    GPUStreamSynchronize(r->gpu.stream);
 
     TIMER_TOC(timer_doself_grav_pp);
   }
 
-  hipError_t err5 = hipGetLastError();
-  if (err5 != hipSuccess) printf("Error5: %s\n", hipGetErrorString(err5));
+  GPUError err5 = GPUGetLastError();
+  if (err5 != GPU_SUCCESS) printf("Error5: %s\n", GPUGetErrorString(err5));
 
   {
     TIMER_TIC;
@@ -1367,19 +1367,19 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_pair(struct runner* r) {
   {
     TIMER_TIC;
 
-    hipMemcpyAsync(r->gpu.gravity_gpu_values_send_pair_d,
+    GPUMemcpyAsync(r->gpu.gravity_gpu_values_send_pair_d,
                    r->gpu.gravity_gpu_values_send_pair,
                    ncells_flush_pair * max_cell_size *
                        sizeof(struct gravity_gpu_values_send),
-                   hipMemcpyHostToDevice, r->gpu.stream);
-    hipMemcpyAsync(r->gpu.gravity_gpu_values_recv_pair_d,
+                   GPU_MEMCPY_HOST_TO_DEVICE, r->gpu.stream);
+    GPUMemcpyAsync(r->gpu.gravity_gpu_values_recv_pair_d,
                    r->gpu.gravity_gpu_values_recv_pair,
                    ncells_flush_pair * max_cell_size *
                        sizeof(struct gravity_gpu_values_recv),
-                   hipMemcpyHostToDevice, r->gpu.stream);
+                   GPU_MEMCPY_HOST_TO_DEVICE, r->gpu.stream);
 
-    hipError_t err4 = hipGetLastError();
-    if (err4 != hipSuccess) printf("Error4: %s\n", hipGetErrorString(err4));
+    GPUError err4 = GPUGetLastError();
+    if (err4 != GPU_SUCCESS) printf("Error4: %s\n", GPUGetErrorString(err4));
 
     struct cell* ci_flush = r->gpu.grav_cells_pair[0];
     struct cell* cj_flush = r->gpu.grav_cells_pair[1];
@@ -1412,19 +1412,19 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_pair(struct runner* r) {
                         r->gpu.gravity_gpu_values_recv_pair_d,
                         ncells_flush_pair, max_cell_size, r->gpu.stream);
 
-    hipMemcpyAsync(r->gpu.gravity_gpu_values_recv_pair,
+    GPUMemcpyAsync(r->gpu.gravity_gpu_values_recv_pair,
                    r->gpu.gravity_gpu_values_recv_pair_d,
                    ncells_flush_pair * max_cell_size *
                        sizeof(struct gravity_gpu_values_recv),
-                   hipMemcpyDeviceToHost, r->gpu.stream);
+                   GPU_MEMCPY_DEVICE_TO_HOST, r->gpu.stream);
 
-    hipStreamSynchronize(r->gpu.stream);
+    GPUStreamSynchronize(r->gpu.stream);
 
     TIMER_TOC(timer_doself_grav_pp);
   }
 
-  hipError_t err5 = hipGetLastError();
-  if (err5 != hipSuccess) printf("Error5: %s\n", hipGetErrorString(err5));
+  GPUError err5 = GPUGetLastError();
+  if (err5 != GPU_SUCCESS) printf("Error5: %s\n", GPUGetErrorString(err5));
 
   {
     TIMER_TIC;

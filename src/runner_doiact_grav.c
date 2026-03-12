@@ -35,8 +35,7 @@
 
 /* GPU headers */
 #include "gpu_functions.h"
-
-#include <hip/hip_runtime_api.h>
+#include "gpu_mapping.h"
 
 /**
  * @brief Recursively propagate the multipoles down the tree by applying the
@@ -2010,7 +2009,7 @@ extern void self_pp_offload(int periodic, float rmax_i, double min_trunc,
                             float* d_y_i, float* d_z_i, float* d_a_x_i,
                             float* d_a_y_i, float* d_a_z_i, float* d_pot_i,
                             int* d_active_i, int ncells, int max_cell_size,
-                            int* gcounts, int* cell_active, hipStream_t stream);
+                            int* gcounts, int* cell_active, GPUStream stream);
 /**
  * @brief Computes the interaction of all the particles in a cell with all the
  * other ones.
@@ -2030,7 +2029,7 @@ void runner_doself_grav_pp(struct runner* r, struct cell* c, float* d_h_i,
                            float* d_z_i, float* d_a_x_i, float* d_a_y_i,
                            float* d_a_z_i, float* d_pot_i, int* d_active_i,
                            int ncells, int max_cell_size, int* gcounts,
-                           int* cell_active, hipStream_t stream) {
+                           int* cell_active, GPUStream stream) {
 
   /* Recover some useful constants */
   const struct engine* e = r->e;
@@ -2132,7 +2131,7 @@ extern void self_pp_offload_new(
     const int* gcount_i, const int* gcount_padded_i, int ci_active,
     struct gravity_gpu_values_send* gravity_gpu_values_send_d,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_d, int ncells,
-    int max_cell_size, hipStream_t stream);
+    int max_cell_size, GPUStream stream);
 /**
  * @brief Computes the interaction of all the particles in a cell with all the
  * other ones.
@@ -2151,7 +2150,7 @@ void runner_doself_grav_pp_new(
     struct runner* r, struct cell* c,
     struct gravity_gpu_values_send* gravity_gpu_values_send_d,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_d, int ncells,
-    int max_cell_size, hipStream_t stream) {
+    int max_cell_size, GPUStream stream) {
 
   /* Recover some useful constants */
   const struct engine* e = r->e;
@@ -2703,65 +2702,6 @@ void runner_dopair_recursive_grav(struct runner* r, struct cell* ci,
  * @param c The first #cell.
  * @param gettimer Are we timing this ?
  */
-/*void runner_doself_recursive_grav(struct runner *r, struct cell *c,
-                                  const int gettimer, float *d_h_i, float
-   *d_h_j, float *d_mass_i, float *d_mass_j, float *d_x_i, float *d_x_j, float
-   *d_y_i, float *d_y_j, float *d_z_i, float *d_z_j, float *d_a_x_i, float
-   *d_a_y_i, float *d_a_z_i, float *d_a_x_j, float *d_a_y_j, float *d_a_z_j,
-   float *d_pot_i, float *d_pot_j, int *d_active_i, int *d_active_j, float
-   *d_CoM_i, float *d_CoM_j, int ncells, int max_cell_size, int *gcounts, int
-   *cell_active, hipStream_t stream) {*/
-
-/* Some constants */
-/*const struct engine *e = r->e;*/
-
-/* Clear the flags */
-/*runner_clear_grav_flags(c, e);
-
-#ifdef SWIFT_DEBUG_CHECKS*/
-/* Early abort? */
-/*if (c->grav.count == 0) error("Doing self gravity on an empty cell !");
-#endif
-
-TIMER_TIC;*/
-
-// printf("cell split = %i \n", c->split);
-
-/* Anything to do here? */
-// if (!cell_is_active_gravity(c, e)) return;
-
-// printf("gravity is on \n");
-
-/* If the cell is split, interact each progeny with itself, and with
-   each of its siblings. */
-/*if (c->split) {
-
-  for (int j = 0; j < 8; j++) {
-    if (c->progeny[j] != NULL) {
-
-      runner_doself_recursive_grav(r, c->progeny[j], 0);
-
-      for (int k = j + 1; k < 8; k++) {
-        if (c->progeny[k] != NULL) {
-
-          runner_dopair_recursive_grav(r, c->progeny[j], c->progeny[k], 0);
-        }
-      }
-    }
-  }
-}*/
-
-/* If the cell is not split, then just go for it... */
-// else {
-
-/*runner_doself_grav_pp(r, c, d_h_i, d_mass_i, d_x_i, d_y_i, d_z_i, d_a_x_i,
-d_a_y_i, d_a_z_i, d_pot_i, d_active_i, ncells, max_cell_size, gcounts,
-cell_active, stream);
-
-//}
-
-if (gettimer) TIMER_TOC(timer_dosub_self_grav);
-}*/
 
 /**
  * @brief Computes the interaction of all the particles in a cell.
@@ -2777,7 +2717,7 @@ void runner_doself_recursive_grav_new(
     struct runner* r, struct cell* c, const int gettimer,
     struct gravity_gpu_values_send* gravity_gpu_values_send_d,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_d, int ncells,
-    int max_cell_size, hipStream_t stream) {
+    int max_cell_size, GPUStream stream) {
 
   /* Some constants */
   const struct engine* e = r->e;

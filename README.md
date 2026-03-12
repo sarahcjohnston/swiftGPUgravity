@@ -49,7 +49,7 @@ CUDA flags: -arch=native -fmad=false
 CUDA libs : -lcudadevrt -lcudart -lcuda -lstdc++
 ```
 
-Typical CUDA build:
+Recommended CUDA:
 
 ```bash
 ./configure --with-cuda=/usr/local/cuda
@@ -59,19 +59,17 @@ make -j
 CUDA build with extra backend flags:
 
 ```bash
+./configure --with-cuda=/usr/local/cuda
+make -j
+```
+
+```bash
 ./configure --with-cuda=/usr/local/cuda \
   --with-cuda-flags="-lineinfo"
 make -j
 ```
 
-Typical HIP build:
-
-```bash
-./configure --with-hip=/opt/rocm
-make -j
-```
-
-HIP build with extra backend flags:
+Recommended HIP:
 
 ```bash
 ./configure --with-hip=/opt/rocm \

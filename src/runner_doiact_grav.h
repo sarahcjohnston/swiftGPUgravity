@@ -25,7 +25,7 @@
 #include <config.h>
 
 /* GPU headers */
-#include <hip/hip_runtime_api.h>
+#include "gpu_mapping.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -74,13 +74,13 @@ void runner_doself_recursive_grav(
     float* d_a_z_i, float* d_a_x_j, float* d_a_y_j, float* d_a_z_j,
     float* d_pot_i, float* d_pot_j, int* d_active_i, int* d_active_j,
     float* d_CoM_i, float* d_CoM_j, int ncells, int max_cell_size,
-    int* d_gcounts, int* d_cell_active, hipStream_t stream);
+    int* d_gcounts, int* d_cell_active, GPUStream stream);
 
 void runner_doself_recursive_grav_new(
     struct runner* r, struct cell* c, const int gettimer,
     struct gravity_gpu_values_send* gravity_gpu_values_send_d,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_d, int ncells,
-    int max_cell_size, hipStream_t stream);
+    int max_cell_size, GPUStream stream);
 
 void runner_dopair_recursive_grav(struct runner* r, struct cell* ci,
                                   struct cell* cj, int gettimer);
@@ -98,13 +98,13 @@ void runner_doself_grav_pp(struct runner* r, struct cell* c, float* d_h_i,
                            float* d_z_i, float* d_a_x_i, float* d_a_y_i,
                            float* d_a_z_i, float* d_pot_i, int* d_active_i,
                            int ncells, int max_cell_size, int* gcounts,
-                           int* cell_active, hipStream_t stream);
+                           int* cell_active, GPUStream stream);
 
 void runner_doself_grav_pp_new(
     struct runner* r, struct cell* c,
     struct gravity_gpu_values_send* gravity_gpu_values_send_d,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_d, int ncells,
-    int max_cell_size, hipStream_t stream);
+    int max_cell_size, GPUStream stream);
 
 void runner_dopair_grav_pp(struct runner* r, struct cell* ci, struct cell* cj,
                            const int symmetric, const int allow_mpole);

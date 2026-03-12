@@ -19,7 +19,7 @@
 #ifndef SWIFT_RUNNER_GPU_H
 #define SWIFT_RUNNER_GPU_H
 
-#include <hip/hip_runtime_api.h>
+#include "gpu_mapping.h"
 
 struct cell;
 struct runner;
@@ -90,7 +90,7 @@ struct gpu_runner {
   int* cell_active;
 
   /*! Stream used for this runner's GPU work. */
-  hipStream_t stream;
+  GPUStream stream;
 };
 
 /**
@@ -136,7 +136,7 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
     struct gravity_gpu_values_recv* gravity_gpu_values_recv,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_d,
     struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    struct task* t, int ncells, int max_cell_size, hipStream_t stream);
+    struct task* t, int ncells, int max_cell_size, GPUStream stream);
 
 /**
  * @brief Recursively process a pair-gravity task with GPU batching.
@@ -150,7 +150,7 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
     struct gravity_gpu_values_recv* gravity_gpu_values_recv,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_d,
     struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    struct task* t, int ncells, int max_cell_size, hipStream_t stream);
+    struct task* t, int ncells, int max_cell_size, GPUStream stream);
 
 /**
  * @brief Flush any leftover packed self-gravity work owned by a runner.

@@ -30,9 +30,6 @@
 /* This object's header. */
 #include "runner.h"
 
-/* GPU headers */
-#include <hip/hip_runtime_api.h>
-
 /* Local headers. */
 #include "engine.h"
 #include "feedback.h"
