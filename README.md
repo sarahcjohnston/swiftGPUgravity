@@ -5,8 +5,7 @@
 </a>
 </div>
 
-SWIFT: SPH With Inter-dependent Fine-grained Tasking
-====================================================
+# SWIFT: SPH With Inter-dependent Fine-grained Tasking
 
 [![Build Status](https://gitlab.cosma.dur.ac.uk/jenkins/job/GNU%20SWIFT%20build/badge/icon)](https://gitlab.cosma.dur.ac.uk/jenkins/job/GNU%20SWIFT%20build/)
 
@@ -25,12 +24,11 @@ We suggest that you use the latest release branch of SWIFT, rather than the
 current master branch as this will change rapidly. We do, however, like to
 ensure that the master branch will build and run.
 
-Installing for GPU
-------------------
+## Installing for GPU
 
 This branch can now be configured against either CUDA or HIP at configure
 time. The GPU backends are mutually exclusive, so pass either `--with-cuda`
-or `--with-hip` together with the root of that installation.
+or `--with-hip` (optionally stating the root of that installation).
 
 The configure interface also accepts backend-specific extra flags:
 
@@ -39,41 +37,17 @@ The configure interface also accepts backend-specific extra flags:
 - `--with-hip-flags="..."` appends extra HIP compiler flags to the default
   HIP flags.
 
-The current default CUDA toolchain payload remains equivalent to the existing
-hard-coded build setup:
+Recommended CUDA (works without root):
 
 ```bash
-CUDA include: -I/usr/local/cuda/include
-CUDA ldflags: -L/cosma/local/Nvidia-hpc-sdk/2025_253/Linux_x86_64/25.3/cuda/lib64 -L/usr/local/cuda/lib64
-CUDA flags: -arch=native -fmad=false
-CUDA libs : -lcudadevrt -lcudart -lcuda -lstdc++
-```
-
-Recommended CUDA:
-
-```bash
-./configure --with-cuda=/usr/local/cuda
+./configure --with-cuda --enable-ipo --with-tbbmalloc
 make -j
 ```
 
-CUDA build with extra backend flags:
+Recommended HIP (requires extra flags and warnings to be enabled):
 
 ```bash
-./configure --with-cuda=/usr/local/cuda
-make -j
-```
-
-```bash
-./configure --with-cuda=/usr/local/cuda \
-  --with-cuda-flags="-lineinfo"
-make -j
-```
-
-Recommended HIP:
-
-```bash
-./configure --with-hip=/opt/rocm \
-  --with-hip-flags="--offload-arch=gfx90a"
+./configure --with-hip=/opt/rocm-7.2.0   --with-hip-flags="--offload-arch=gfx942 -fgpu-default-stream=per-thread -munsafe-fp-atomics" --enable-ipo --with-tbbmalloc --enable-compiler-warnings
 make -j
 ```
 
@@ -90,8 +64,7 @@ Please feel free to submit issues to this repository, or even pull
 requests. We will try to deal with them as soon as possible, but as the
 core development team is quite small this could take some time.
 
-Disclaimer
-----------
+## Disclaimer
 
 We would like to emphasise that SWIFT comes without any warranty of accuracy,
 correctness or efficiency. As mentioned in the license, the software comes
@@ -110,11 +83,10 @@ experimentation with various values is highly encouraged. Each problem will
 likely require different values and the sensitivity to the details of the
 physical model is something left to the users to explore.
 
-Acknowledgement & Citation
--------------------------
+## Acknowledgement & Citation
 
 The SWIFT code was last described in this paper:
-https://ui.adsabs.harvard.edu/abs/2023arXiv230513380S.  The core solver, the
+https://ui.adsabs.harvard.edu/abs/2023arXiv230513380S. The core solver, the
 numerical methods as well as many extensions where described there. We ask users
 running SWIFT for their research to please cite this paper when they present
 their results.
@@ -130,10 +102,7 @@ version X.Y.Z."
 with the version number set to the version used for the simulations and the
 reference pointing to the ASCL entry of the code: https://ascl.net/1805.020.
 
-
-
-Contribution Guidelines
------------------------
+## Contribution Guidelines
 
 The SWIFT source code uses a variation of the 'Google' formatting style.
 The script 'format.sh' in the root directory applies the clang-format-18
@@ -149,8 +118,7 @@ Any contributions that fail any of the automated tests will not be accepted.
 Contributions that include tests of the proposed modules (or any current ones!)
 are highly encouraged.
 
-Runtime parameters
-------------------
+## Runtime parameters
 
 ```
  Welcome to the cosmological hydrodynamical code
@@ -225,7 +193,7 @@ Parameters:
                                       GEAR model. This is equivalent to --hydro
                                       --limiter --sync --self-gravity --stars
                                       --star-formation --cooling --feedback.
-                                      
+
   Control options:
 
     -a, --pin                         Pin runners using processor affinity.
