@@ -116,8 +116,6 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
     struct cell** grav_cells_pair, struct task** grav_tasks_pair,
     struct task* t, int ncells, int max_cell_size, hipStream_t stream) {
 
-  // printf("in the pp function! \n");
-
   /* Recover some useful constants */
   const struct engine* e = r->e;
   const int periodic = e->mesh->periodic;
@@ -137,10 +135,6 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
       cell_is_active_gravity(ci, e) && (ci->nodeID == e->nodeID);
   const int cj_active =
       cell_is_active_gravity(cj, e) && (cj->nodeID == e->nodeID);
-
-  /* Anything to do here? */
-  // if (!ci_active && !cj_active) return;
-  // if (!ci_active && !symmetric) return;
 
 #ifdef SWIFT_DEBUG_CHECKS
   /* Check that we are not doing something stupid */
@@ -227,8 +221,6 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
   hipEventCreate(&stoppack);
 
   hipEventRecord(startpack, stream);
-
-  // printf("packing values! \n");
 
   {
     TIMER_TIC;
@@ -368,7 +360,7 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
     TIMER_TOC(timer_doself_grav_pp);
   }
 
-  // store the address of the cells and tasks we are working on
+  /* Store the address of the cells and tasks we are working on */
   grav_cells_pair[r->gpu.grav_batch_pair_count] = ci;
   grav_cells_pair[r->gpu.grav_batch_pair_count + 1] = cj;
   grav_tasks_pair[r->gpu.grav_batch_pair_count / 2] = t;
@@ -425,11 +417,7 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
     {
       TIMER_TIC;
 
-      // printf("sending values! \n");
-
-      // now copy all the arrays to the device
-      // gravity_gpu_H2D(gravity_gpu_values_h, gravity_gpu_values_d, ncells,
-      // max_cell_size, stream);
+      /* Now copy all the arrays to the device */
       hipMemcpyAsync(
           gravity_gpu_values_send_pair_d, gravity_gpu_values_send_pair,
           ncells * max_cell_size * sizeof(struct gravity_gpu_values_send),

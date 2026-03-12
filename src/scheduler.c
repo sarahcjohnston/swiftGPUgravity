@@ -2996,6 +2996,7 @@ struct task* scheduler_gettask(struct scheduler* s, int qid,
         }
         if (res != NULL) break;
       }
+
       /* If we failed, but have batched tasks on the GPU, Avoid sleeping, we
        * will flush them in runner_main. */
       if (res == NULL) {
