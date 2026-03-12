@@ -1477,8 +1477,6 @@ static void scheduler_splittask_gravity(struct task* t, struct scheduler* s) {
         if (scheduler_dosub &&
             (gcount_i < ((long long)space_subsize_self_grav) &&
              gcount_j < ((long long)space_subsize_self_grav))) {
-          message("We will not split (gcount_i=%lld gcount_j=%lld)", gcount_i,
-                  gcount_j);
           /* Otherwise, split it. */
         } else {
           /* Turn the task into a M-M task that will take care of all the
