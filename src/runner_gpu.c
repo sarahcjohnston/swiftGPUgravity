@@ -137,9 +137,6 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
       cell_is_active_gravity(cj, e) && (cj->nodeID == e->nodeID);
 
 #ifdef SWIFT_DEBUG_CHECKS
-  /* Check that we are not doing something stupid */
-  if (ci->split || cj->split) error("Running P-P on splitable cells");
-
   /* Let's start by checking things are drifted */
   if (!cell_are_gpart_drifted(ci, e)) error("Un-drifted gparts");
   if (!cell_are_gpart_drifted(cj, e)) error("Un-drifted gparts");
