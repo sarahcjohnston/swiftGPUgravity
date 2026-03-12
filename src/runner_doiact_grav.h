@@ -20,6 +20,8 @@
 #ifndef SWIFT_RUNNER_DOIACT_GRAV_H
 #define SWIFT_RUNNER_DOIACT_GRAV_H
 
+#include "active.h"
+
 #include <config.h>
 
 /* GPU headers */
@@ -38,6 +40,27 @@ struct task;
 struct scheduler;
 struct gravity_gpu_values_send;
 struct gravity_gpu_values_recv;
+
+/**
+ * @brief Clear the gravity unskip flags of this cell.
+ *
+ * For inactive or foreign cells, this recurses over progenies before clearing
+ * the local flags.
+ *
+ * @param c The #cell of interest.
+ * @param e The #engine used to determine activity and ownership.
+ */
+static inline void runner_clear_grav_flags(struct cell* c,
+                                           const struct engine* e) {
+
+  if ((!cell_is_active_gravity(c, e) || c->nodeID != e->nodeID) && c->split) {
+    for (int k = 0; k < 8; ++k)
+      if (c->progeny[k] != NULL) runner_clear_grav_flags(c->progeny[k], e);
+  }
+
+  cell_clear_flag(c, cell_flag_unskip_self_grav_processed |
+                         cell_flag_unskip_pair_grav_processed);
+}
 
 void runner_do_grav_down(struct runner* r, struct cell* c, int timer);
 

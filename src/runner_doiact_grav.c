@@ -39,27 +39,6 @@
 #include <hip/hip_runtime_api.h>
 
 /**
- * @brief Clear the unskip flags of this cell.
- *
- * For inactive or foreign cells, we additionally need to recurse.
- *
- * @brief c The #cell of interest.
- * @brief e The #engine (to check whether active or not).
- */
-static INLINE void runner_clear_grav_flags(struct cell* c,
-                                           const struct engine* e) {
-
-  if ((!cell_is_active_gravity(c, e) || c->nodeID != e->nodeID) && c->split) {
-    for (int k = 0; k < 8; ++k)
-      if (c->progeny[k] != NULL) runner_clear_grav_flags(c->progeny[k], e);
-  }
-
-  /* Remove the unskip flags. */
-  cell_clear_flag(c, cell_flag_unskip_self_grav_processed |
-                         cell_flag_unskip_pair_grav_processed);
-}
-
-/**
  * @brief Recursively propagate the multipoles down the tree by applying the
  * L2L and L2P kernels.
  *

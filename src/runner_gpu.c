@@ -99,8 +99,6 @@ void runner_dopair_grav_pp_new(
   /* Recover the multipole info and shift the CoM locations */
   const float rmax_i = ci->grav.multipole->r_max;
   const float rmax_j = cj->grav.multipole->r_max;
-  const struct multipole* multi_i = &ci->grav.multipole->m_pole;
-  const struct multipole* multi_j = &cj->grav.multipole->m_pole;
   const float CoM_i[3] = {(float)(ci->grav.multipole->CoM[0] - shift_i[0]),
                           (float)(ci->grav.multipole->CoM[1] - shift_i[1]),
                           (float)(ci->grav.multipole->CoM[2] - shift_i[2])};
@@ -365,8 +363,6 @@ void runner_dopair_grav_pp_new(
 
   if (r->gpu.grav_batch_pair_count >= ncells) {
     // printf("its pack send time! \n");
-    int ncells_orig = ncells;
-
     hipEvent_t startcopyH2D, stopcopyH2D;
     hipEventCreate(&startcopyH2D);
     hipEventCreate(&stopcopyH2D);
@@ -478,14 +474,14 @@ void runner_dopair_grav_pp_new(
           error("PAIR UNPACK: NULL task k=%d (j=%d) packed=%d qid=%d", j / 2, j,
                 ncells, r->qid);
 
-        struct cell* ci0 = grav_cells_pair[j];
-        struct cell* cj0 = grav_cells_pair[j + 1];
-        struct cell *a = ci0, *b = cj0;
+        struct cell* ci_pair = grav_cells_pair[j];
+        struct cell* cj_pair = grav_cells_pair[j + 1];
+        struct cell *a_pair = ci_pair, *b_pair = cj_pair;
 
-        if (a > b) {
-          struct cell* tmp = a;
-          a = b;
-          b = tmp;
+        if (a_pair > b_pair) {
+          struct cell* tmp = a_pair;
+          a_pair = b_pair;
+          b_pair = tmp;
         }
 
         /*while (cell_glocktree(grav_cells_pair[j])) {
@@ -494,19 +490,19 @@ void runner_dopair_grav_pp_new(
         while (cell_glocktree(grav_cells_pair[j+1])) {
         ; // spin until we acquire the lock
         }*/
-        while (cell_glocktree(a)) {
+        while (cell_glocktree(a_pair)) {
           ;
         }
         // printf("hunting for lock for cell %p\n", (void*)a); }
         for (int i = 0;
              i < gravity_gpu_values_send_pair[j * max_cell_size].gcounts; i++) {
-          ci0->grav.parts[i].a_grav[0] +=
+          ci_pair->grav.parts[i].a_grav[0] +=
               gravity_gpu_values_recv_pair[i + j * max_cell_size].a_x_i;
-          ci0->grav.parts[i].a_grav[1] +=
+          ci_pair->grav.parts[i].a_grav[1] +=
               gravity_gpu_values_recv_pair[i + j * max_cell_size].a_y_i;
-          ci0->grav.parts[i].a_grav[2] +=
+          ci_pair->grav.parts[i].a_grav[2] +=
               gravity_gpu_values_recv_pair[i + j * max_cell_size].a_z_i;
-          ci0->grav.parts[i].potential +=
+          ci_pair->grav.parts[i].potential +=
               gravity_gpu_values_recv_pair[i + j * max_cell_size].pot_i;
 
           /*if (ci0->grav.parts[i].a_grav[0] == 0){
@@ -515,21 +511,21 @@ void runner_dopair_grav_pp_new(
           ci0->grav.parts[i].a_grav[0], ci0->grav.parts[i].a_grav[1],
           ci0->grav.parts[i].a_grav[2]);}*/
         }
-        cell_gunlocktree(a);
+        cell_gunlocktree(a_pair);
 
-        while (cell_glocktree(b)) {
+        while (cell_glocktree(b_pair)) {
           ;
         }  // {printf("hunting for lock for cell %p\n", (void*)b);}
         for (int i = 0;
              i < gravity_gpu_values_send_pair[(j + 1) * max_cell_size].gcounts;
              i++) {
-          cj0->grav.parts[i].a_grav[0] +=
+          cj_pair->grav.parts[i].a_grav[0] +=
               gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size].a_x_i;
-          cj0->grav.parts[i].a_grav[1] +=
+          cj_pair->grav.parts[i].a_grav[1] +=
               gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size].a_y_i;
-          cj0->grav.parts[i].a_grav[2] +=
+          cj_pair->grav.parts[i].a_grav[2] +=
               gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size].a_z_i;
-          cj0->grav.parts[i].potential +=
+          cj_pair->grav.parts[i].potential +=
               gravity_gpu_values_recv_pair[i + (j + 1) * max_cell_size].pot_i;
 
           /*if (cj0->grav.parts[i].a_grav[0] == 0){
@@ -538,7 +534,7 @@ void runner_dopair_grav_pp_new(
           cj0->grav.parts[i].a_grav[0], cj0->grav.parts[i].a_grav[1],
           cj0->grav.parts[i].a_grav[2]);}*/
         }
-        cell_gunlocktree(b);
+        cell_gunlocktree(b_pair);
 
         scheduler_done(sched, grav_tasks_pair[j / 2]);
         /*enqueue_dependencies(sched, grav_tasks_pair[j]);
@@ -946,8 +942,7 @@ void runner_dopair_recursive_grav_new(
     // printf("BEING CHEAP \n");
 
     /* We have two cheap cells. Go P-P. */
-    runner_dopair_grav_pp_no_cache(r, ci, cj);
-    runner_dopair_grav_pp_no_cache(r, cj, ci);
+    runner_dopair_recursive_grav(r, ci, cj, 0);
 
     lock_lock(&sched->queues[r->qid].lock);
     sched->queues[r->qid].gpu_pair_tasks_left--;
@@ -963,7 +958,7 @@ void runner_dopair_recursive_grav_new(
     // printf("DOING MM \n");
 
     /* Go M-M */
-    runner_dopair_grav_mm(r, ci, cj);
+    runner_dopair_recursive_grav(r, ci, cj, 0);
 
     lock_lock(&sched->queues[r->qid].lock);
     sched->queues[r->qid].gpu_pair_tasks_left--;
