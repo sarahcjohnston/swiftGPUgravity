@@ -91,56 +91,12 @@ void runner_gpu_init(struct runner* r);
 void runner_gpu_clean(struct runner* r);
 
 /**
- * @brief Complete a self-gravity task at task level.
- *
- * This decrements the queue-local outstanding self-task counter and then marks
- * the task done in the scheduler.
- *
- * @param r The runner completing the task.
- * @param sched The scheduler owning the task.
- * @param t The task to complete.
- */
-struct task* runner_gpu_complete_self_task(struct runner* r,
-                                           struct scheduler* sched,
-                                           struct task* t);
-
-/**
- * @brief Complete a pair-gravity task at task level.
- *
- * This decrements the queue-local outstanding pair-task counter and then marks
- * the task done in the scheduler.
- *
- * @param r The runner completing the task.
- * @param sched The scheduler owning the task.
- * @param t The task to complete.
- */
-struct task* runner_gpu_complete_pair_task(struct runner* r,
-                                           struct scheduler* sched,
-                                           struct task* t);
-
-/**
- * @brief Complete all tasks in the current self-gravity GPU batch.
- *
- * @param r The runner owning the batch.
- * @param sched The scheduler owning the tasks.
- */
-void runner_gpu_complete_self_batch(struct runner* r, struct scheduler* sched);
-
-/**
- * @brief Complete all unique tasks in the current pair-gravity GPU batch.
- *
- * @param r The runner owning the batch.
- * @param sched The scheduler owning the tasks.
- */
-void runner_gpu_complete_pair_batch(struct runner* r, struct scheduler* sched);
-
-/**
  * @brief Flush any leftover packed self-gravity work owned by a runner.
  *
  * @param r The runner whose GPU batch should be flushed.
  * @param sched The scheduler owning the queued tasks.
  */
-int runner_gpu_flush_leftover_self(struct runner* r);
+void runner_gpu_flush_leftover_self(struct runner* r, struct scheduler* sched);
 
 /**
  * @brief Flush any leftover packed pair-gravity work owned by a runner.
@@ -148,6 +104,6 @@ int runner_gpu_flush_leftover_self(struct runner* r);
  * @param r The runner whose GPU batch should be flushed.
  * @param sched The scheduler owning the queued tasks.
  */
-int runner_gpu_flush_leftover_pair(struct runner* r);
+void runner_gpu_flush_leftover_pair(struct runner* r, struct scheduler* sched);
 
 #endif /* SWIFT_RUNNER_GPU_H */

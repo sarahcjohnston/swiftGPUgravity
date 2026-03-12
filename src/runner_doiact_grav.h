@@ -92,11 +92,10 @@ void runner_doself_grav_pp_new(
  * @param sched The #scheduler owning the task.
  * @param ncells The batch capacity in cells.
  * @param max_cell_size The maximum number of particles per packed cell.
- * @return 1 if the batch was flushed, 0 if the task was only packed.
  */
-int runner_doself_grav_pp_task_new(struct runner* r, struct cell* c,
-                                   struct task* t, struct scheduler* sched,
-                                   int ncells, int max_cell_size);
+void runner_doself_grav_pp_task_new(struct runner* r, struct cell* c,
+                                    struct task* t, struct scheduler* sched,
+                                    int ncells, int max_cell_size);
 
 void runner_dopair_grav_pp(struct runner* r, struct cell* ci, struct cell* cj,
                            const int symmetric, const int allow_mpole);
@@ -112,12 +111,7 @@ void runner_dopair_grav_pp_new(
     struct task* t, struct scheduler* sched, int ncells, int max_cell_size,
     hipStream_t stream);
 
-/**
- * @brief Recursively process a pair-gravity task with GPU batching.
- *
- * @return 1 if the current GPU batch was flushed, 0 otherwise.
- */
-int runner_dopair_recursive_grav_new(
+void runner_dopair_recursive_grav_new(
     struct runner* r, struct cell* ci, struct cell* cj, const int gettimer,
     struct gravity_gpu_values_send* gravity_gpu_values_send,
     struct gravity_gpu_values_send* gravity_gpu_values_send_d,

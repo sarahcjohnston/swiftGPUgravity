@@ -165,97 +165,17 @@ void runner_gpu_clean(struct runner* r) {
 }
 
 /**
- * @brief Complete a self-gravity task at task level.
- *
- * @param r The runner completing the task.
- * @param sched The scheduler owning the task.
- * @param t The task to complete.
- */
-struct task* runner_gpu_complete_self_task(struct runner* r,
-                                           struct scheduler* sched,
-                                           struct task* t) {
-
-  lock_lock(&sched->queues[r->qid].lock);
-  sched->queues[r->qid].gpu_self_tasks_left--;
-  (void)lock_unlock(&sched->queues[r->qid].lock);
-
-  return scheduler_done(sched, t);
-}
-
-/**
- * @brief Complete a pair-gravity task at task level.
- *
- * @param r The runner completing the task.
- * @param sched The scheduler owning the task.
- * @param t The task to complete.
- */
-struct task* runner_gpu_complete_pair_task(struct runner* r,
-                                           struct scheduler* sched,
-                                           struct task* t) {
-
-  lock_lock(&sched->queues[r->qid].lock);
-  sched->queues[r->qid].gpu_pair_tasks_left--;
-  (void)lock_unlock(&sched->queues[r->qid].lock);
-
-  return scheduler_done(sched, t);
-}
-
-/**
- * @brief Complete all tasks in the current self-gravity GPU batch.
- *
- * @param r The runner owning the batch.
- * @param sched The scheduler owning the tasks.
- */
-void runner_gpu_complete_self_batch(struct runner* r, struct scheduler* sched) {
-
-  const int count = r->gpu.grav_batch_self_count;
-
-  for (int i = 0; i < count; i++) {
-    runner_gpu_complete_self_task(r, sched, r->gpu.grav_tasks_self[i]);
-    r->gpu.grav_cells_self[i] = NULL;
-    r->gpu.grav_tasks_self[i] = NULL;
-  }
-
-  r->gpu.grav_batch_self_count = 0;
-}
-
-/**
- * @brief Complete all unique tasks in the current pair-gravity GPU batch.
- *
- * @param r The runner owning the batch.
- * @param sched The scheduler owning the tasks.
- */
-void runner_gpu_complete_pair_batch(struct runner* r, struct scheduler* sched) {
-
-  const int count = r->gpu.grav_batch_pair_count;
-  struct task* prev_task = NULL;
-
-  for (int i = 0; i < count; i += 2) {
-    if (r->gpu.grav_tasks_pair[i / 2] != prev_task) {
-      runner_gpu_complete_pair_task(r, sched, r->gpu.grav_tasks_pair[i / 2]);
-      prev_task = r->gpu.grav_tasks_pair[i / 2];
-    }
-
-    r->gpu.grav_cells_pair[i] = NULL;
-    r->gpu.grav_cells_pair[i + 1] = NULL;
-    r->gpu.grav_tasks_pair[i / 2] = NULL;
-  }
-
-  r->gpu.grav_batch_pair_count = 0;
-}
-
-/**
  * @brief Flush any leftover packed self-gravity work owned by a runner.
  *
  * @param r The runner whose GPU batch should be flushed.
  * @param sched The scheduler owning the queued tasks.
  */
-int runner_gpu_flush_leftover_self(struct runner* r) {
+void runner_gpu_flush_leftover_self(struct runner* r, struct scheduler* sched) {
 
   const int ncells_flush_self = r->gpu.grav_batch_self_count;
   const int max_cell_size = r->gpu.grav_max_cell_size;
 
-  if (ncells_flush_self == 0) return 0;
+  if (ncells_flush_self == 0) return;
 
   {
     TIMER_TIC;
@@ -318,7 +238,13 @@ int runner_gpu_flush_leftover_self(struct runner* r) {
     TIMER_TOC(timer_doself_grav_pp);
   }
 
-  return 1;
+  for (int i = 0; i < ncells_flush_self; i++) {
+    scheduler_done(sched, r->gpu.grav_tasks_self[i]);
+    r->gpu.grav_cells_self[i] = NULL;
+    r->gpu.grav_tasks_self[i] = NULL;
+  }
+
+  r->gpu.grav_batch_self_count = 0;
 }
 
 /**
@@ -327,12 +253,12 @@ int runner_gpu_flush_leftover_self(struct runner* r) {
  * @param r The runner whose GPU batch should be flushed.
  * @param sched The scheduler owning the queued tasks.
  */
-int runner_gpu_flush_leftover_pair(struct runner* r) {
+void runner_gpu_flush_leftover_pair(struct runner* r, struct scheduler* sched) {
 
   const int ncells_flush_pair = r->gpu.grav_batch_pair_count;
   const int max_cell_size = r->gpu.grav_max_cell_size;
 
-  if (ncells_flush_pair == 0) return 0;
+  if (ncells_flush_pair == 0) return;
 
   {
     TIMER_TIC;
@@ -457,10 +383,18 @@ int runner_gpu_flush_leftover_pair(struct runner* r) {
                 .pot_i;
       }
       cell_gunlocktree(b);
+
+      scheduler_done(sched, r->gpu.grav_tasks_pair[j / 2]);
     }
 
     TIMER_TOC(timer_doself_grav_pp);
   }
 
-  return 1;
+  for (int i = 0; i < ncells_flush_pair; i += 2) {
+    r->gpu.grav_cells_pair[i] = NULL;
+    r->gpu.grav_cells_pair[i + 1] = NULL;
+    r->gpu.grav_tasks_pair[i / 2] = NULL;
+  }
+
+  r->gpu.grav_batch_pair_count = 0;
 }
