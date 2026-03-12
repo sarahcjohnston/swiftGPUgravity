@@ -501,12 +501,6 @@ void runner_dopair_grav_pp_new(
           b_pair = tmp;
         }
 
-        /*while (cell_glocktree(grav_cells_pair[j])) {
-        ; // spin until we acquire the lock
-        }
-        while (cell_glocktree(grav_cells_pair[j+1])) {
-        ; // spin until we acquire the lock
-        }*/
         while (cell_glocktree(a_pair)) {
           ;
         }
@@ -544,6 +538,7 @@ void runner_dopair_grav_pp_new(
 
       TIMER_TOC(timer_doself_grav_pp);
     }
+
     // Reset counter for next pack
     for (int i = 0; i < ncells; i += 2) {
       scheduler_done(sched, grav_tasks_pair[i / 2]);
