@@ -378,11 +378,8 @@ void runner_dopair_grav_pp_new(
   sched->queues[r->qid].gpu_pair_tasks_left--;
   (void)lock_unlock(&sched->queues[r->qid].lock);
 
-  // printf("qid:%i Packed: %i \n", r->qid, r->gpu.grav_batch_pair_count);
-  // fflush(stdout);
-
+  /* If we have filled our batch, flush it and reset the count. */
   if (r->gpu.grav_batch_pair_count >= ncells) {
-    // printf("its pack send time! \n");
     hipEvent_t startcopyH2D, stopcopyH2D;
     hipEventCreate(&startcopyH2D);
     hipEventCreate(&stopcopyH2D);
@@ -557,33 +554,10 @@ void runner_dopair_grav_pp_new(
         cell_gunlocktree(b_pair);
 
         scheduler_done(sched, grav_tasks_pair[j / 2]);
-        /*enqueue_dependencies(sched, grav_tasks_pair[j]);
-        pthread_mutex_lock(&sched->sleep_mutex);
-        atomic_dec(&sched->waiting);
-        pthread_cond_broadcast(&sched->sleep_cond);
-        pthread_mutex_unlock(&sched->sleep_mutex);*/
       }
 
       TIMER_TOC(timer_doself_grav_pp);
-    }  // TIMER_TOC(timer_gpu_unpack);
-
-    // hipDeviceSynchronize();
-
-    /*for(int i=0; i<ncells; i+=2){
-            struct cell *a = grav_cells_pair[i];
-            struct cell *b = grav_cells_pair[i+1];
-            if (a > b) { struct cell *tmp = a; a = b; b = tmp; }
-            cell_gunlocktree(b);
-            cell_gunlocktree(a);
-            //cell_gunlocktree(grav_cells_pair[i]);
-            //cell_gunlocktree(grav_cells_pair[i+1]);
-            enqueue_dependencies(sched, grav_tasks_pair[i]);
-            pthread_mutex_lock(&sched->sleep_mutex);
-            atomic_dec(&sched->waiting);
-            pthread_cond_broadcast(&sched->sleep_cond);
-            pthread_mutex_unlock(&sched->sleep_mutex);
-    }*/
-
+    }
     // reset counter for next pack
     for (int i = 0; i < ncells; i += 2) {
       grav_cells_pair[i] = NULL;
@@ -828,9 +802,6 @@ void runner_doself_grav_pp_task_new(struct runner* r, struct cell* ci,
 
     for (int i = 0; i < ncells; i++) {
       scheduler_done(sched, r->gpu.grav_tasks_self[i]);
-    }
-
-    for (int i = 0; i < ncells; i++) {
       r->gpu.grav_cells_self[i] = NULL;
       r->gpu.grav_tasks_self[i] = NULL;
     }
