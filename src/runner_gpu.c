@@ -834,6 +834,10 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
 
   const struct engine* e = r->e;
 
+  /* Initialise the task type to regular, this gets updated if we decide to
+   * offload to the GPU. */
+  enum runner_gpu_task_type task_type = regular_task;
+
   if (!cell_are_gpart_drifted(ci, e))
     cell_drift_gpart(ci, e, /*force=*/1, NULL);
   if (!cell_are_gpart_drifted(cj, e))
@@ -917,7 +921,7 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
       accumulate_add_ll(&multi_j->pot.num_interacted_pm,
                         multi_i->m_pole.num_gpart);
 #endif
-    return regular_task;
+    return task_type;
   }
 
   /* OK, we actually need to compute this pair. Let's find the cheapest
@@ -925,143 +929,31 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
 
   if (ci->grav.count <= 1 || cj->grav.count <= 1) {
 
-    // printf("BEING CHEAP \n");
-
     /* We have two cheap cells. Go P-P. */
     runner_dopair_recursive_grav(r, ci, cj, 0);
-    return regular_task;
 
     /* Can we use M-M interactions ? */
   } else if (gravity_M2L_accept_symmetric(e->gravity_properties, multi_i,
                                           multi_j, r2,
                                           /*use_rebuild_sizes=*/0, periodic)) {
 
-    // printf("qid:%i MM\n", r->qid);
-
-    // printf("DOING MM \n");
-
     /* Go M-M */
     runner_dopair_recursive_grav(r, ci, cj, 0);
-    return regular_task;
 
-    /* Did we reach the bottom? */
-  } else if (!ci->split && !cj->split) {
-    // printf("qid:%i PP here we go!\n", r->qid);
+    /* Otherwise, we know we are at the desired level already in the tasks. */
+  } else {
 
-    // printf("qid:%i PP packed:%i\n", r->qid, *packed);
-    // fflush(stdout);
-
-    // if (!ci->split && !cj->split){
-    // printf("qid:%i tree condition met\n", r->qid);}
-
-    /* We have two leaves. Go P-P. */
-    return runner_dopair_grav_pp_new(
+    /* We have two leaves. Go P-P on the GPU. This will pack and flush if
+     * the time is right. */
+    task_type = runner_dopair_grav_pp_new(
         r, ci, cj, /*symmetric*/ 1, /*allow_mpoles=*/1,
         gravity_gpu_values_send_pair, gravity_gpu_values_send_pair_d,
         gravity_gpu_values_recv_pair, gravity_gpu_values_recv_pair_d,
         grav_cells_pair, grav_tasks_pair, t, ncells, max_cell_size, stream);
-
-  } else {
-
-    enum runner_gpu_task_type task_type = regular_task;
-
-    // printf("qid:%i recursing\n", r->qid);
-
-    /* Alright, we'll have to split and recurse. */
-    /* We know at least one of ci and cj is splittable */
-
-    const double ri_max = multi_i->r_max;
-    const double rj_max = multi_j->r_max;
-
-    /* Split the larger of the two cells and start over again */
-    if (ri_max > rj_max) {
-
-      /* Can we actually split that interaction ? */
-      if (ci->split) {
-
-        /* Loop over ci's children */
-        for (int k = 0; k < 8; k++) {
-          if (ci->progeny[k] != NULL) {
-            // runner_dopair_recursive_grav(r, ci->progeny[k], cj, 0);
-            enum runner_gpu_task_type child_type =
-                runner_dopair_recursive_grav_new(
-                    r, ci->progeny[k], cj, 0, gravity_gpu_values_send_pair,
-                    gravity_gpu_values_send_pair_d,
-                    gravity_gpu_values_recv_pair,
-                    gravity_gpu_values_recv_pair_d, grav_cells_pair,
-                    grav_tasks_pair, t, ncells, max_cell_size, stream);
-            if (child_type > task_type) task_type = child_type;
-          }
-        }
-
-      } else {
-        /* cj is split */
-
-        /* MATTHIEU: This could maybe be replaced by P-M interactions ?  */
-
-        /* Loop over cj's children */
-        for (int k = 0; k < 8; k++) {
-          if (cj->progeny[k] != NULL) {
-            // runner_dopair_recursive_grav(r, ci, cj->progeny[k], 0);
-            enum runner_gpu_task_type child_type =
-                runner_dopair_recursive_grav_new(
-                    r, ci, cj->progeny[k], 0, gravity_gpu_values_send_pair,
-                    gravity_gpu_values_send_pair_d,
-                    gravity_gpu_values_recv_pair,
-                    gravity_gpu_values_recv_pair_d, grav_cells_pair,
-                    grav_tasks_pair, t, ncells, max_cell_size, stream);
-            if (child_type > task_type) task_type = child_type;
-          }
-        }
-      }
-    } else {
-
-      /* Can we actually split that interaction ? */
-      if (cj->split) {
-
-        /* Loop over cj's children */
-        for (int k = 0; k < 8; k++) {
-          if (cj->progeny[k] != NULL) {
-            // runner_dopair_recursive_grav(r, ci, cj->progeny[k], 0);
-            enum runner_gpu_task_type child_type =
-                runner_dopair_recursive_grav_new(
-                    r, ci, cj->progeny[k], 0, gravity_gpu_values_send_pair,
-                    gravity_gpu_values_send_pair_d,
-                    gravity_gpu_values_recv_pair,
-                    gravity_gpu_values_recv_pair_d, grav_cells_pair,
-                    grav_tasks_pair, t, ncells, max_cell_size, stream);
-            if (child_type > task_type) task_type = child_type;
-          }
-        }
-
-      } else {
-        /* ci is split */
-
-        /* MATTHIEU: This could maybe be replaced by P-M interactions ?  */
-
-        /* Loop over ci's children */
-        for (int k = 0; k < 8; k++) {
-          if (ci->progeny[k] != NULL) {
-            // runner_dopair_recursive_grav(r, ci->progeny[k], cj, 0);
-            enum runner_gpu_task_type child_type =
-                runner_dopair_recursive_grav_new(
-                    r, ci->progeny[k], cj, 0, gravity_gpu_values_send_pair,
-                    gravity_gpu_values_send_pair_d,
-                    gravity_gpu_values_recv_pair,
-                    gravity_gpu_values_recv_pair_d, grav_cells_pair,
-                    grav_tasks_pair, t, ncells, max_cell_size, stream);
-            if (child_type > task_type) task_type = child_type;
-          }
-        }
-      }
-    }
-
-    if (gettimer) TIMER_TOC(timer_dosub_pair_grav);
-    return task_type;
   }
 
   if (gettimer) TIMER_TOC(timer_dosub_pair_grav);
-  return regular_task;
+  return task_type;
 }
 
 /**
