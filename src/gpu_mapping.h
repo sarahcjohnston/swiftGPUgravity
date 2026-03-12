@@ -22,7 +22,7 @@
 typedef cudaStream_t GPUStream;
 typedef cudaEvent_t GPUEvent;
 typedef cudaError_t GPUError;
-typedef cudaDeviceProp GPUDeviceProp;
+typedef struct cudaDeviceProp GPUDeviceProp;
 
 #define GPU_SUCCESS cudaSuccess
 
