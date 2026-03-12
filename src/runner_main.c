@@ -191,14 +191,14 @@ void* runner_main(void* data) {
         if (t == NULL) {
 
           if (runner_gpu_flush_leftover_self(r) == flushed_self_task) {
-            message("Flushed leftover self batch in runner %d.", r->id);
+            /* message("Flushed leftover self batch in runner %d.", r->id); */
             runner_gpu_complete_self_batch(r, sched);
             prev = NULL;
             continue;
           }
 
           if (runner_gpu_flush_leftover_pair(r) == flushed_pair_task) {
-            message("Flushed leftover pair batch in runner %d.", r->id);
+            /* message("Flushed leftover pair batch in runner %d.", r->id); */
             runner_gpu_complete_pair_batch(r, sched);
             prev = NULL;
             continue;
@@ -624,41 +624,41 @@ void* runner_main(void* data) {
 
       switch (gpu_task_type) {
         case regular_task:
-          message(
+          /* message(
               "Runner %d completed task %s/%s and cleaning up as regular task "
               "(tasks waiting: %d).",
               r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype],
-              sched->waiting);
+              sched->waiting); */
           t = scheduler_done(sched, t);
           break;
 
         case packed_task:
-          message(
+          /* message(
               "Runner %d completed task %s/%s and cleaning up as packed task "
               "(tasks waiting: %d).",
               r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype],
-              sched->waiting);
+              sched->waiting); */
           t->toc = getticks();
           t->total_ticks += t->toc - t->tic;
           t = NULL;
           break;
 
         case flushed_self_task:
-          message(
+          /* message(
               "Runner %d completed task %s/%s and cleaning up as flushed self "
               "batch (tasks waiting: %d).",
               r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype],
-              sched->waiting);
+              sched->waiting); */
           runner_gpu_complete_self_batch(r, sched);
           t = NULL;
           break;
 
         case flushed_pair_task:
-          message(
+          /*message(
               "Runner %d completed task %s/%s and cleaning up as flushed pair "
               "batch (tasks waiting: %d).",
               r->cpuid, taskID_names[t->type], subtaskID_names[t->subtype],
-              sched->waiting);
+              sched->waiting);*/
           runner_gpu_complete_pair_batch(r, sched);
           t = NULL;
           break;
