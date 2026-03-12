@@ -576,6 +576,7 @@ void runner_dopair_grav_pp_new(
     }
     r->gpu.grav_batch_pair_count = 0;
   }
+}
 
 /**
  * @brief Pack, launch, and unpack a batched self-gravity GPU task.
