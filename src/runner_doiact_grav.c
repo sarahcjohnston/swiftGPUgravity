@@ -2021,10 +2021,6 @@ void runner_dopair_grav_pp_new(
   cell_gunlocktree(b);
   cell_gunlocktree(a);
 
-  lock_lock(&sched->queues[r->qid].lock);
-  sched->queues[r->qid].gpu_pair_tasks_left--;
-  (void)lock_unlock(&sched->queues[r->qid].lock);
-
   // printf("qid:%i Packed: %i \n", r->qid, r->gpu.grav_batch_pair_count);
   // fflush(stdout);
 
@@ -2205,7 +2201,6 @@ void runner_dopair_grav_pp_new(
         }
         cell_gunlocktree(b);
 
-        scheduler_done(sched, grav_tasks_pair[j / 2]);
         /*enqueue_dependencies(sched, grav_tasks_pair[j]);
         pthread_mutex_lock(&sched->sleep_mutex);
         atomic_dec(&sched->waiting);
@@ -2796,9 +2791,9 @@ void runner_doself_grav_pp_new(
  * @param ncells The batch capacity in cells.
  * @param max_cell_size The maximum number of particles per packed cell.
  */
-void runner_doself_grav_pp_task_new(struct runner* r, struct cell* ci,
-                                    struct task* t, struct scheduler* sched,
-                                    int ncells, int max_cell_size) {
+int runner_doself_grav_pp_task_new(struct runner* r, struct cell* ci,
+                                   struct task* t, struct scheduler* sched,
+                                   int ncells, int max_cell_size) {
 
   const struct engine* e = r->e;
   struct gravity_cache* const ci_cache = &r->ci_gravity_cache;
@@ -2923,10 +2918,6 @@ void runner_doself_grav_pp_task_new(struct runner* r, struct cell* ci,
   gravity_cache_zero_output(ci_cache, gcount_padded);
   cell_gunlocktree(ci);
 
-  lock_lock(&sched->queues[r->qid].lock);
-  sched->queues[r->qid].gpu_self_tasks_left--;
-  (void)lock_unlock(&sched->queues[r->qid].lock);
-
 #ifdef SWIFT_DEBUG_CHECKS
   for (int j = 0; j < gcount; j++) {
     for (int i = 0; i < gcount; i++) {
@@ -3018,16 +3009,10 @@ void runner_doself_grav_pp_task_new(struct runner* r, struct cell* ci,
       TIMER_TOC(timer_doself_grav_pp);
     }
 
-    for (int i = 0; i < ncells; i++) {
-      scheduler_done(sched, r->gpu.grav_tasks_self[i]);
-    }
-
-    for (int i = 0; i < ncells; i++) {
-      r->gpu.grav_cells_self[i] = NULL;
-      r->gpu.grav_tasks_self[i] = NULL;
-    }
-    r->gpu.grav_batch_self_count = 0;
+    return 1;
   }
+
+  return 0;
 }
 
 /**
@@ -3373,6 +3358,7 @@ void runner_dopair_recursive_grav(struct runner* r, struct cell* ci,
   const int periodic = e->mesh->periodic;
   const double dim[3] = {e->mesh->dim[0], e->mesh->dim[1], e->mesh->dim[2]};
   const double max_distance = e->mesh->r_cut_max;
+  int flushed = 0;
 
   /* Anything to do here? */
   if (!((cell_is_active_gravity(ci, e) && ci->nodeID == nodeID) ||
@@ -3542,7 +3528,7 @@ void runner_dopair_recursive_grav(struct runner* r, struct cell* ci,
  * @param cj The other #cell.
  * @param gettimer Are we timing this ?
  */
-void runner_dopair_recursive_grav_new(
+int runner_dopair_recursive_grav_new(
     struct runner* r, struct cell* ci, struct cell* cj, const int gettimer,
     struct gravity_gpu_values_send* gravity_gpu_values_send_pair,
     struct gravity_gpu_values_send* gravity_gpu_values_send_pair_d,
@@ -3575,7 +3561,7 @@ void runner_dopair_recursive_grav_new(
   /* Anything to do here? */
   if (!((cell_is_active_gravity(ci, e) && ci->nodeID == nodeID) ||
         (cell_is_active_gravity(cj, e) && cj->nodeID == nodeID)))
-    return;
+    return 0;
 
 #ifdef SWIFT_DEBUG_CHECKS
 
@@ -3654,10 +3640,6 @@ void runner_dopair_recursive_grav_new(
     runner_dopair_grav_pp_no_cache(r, ci, cj);
     runner_dopair_grav_pp_no_cache(r, cj, ci);
 
-    lock_lock(&sched->queues[r->qid].lock);
-    sched->queues[r->qid].gpu_pair_tasks_left--;
-    (void)lock_unlock(&sched->queues[r->qid].lock);
-
     /* Can we use M-M interactions ? */
   } else if (gravity_M2L_accept_symmetric(e->gravity_properties, multi_i,
                                           multi_j, r2,
@@ -3669,10 +3651,6 @@ void runner_dopair_recursive_grav_new(
 
     /* Go M-M */
     runner_dopair_grav_mm(r, ci, cj);
-
-    lock_lock(&sched->queues[r->qid].lock);
-    sched->queues[r->qid].gpu_pair_tasks_left--;
-    (void)lock_unlock(&sched->queues[r->qid].lock);
 
     /* Did we reach the bottom? */
   } else if (!ci->split && !cj->split) {
@@ -3693,6 +3671,7 @@ void runner_dopair_recursive_grav_new(
         stream);
 
     *packed = 1;
+    return r->gpu.grav_batch_pair_count >= ncells;
 
   } else {
 
@@ -3714,7 +3693,7 @@ void runner_dopair_recursive_grav_new(
         for (int k = 0; k < 8; k++) {
           if (ci->progeny[k] != NULL) {
             // runner_dopair_recursive_grav(r, ci->progeny[k], cj, 0);
-            runner_dopair_recursive_grav_new(
+            flushed |= runner_dopair_recursive_grav_new(
                 r, ci->progeny[k], cj, 0, gravity_gpu_values_send_pair,
                 gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair,
                 gravity_gpu_values_recv_pair_d, grav_cells_pair,
@@ -3732,7 +3711,7 @@ void runner_dopair_recursive_grav_new(
         for (int k = 0; k < 8; k++) {
           if (cj->progeny[k] != NULL) {
             // runner_dopair_recursive_grav(r, ci, cj->progeny[k], 0);
-            runner_dopair_recursive_grav_new(
+            flushed |= runner_dopair_recursive_grav_new(
                 r, ci, cj->progeny[k], 0, gravity_gpu_values_send_pair,
                 gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair,
                 gravity_gpu_values_recv_pair_d, grav_cells_pair,
@@ -3750,7 +3729,7 @@ void runner_dopair_recursive_grav_new(
         for (int k = 0; k < 8; k++) {
           if (cj->progeny[k] != NULL) {
             // runner_dopair_recursive_grav(r, ci, cj->progeny[k], 0);
-            runner_dopair_recursive_grav_new(
+            flushed |= runner_dopair_recursive_grav_new(
                 r, ci, cj->progeny[k], 0, gravity_gpu_values_send_pair,
                 gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair,
                 gravity_gpu_values_recv_pair_d, grav_cells_pair,
@@ -3768,7 +3747,7 @@ void runner_dopair_recursive_grav_new(
         for (int k = 0; k < 8; k++) {
           if (ci->progeny[k] != NULL) {
             // runner_dopair_recursive_grav(r, ci->progeny[k], cj, 0);
-            runner_dopair_recursive_grav_new(
+            flushed |= runner_dopair_recursive_grav_new(
                 r, ci->progeny[k], cj, 0, gravity_gpu_values_send_pair,
                 gravity_gpu_values_send_pair_d, gravity_gpu_values_recv_pair,
                 gravity_gpu_values_recv_pair_d, grav_cells_pair,
@@ -3781,6 +3760,7 @@ void runner_dopair_recursive_grav_new(
   }
 
   if (gettimer) TIMER_TOC(timer_dosub_pair_grav);
+  return flushed;
 }
 
 /**
