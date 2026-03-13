@@ -1082,3 +1082,8 @@ Lightcone1:
   min_z_for_gas_filtering:    0.025  # Filter gas particles above this redshift, output all below
   min_temp_for_filtered_gas:  1.0e5  # Above min_z_for_gas_filtering only output gas with temperature above this
   min_nh_for_filtered_gas:    1.0e-6 # Above min_z_for_gas_filtering only output gas with nh/(1+z)^4 above this
+
+GPU:
+  pack_ncells: 8 # How many cells to pack
+  gpu_grav_cell_size: 100000 # How many particles do we want in a cell offloaded to the gpu? This will supersede the Scheduler cell and task splitting parameters.
+
