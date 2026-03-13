@@ -818,12 +818,40 @@ AC_ARG_WITH([hip-flags],
     [with_hip_flags=""]
 )
 
+AC_ARG_WITH([gpu-ncells],
+    [AS_HELP_STRING([--with-gpu-ncells=memory|N],
+       [set GPU gravity batch cell count (memory uses GPU memory with headroom, N>=2 fixes the value)]
+    )],
+    [with_gpu_ncells="$withval"],
+    [with_gpu_ncells="memory"]
+)
+
 if test "x$with_cuda" != "xno" -a "x$with_hip" != "xno"; then
    AC_MSG_ERROR([Please specify only one GPU backend via --with-cuda or --with-hip])
 fi
 
 if test "x$with_cuda" = "xno" -a "x$with_hip" = "xno"; then
    AC_MSG_ERROR([Please specify a GPU backend via --with-cuda=PATH or --with-hip=PATH])
+fi
+
+if test "x$with_gpu_ncells" = "xmemory"; then
+   AC_DEFINE([GPU_GRAV_BATCH_NCELLS_MEMORY], 1,
+             [Compute GPU gravity batch size from device memory])
+else
+   case "$with_gpu_ncells" in
+     ''|*[!0-9]*)
+        AC_MSG_ERROR([--with-gpu-ncells expects 'memory' or an integer >= 2])
+        ;;
+     *)
+        if test "$with_gpu_ncells" -lt 2; then
+           AC_MSG_ERROR([--with-gpu-ncells expects an integer >= 2])
+        fi
+        AC_DEFINE([GPU_GRAV_BATCH_NCELLS_FIXED], 1,
+                  [Use a fixed GPU gravity batch cell count])
+        AC_DEFINE_UNQUOTED([GPU_GRAV_BATCH_NCELLS_VALUE], [$with_gpu_ncells],
+                  [Fixed number of cells per GPU gravity batch])
+        ;;
+   esac
 fi
 
 GPU_BACKEND="none"
