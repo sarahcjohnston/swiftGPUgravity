@@ -1149,28 +1149,7 @@ void runner_gpu_init(struct runner* r) {
 
   gpu->grav_max_cell_size = max_cell_size;
 
-#ifdef GPU_GRAV_BATCH_NCELLS_FIXED
   gpu->grav_batch_ncells = GPU_GRAV_BATCH_NCELLS_VALUE;
-#else
-  const double gpu_mem_headroom = 0.8;
-  const size_t total_gpu_mem = (size_t)prop.totalGlobalMem;
-  const size_t avail_gpu_mem =
-      (size_t)(gpu_mem_headroom * (double)total_gpu_mem);
-  const int n_threads = e->nr_threads;
-  const size_t send_cell_bytes =
-      (size_t)max_cell_size * sizeof(struct gravity_gpu_values_send);
-  const size_t recv_cell_bytes =
-      (size_t)max_cell_size * sizeof(struct gravity_gpu_values_recv);
-  const size_t device_bytes_per_cell = 2 * (send_cell_bytes + recv_cell_bytes);
-  const size_t avail_gpu_mem_per_runner = avail_gpu_mem / (size_t)n_threads;
-  size_t max_cells = 0;
-  if (device_bytes_per_cell > 0) {
-    max_cells = avail_gpu_mem_per_runner / device_bytes_per_cell;
-  }
-  if (max_cells < 2) max_cells = 2;
-  if (max_cells > (size_t)INT_MAX) max_cells = (size_t)INT_MAX;
-  gpu->grav_batch_ncells = (int)max_cells;
-#endif
 
   const size_t send_bytes = gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                             sizeof(struct gravity_gpu_values_send);
@@ -1183,11 +1162,7 @@ void runner_gpu_init(struct runner* r) {
     message("GPU device: %s", prop.name);
     message("Total GPU memory: %.2f B", (float)prop.totalGlobalMem);
     message("Max cell size: %i", gpu->grav_max_cell_size);
-#ifdef GPU_GRAV_BATCH_NCELLS_FIXED
-    message("ncells per pack (fixed): %i", gpu->grav_batch_ncells);
-#else
-    message("ncells per pack (memory): %i", gpu->grav_batch_ncells);
-#endif
+    message("ncells per pack: %i", gpu->grav_batch_ncells);
     message("Per-runner device buffer bytes: %zu", total_device_bytes);
     message("Per-runner host pinned bytes: %zu", total_host_pinned_bytes);
   }

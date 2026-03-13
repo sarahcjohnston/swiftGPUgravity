@@ -47,9 +47,7 @@ between them at compile time. Some examples include a central potential, a
 softened central potential, and a sinusoidal potential. You will need to
 configure, for example, the mass in your parameter file at runtime.
 
-``--with-gpu-ncells=memory``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Choose how many gravity cells are packed per GPU batch. The default ``memory``
-option computes the batch size from the GPU memory with a fixed headroom. Pass
-an integer (``2`` or larger) to force a fixed batch size for all runs.
-
+``--with-gpu-ncells=4``
+~~~~~~~~~~~~~~~~~~~~~~
+Choose how many gravity cells are packed per GPU batch. Pass an integer (``2``
+or larger) to fix the batch size for all runs.
