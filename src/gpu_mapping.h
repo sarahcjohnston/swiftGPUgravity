@@ -51,6 +51,12 @@ typedef struct cudaDeviceProp GPUDeviceProp;
 #define GPUSetDevice cudaSetDevice
 #define GPUGetDeviceProperties cudaGetDeviceProperties
 
+/**
+ * @brief Allocate pinned host memory for GPU transfers.
+ *
+ * @param ptr Output pointer to the allocated memory.
+ * @param size Number of bytes to allocate.
+ */
 static inline GPUError gpu_host_malloc(void** ptr, size_t size) {
   return cudaMallocHost(ptr, size);
 }
@@ -95,6 +101,12 @@ typedef hipDeviceProp_t GPUDeviceProp;
 #define GPUSetDevice hipSetDevice
 #define GPUGetDeviceProperties hipGetDeviceProperties
 
+/**
+ * @brief Allocate pinned host memory for GPU transfers.
+ *
+ * @param ptr Output pointer to the allocated memory.
+ * @param size Number of bytes to allocate.
+ */
 static inline GPUError gpu_host_malloc(void** ptr, size_t size) {
   return hipHostMalloc(ptr, size, 0);
 }
