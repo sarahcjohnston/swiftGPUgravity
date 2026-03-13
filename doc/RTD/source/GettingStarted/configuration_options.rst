@@ -46,8 +46,3 @@ Many external potentials are available for use with SWIFT. You can choose
 between them at compile time. Some examples include a central potential, a
 softened central potential, and a sinusoidal potential. You will need to
 configure, for example, the mass in your parameter file at runtime.
-
-``--with-gpu-ncells=4``
-~~~~~~~~~~~~~~~~~~~~~~
-Choose how many gravity cells are packed per GPU batch. Pass an integer (``2``
-or larger) to fix the batch size for all runs.
