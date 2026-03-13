@@ -1471,12 +1471,17 @@ static void scheduler_splittask_gravity(struct task* t, struct scheduler* s) {
         const long long gcount_i = ci->grav.count;
         const long long gcount_j = cj->grav.count;
 
-        /* Replace by a single sub-task? */
+/* Replace by a single sub-task? */
+#if defined(WITH_CUDA) || defined(WITH_HIP)
         /* NOTE: we want both cells to be smaller than this size to fit on
          * the GPU so we don't use the product like master would. */
         if (scheduler_dosub &&
             (gcount_i < ((long long)space_subsize_self_grav) &&
              gcount_j < ((long long)space_subsize_self_grav))) {
+#else
+        if (scheduler_dosub &&
+            gcount_i * gcount_j < ((long long)space_subsize_pair_grav)) {
+#endif
           /* Otherwise, split it. */
         } else {
           /* Turn the task into a M-M task that will take care of all the
@@ -2999,7 +3004,6 @@ struct task* scheduler_gettask(struct scheduler* s, int qid,
         }
         if (res != NULL) break;
       }
-
       /* If we failed, but have batched tasks on the GPU, Avoid sleeping, we
        * will flush them in runner_main. */
       if (res == NULL) {
