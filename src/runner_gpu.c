@@ -28,7 +28,6 @@
 #include "scheduler.h"
 #include "timers.h"
 
-#include <limits.h>
 #include <stdlib.h>
 
 extern void pair_pp_offload_new(
@@ -39,6 +38,21 @@ extern void pair_pp_offload_new(
     struct gravity_gpu_values_send* gravity_gpu_values_send_d,
     struct gravity_gpu_values_recv* gravity_gpu_values_recv_d, int ncells,
     int max_cell_size, GPUStream stream);
+
+/**
+ * @brief Unpack the GPU parameters from the parameter file.
+ *
+ * @param e The #engine to unpack the parameters for.
+ */
+void runner_gpu_params_init(struct engine* e) {
+
+  /* Unpack the number of cells we will pack onto the GPU at a time. */
+  e->ncells_per_gpu_grav_pack = parser_get_opt_param_int(
+      e->parameter_file, "GPU:ncells_per_gpu_grav_pack", 8);
+  if (e->ncells_per_gpu_grav_pack < 2) {
+    error("GPU:ncells_per_gpu_grav_pack must be >= 2");
+  }
+}
 
 static void runner_gpu_complete_self_task(struct runner* r,
                                           struct scheduler* sched,
@@ -1149,7 +1163,7 @@ void runner_gpu_init(struct runner* r) {
 
   gpu->grav_max_cell_size = max_cell_size;
 
-  gpu->grav_batch_ncells = GPU_GRAV_BATCH_NCELLS_VALUE;
+  gpu->grav_batch_ncells = e->ncells_per_gpu_grav_pack;
 
   const size_t send_bytes = gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                             sizeof(struct gravity_gpu_values_send);

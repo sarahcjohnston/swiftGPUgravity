@@ -95,6 +95,7 @@
 #include "restart.h"
 #include "rt_properties.h"
 #include "runner.h"
+#include "runner_gpu.h"
 #include "sink_properties.h"
 #include "sort_part.h"
 #include "star_formation.h"
@@ -3589,6 +3590,10 @@ void engine_init(
 #endif
   e->total_nr_cells = 0;
   e->total_nr_tasks = 0;
+
+#if defined(WITH_CUDA) || defined(WITH_HIP)
+  runner_gpu_params_init(e);
+#endif
 
 #ifdef SWIFT_GRAVITY_FORCE_CHECKS
   e->force_checks_only_all_active =

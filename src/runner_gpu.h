@@ -22,6 +22,7 @@
 #include "gpu_mapping.h"
 
 struct cell;
+struct engine;
 struct runner;
 struct scheduler;
 struct task;
@@ -44,6 +45,13 @@ enum runner_gpu_task_type {
   flushed_self_task = 2,
   flushed_pair_task = 3
 };
+
+/**
+ * @brief Initialise GPU parameters from the parameter file.
+ *
+ * @param e The #engine to unpack parameters for.
+ */
+void runner_gpu_params_init(struct engine* e);
 
 /**
  * @brief GPU-specific state owned by a single runner.
@@ -184,5 +192,12 @@ void runner_gpu_complete_pair_task(struct runner* r, struct scheduler* sched,
  * batch.
  */
 void runner_gpu_complete_pair_batch(struct runner* r, struct scheduler* sched);
+
+/**
+ * @brief Initialise the GPU-specific parameters attached to an engine.
+ *
+ * @param e The engine whose GPU parameters to initialise.
+ */
+void runner_gpu_params_init(struct engine* e);
 
 #endif /* SWIFT_RUNNER_GPU_H */
