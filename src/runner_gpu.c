@@ -86,27 +86,13 @@ void runner_gpu_params_init(struct engine *e) {
  * @param sched The scheduler tracking the task.
  * @param t The task to complete.
  */
-static void runner_gpu_complete_grav_task(struct runner *r,
-                                          struct scheduler *sched,
-                                          struct task *t) {
-
-  if (t == NULL) return;
-
-  lock_lock(&sched->queues[r->qid].lock);
-  if (t->subtype == task_subtype_grav && t->type == task_type_self) {
-    sched->queues[r->qid].gpu_self_tasks_left--;
-  } else if (t->subtype == task_subtype_grav && t->type == task_type_pair) {
-    sched->queues[r->qid].gpu_pair_tasks_left--;
-  }
-  (void)lock_unlock(&sched->queues[r->qid].lock);
-
-  scheduler_done(sched, t);
-}
-
 static void runner_gpu_complete_self_task(struct runner *r,
                                           struct scheduler *sched,
                                           struct task *t) {
-  runner_gpu_complete_grav_task(r, sched, t);
+  lock_lock(&sched->queues[r->qid].lock);
+  sched->queues[r->qid].gpu_self_tasks_left--;
+  (void)lock_unlock(&sched->queues[r->qid].lock);
+  scheduler_done(sched, t);
 }
 
 /**
@@ -118,7 +104,13 @@ static void runner_gpu_complete_self_task(struct runner *r,
  */
 void runner_gpu_complete_pair_task(struct runner *r, struct scheduler *sched,
                                    struct task *t) {
-  runner_gpu_complete_grav_task(r, sched, t);
+  lock_lock(&sched->queues[r->qid].lock);
+  if (t->subtype == task_subtype_grav && t->type == task_type_self)
+    sched->queues[r->qid].gpu_self_tasks_left--;
+  else
+    sched->queues[r->qid].gpu_pair_tasks_left--;
+  (void)lock_unlock(&sched->queues[r->qid].lock);
+  scheduler_done(sched, t);
 }
 
 /**
@@ -157,19 +149,14 @@ void runner_gpu_complete_self_batch(struct runner *r, struct scheduler *sched) {
  */
 void runner_gpu_complete_pair_batch(struct runner *r, struct scheduler *sched) {
   const int count = r->gpu.grav_batch_pair_count;
+  struct task *prev_task = NULL;
 
   for (int i = 0; i < count; i += 2) {
     struct task *task = r->gpu.grav_tasks_pair[i / 2];
-
-    int seen = 0;
-    for (int j = 0; j < i / 2; j++) {
-      if (r->gpu.grav_tasks_pair[j] == task) {
-        seen = 1;
-        break;
-      }
+    if (task != prev_task) {
+      runner_gpu_complete_pair_task(r, sched, task);
+      prev_task = task;
     }
-
-    if (!seen) runner_gpu_complete_pair_task(r, sched, task);
 
     r->gpu.grav_cells_pair[i] = NULL;
     r->gpu.grav_cells_pair[i + 1] = NULL;
