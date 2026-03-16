@@ -969,9 +969,18 @@ static enum runner_gpu_task_type runner_doself_recursive_grav_task_new(
         if (child_type > task_type) task_type = child_type;
 
         for (int k = j + 1; k < 8; k++) {
-          if (c->progeny[k] != NULL)
-            runner_dopair_recursive_grav_new(r, c->progeny[j], c->progeny[k],
-                                             0);
+          if (c->progeny[k] != NULL) {
+            enum runner_gpu_task_type pair_type =
+                runner_dopair_recursive_grav_new(
+                    r, c->progeny[j], c->progeny[k], 0,
+                    r->gpu.gravity_gpu_values_send_pair,
+                    r->gpu.gravity_gpu_values_send_pair_d,
+                    r->gpu.gravity_gpu_values_recv_pair,
+                    r->gpu.gravity_gpu_values_recv_pair_d,
+                    r->gpu.grav_cells_pair, r->gpu.grav_tasks_pair, t, ncells,
+                    max_cell_size, r->gpu.stream);
+            if (pair_type > task_type) task_type = pair_type;
+          }
         }
       }
     }
