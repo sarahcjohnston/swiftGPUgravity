@@ -1298,10 +1298,11 @@ void space_init(struct space *s, struct swift_params *params,
                                space_subdepth_diff_grav_default);
 
 #if defined(WITH_CUDA) || defined(WITH_HIP)
-  /* For GPU gravity, we need to ensure that the cells are split to the size
-   * we expect a batch of particles to be. */
-  space_splitsize = parser_get_opt_param_int(params, "GPU:gpu_grav_cell_size",
-                                             space_splitsize_default);
+  /* For GPU gravity, enforce the tree split size used to build leaves. */
+  const int gpu_grav_cell_size = parser_get_opt_param_int(
+      params, "GPU:gpu_grav_cell_size", space_splitsize_default);
+  if (gpu_grav_cell_size <= 0) error("GPU:gpu_grav_cell_size must be > 0");
+  space_splitsize = gpu_grav_cell_size;
 #endif
 
   space_recurse_size_self_hydro =

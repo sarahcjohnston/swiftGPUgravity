@@ -26,6 +26,7 @@
 #include "runner.h"
 #include "runner_doiact_grav.h"
 #include "scheduler.h"
+#include "space.h"
 #include "timers.h"
 
 #include <stdlib.h>
@@ -717,9 +718,9 @@ static enum runner_gpu_task_type runner_doself_grav_pp_pack_leaf(
 
   if (gcount > max_cell_size)
     error(
-        "More particles than allocated memory! %i particles in cell and only "
-        "%i slots in memory available. Increase the number of top level "
-        "cells!",
+        "GPU self-gravity recursion reached an unsplit leaf with %d gparts "
+        "(GPU:gpu_grav_cell_size=%d). This indicates tree splitting did not "
+        "enforce the GPU gravity cell size.",
         gcount, max_cell_size);
 
   const double loc[3] = {ci->loc[0] + 0.5 * ci->width[0],
@@ -1067,11 +1068,10 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
         (cell_is_active_gravity(cj, e) && cj->nodeID == nodeID)))
     return regular_task;
 
-#ifdef SWIFT_DEBUG_CHECKS
-
   const int gcount_i = ci->grav.count;
   const int gcount_j = cj->grav.count;
 
+#ifdef SWIFT_DEBUG_CHECKS
   /* Early abort? */
   if (gcount_i == 0 || gcount_j == 0)
     error("Doing pair gravity on an empty cell !");
@@ -1155,6 +1155,13 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
   } else if (!ci->split && !cj->split) {
 
     /* We have two leaves. Go P-P. */
+    if (gcount_i > max_cell_size || gcount_j > max_cell_size)
+      error(
+          "GPU pair-gravity recursion reached unsplit leaves larger than "
+          "GPU:gpu_grav_cell_size=%d (counts: %d, %d). This indicates tree "
+          "splitting did not enforce the GPU gravity cell size.",
+          max_cell_size, gcount_i, gcount_j);
+
     return runner_dopair_grav_pp_new(
         r, ci, cj, /*symmetric*/ 1, /*allow_mpoles=*/1,
         gravity_gpu_values_send_pair, gravity_gpu_values_send_pair_d,
@@ -1295,7 +1302,7 @@ void runner_gpu_init(struct runner *r) {
   GPUDeviceProp prop;
   GPUGetDeviceProperties(&prop, 0);
 
-  const int max_cell_size = space_subsize_self_grav + 100;
+  const int max_cell_size = space_splitsize;
 
   gpu->grav_max_cell_size = max_cell_size;
 
