@@ -105,7 +105,7 @@ reference pointing to the ASCL entry of the code: https://ascl.net/1805.020.
 ## Contribution Guidelines
 
 The SWIFT source code uses a variation of the 'Google' formatting style.
-The script 'format.sh' in the root directory applies the clang-format-18
+The script 'format.sh' in the root directory applies the clang-format-20
 tool with our style choices to all the SWIFT C source file. Please apply
 the formatting script to the files before submitting a pull request.
 
@@ -129,7 +129,7 @@ are highly encouraged.
  /____/ |__/|__/___/_/    /_/
  SPH With Inter-dependent Fine-grained Tasking
 
- Version : 2025.04
+ Version : 2026.01
  Website: www.swiftsim.com
  Twitter: @SwiftSimulation
 
