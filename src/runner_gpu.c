@@ -697,20 +697,18 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
 }
 
 /**
- * @brief Pack, launch, and unpack a batched self-gravity GPU task.
+ * @brief Pack one leaf self-gravity interaction into the runner GPU batch.
  *
  * @param r The #runner.
- * @param ci The #cell to pack.
+ * @param ci The leaf #cell to pack.
  * @param t The #task being executed.
  * @param ncells The batch capacity in cells.
  * @param max_cell_size The maximum number of particles per packed cell.
- * @return The outcome of the GPU wrapper for this task.
+ * @return The outcome of packing/flushing this leaf interaction.
  */
-enum runner_gpu_task_type runner_doself_grav_pp_task_new(struct runner *r,
-                                                         struct cell *ci,
-                                                         struct task *t,
-                                                         int ncells,
-                                                         int max_cell_size) {
+static enum runner_gpu_task_type runner_doself_grav_pp_pack_leaf(
+    struct runner *r, struct cell *ci, struct task *t, int ncells,
+    int max_cell_size) {
 
   const struct engine *e = r->e;
   struct gravity_cache *const ci_cache = &r->ci_gravity_cache;
@@ -930,6 +928,94 @@ enum runner_gpu_task_type runner_doself_grav_pp_task_new(struct runner *r,
   }
 
   return packed_task;
+}
+
+/**
+ * @brief Recurse through a self-gravity task and offload leaf self work.
+ *
+ * This mirrors the upstream self-gravity recursion: recurse down the self tree,
+ * compute sibling interactions at each split level, and only offload direct
+ * self P-P work at leaves.
+ *
+ * @param r The #runner.
+ * @param c The #cell currently being processed.
+ * @param t The top-level scheduler task.
+ * @param gettimer Should we close the self-recursion timer here?
+ * @param ncells The batch capacity in cells.
+ * @param max_cell_size The maximum number of particles per packed cell.
+ * @return The highest-priority GPU task state reached by this walk.
+ */
+static enum runner_gpu_task_type runner_doself_recursive_grav_task_new(
+    struct runner *r, struct cell *c, struct task *t, const int gettimer,
+    int ncells, int max_cell_size) {
+
+  const struct engine *e = r->e;
+
+  /* Clear the flags. */
+  runner_clear_grav_flags(c, e);
+
+#ifdef SWIFT_DEBUG_CHECKS
+  if (c->grav.count == 0) error("Doing self gravity on an empty cell !");
+#endif
+
+  if (!cell_is_active_gravity(c, e)) return regular_task;
+
+  TIMER_TIC;
+
+  enum runner_gpu_task_type task_type = regular_task;
+
+  if (c->split) {
+
+    for (int j = 0; j < 8; j++) {
+      if (c->progeny[j] != NULL) {
+
+        enum runner_gpu_task_type child_type =
+            runner_doself_recursive_grav_task_new(r, c->progeny[j], t, 0,
+                                                  ncells, max_cell_size);
+        if (child_type > task_type) task_type = child_type;
+
+        for (int k = j + 1; k < 8; k++) {
+          if (c->progeny[k] != NULL)
+            runner_dopair_recursive_grav(r, c->progeny[j], c->progeny[k], 0);
+        }
+      }
+    }
+
+  } else {
+
+    task_type = runner_doself_grav_pp_pack_leaf(r, c, t, ncells, max_cell_size);
+  }
+
+  enum runner_gpu_task_type final_type;
+  if (task_type >= packed_task) {
+    final_type =
+        (r->gpu.grav_batch_self_count > 0) ? packed_task : flushed_self_task;
+  } else {
+    final_type = regular_task;
+  }
+
+  if (gettimer) TIMER_TOC(timer_dosub_self_grav);
+  return final_type;
+}
+
+/**
+ * @brief Pack, launch, and unpack a batched self-gravity GPU task.
+ *
+ * @param r The #runner.
+ * @param ci The #cell to process.
+ * @param t The #task being executed.
+ * @param ncells The batch capacity in cells.
+ * @param max_cell_size The maximum number of particles per packed cell.
+ * @return The outcome of the GPU wrapper for this task.
+ */
+enum runner_gpu_task_type runner_doself_grav_pp_task_new(struct runner *r,
+                                                         struct cell *ci,
+                                                         struct task *t,
+                                                         int ncells,
+                                                         int max_cell_size) {
+
+  return runner_doself_recursive_grav_task_new(r, ci, t, 1, ncells,
+                                               max_cell_size);
 }
 
 /**
