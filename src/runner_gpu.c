@@ -716,13 +716,6 @@ static enum runner_gpu_task_type runner_doself_grav_pp_pack_leaf(
   const int gcount = ci->grav.count;
   const int gcount_padded = gcount - (gcount % VEC_SIZE) + VEC_SIZE;
 
-  if (gcount > max_cell_size)
-    error(
-        "GPU self-gravity recursion reached an unsplit leaf with %d gparts "
-        "(GPU:gpu_grav_cell_size=%d). This indicates tree splitting did not "
-        "enforce the GPU gravity cell size.",
-        gcount, max_cell_size);
-
   const double loc[3] = {ci->loc[0] + 0.5 * ci->width[0],
                          ci->loc[1] + 0.5 * ci->width[1],
                          ci->loc[2] + 0.5 * ci->width[2]};
@@ -977,12 +970,19 @@ static enum runner_gpu_task_type runner_doself_recursive_grav_task_new(
 
         for (int k = j + 1; k < 8; k++) {
           if (c->progeny[k] != NULL)
-            runner_dopair_recursive_grav(r, c->progeny[j], c->progeny[k], 0);
+            runner_dopair_recursive_grav_new(r, c->progeny[j], c->progeny[k],
+                                             0);
         }
       }
     }
 
   } else {
+
+    if (c->grav.count > max_cell_size)
+      error(
+          "GPU self recursion reached an unsplit cell above "
+          "GPU:gpu_grav_cell_size (%d > %d). This should not happen.",
+          c->grav.count, max_cell_size);
 
     task_type = runner_doself_grav_pp_pack_leaf(r, c, t, ncells, max_cell_size);
   }
