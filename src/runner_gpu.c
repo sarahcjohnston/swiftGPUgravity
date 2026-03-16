@@ -56,11 +56,11 @@
  */
 extern void pair_pp_offload_new(
     int periodic, float rmax_i, float rmax_j, double min_trunc,
-    const float* r_s_inv, const int* gcount_i, const int* gcount_padded_i,
-    const int* gcount_j, const int* gcount_padded_j, int ci_active,
+    const float *r_s_inv, const int *gcount_i, const int *gcount_padded_i,
+    const int *gcount_j, const int *gcount_padded_j, int ci_active,
     int cj_active, float dim_0, float dim_1, float dim_2, int symmetric,
-    struct gravity_gpu_values_send* gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv_d, int ncells,
+    struct gravity_gpu_values_send *gravity_gpu_values_send_d,
+    struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells,
     int max_cell_size, GPUStream stream);
 
 /**
@@ -68,7 +68,7 @@ extern void pair_pp_offload_new(
  *
  * @param e The #engine to unpack the parameters for.
  */
-void runner_gpu_params_init(struct engine* e) {
+void runner_gpu_params_init(struct engine *e) {
 
   /* Unpack the number of cells we will pack onto the GPU at a time. */
   e->ncells_per_gpu_grav_pack = parser_get_opt_param_int(
@@ -85,9 +85,9 @@ void runner_gpu_params_init(struct engine* e) {
  * @param sched The scheduler tracking the task.
  * @param t The task to complete.
  */
-static void runner_gpu_complete_self_task(struct runner* r,
-                                          struct scheduler* sched,
-                                          struct task* t) {
+static void runner_gpu_complete_self_task(struct runner *r,
+                                          struct scheduler *sched,
+                                          struct task *t) {
   lock_lock(&sched->queues[r->qid].lock);
   sched->queues[r->qid].gpu_self_tasks_left--;
   (void)lock_unlock(&sched->queues[r->qid].lock);
@@ -101,8 +101,8 @@ static void runner_gpu_complete_self_task(struct runner* r,
  * @param sched The scheduler tracking the task.
  * @param t The task to complete.
  */
-void runner_gpu_complete_pair_task(struct runner* r, struct scheduler* sched,
-                                   struct task* t) {
+void runner_gpu_complete_pair_task(struct runner *r, struct scheduler *sched,
+                                   struct task *t) {
   lock_lock(&sched->queues[r->qid].lock);
   sched->queues[r->qid].gpu_pair_tasks_left--;
   (void)lock_unlock(&sched->queues[r->qid].lock);
@@ -115,7 +115,7 @@ void runner_gpu_complete_pair_task(struct runner* r, struct scheduler* sched,
  * @param r The #runner owning the batch.
  * @param sched The scheduler tracking the tasks.
  */
-void runner_gpu_complete_self_batch(struct runner* r, struct scheduler* sched) {
+void runner_gpu_complete_self_batch(struct runner *r, struct scheduler *sched) {
   const int count = r->gpu.grav_batch_self_count;
 
   for (int i = 0; i < count; i++) {
@@ -133,12 +133,12 @@ void runner_gpu_complete_self_batch(struct runner* r, struct scheduler* sched) {
  * @param r The #runner owning the batch.
  * @param sched The scheduler tracking the tasks.
  */
-void runner_gpu_complete_pair_batch(struct runner* r, struct scheduler* sched) {
+void runner_gpu_complete_pair_batch(struct runner *r, struct scheduler *sched) {
   const int count = r->gpu.grav_batch_pair_count;
-  struct task* prev_task = NULL;
+  struct task *prev_task = NULL;
 
   for (int i = 0; i < count; i += 2) {
-    struct task* task = r->gpu.grav_tasks_pair[i / 2];
+    struct task *task = r->gpu.grav_tasks_pair[i / 2];
     if (task != prev_task) {
       runner_gpu_complete_pair_task(r, sched, task);
       prev_task = task;
@@ -174,15 +174,15 @@ void runner_gpu_complete_pair_batch(struct runner* r, struct scheduler* sched) {
  * @param stream The GPU stream used for timing events.
  */
 static void runner_dopair_grav_pp_pack(
-    struct runner* r, struct cell* ci, struct cell* cj, const int symmetric,
+    struct runner *r, struct cell *ci, struct cell *cj, const int symmetric,
     const int allow_mpole,
-    struct gravity_gpu_values_send* gravity_gpu_values_send_pair,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair,
-    struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    struct task* t, int max_cell_size, GPUStream stream) {
+    struct gravity_gpu_values_send *gravity_gpu_values_send_pair,
+    struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair,
+    struct cell **grav_cells_pair, struct task **grav_tasks_pair,
+    struct task *t, int max_cell_size, GPUStream stream) {
 
   /* Recover some useful constants */
-  const struct engine* e = r->e;
+  const struct engine *e = r->e;
   const int periodic = e->mesh->periodic;
   const float dim[3] = {(float)e->mesh->dim[0], (float)e->mesh->dim[1],
                         (float)e->mesh->dim[2]};
@@ -213,8 +213,8 @@ static void runner_dopair_grav_pp_pack(
 #endif
 
   /* Caches to play with */
-  struct gravity_cache* const ci_cache = &r->ci_gravity_cache;
-  struct gravity_cache* const cj_cache = &r->cj_gravity_cache;
+  struct gravity_cache *const ci_cache = &r->ci_gravity_cache;
+  struct gravity_cache *const cj_cache = &r->cj_gravity_cache;
 
   /* Shift to apply to the particles in each cell */
   const double shift_i[3] = {0., 0., 0.};
@@ -263,12 +263,12 @@ static void runner_dopair_grav_pp_pack(
         gcount_padded_j, shift_j, cj, e->gravity_properties);
   }
 
-  struct cell* ci0 = ci;
-  struct cell* cj0 = cj;
+  struct cell *ci0 = ci;
+  struct cell *cj0 = cj;
   struct cell *a = ci0, *b = cj0;
 
   if (a > b) {
-    struct cell* tmp = a;
+    struct cell *tmp = a;
     a = b;
     b = tmp;
   }
@@ -498,26 +498,26 @@ static void runner_dopair_grav_pp_pack(
  * @param stream The GPU stream to use.
  */
 static void runner_dopair_grav_pp_flush(
-    struct runner* r,
-    struct gravity_gpu_values_send* gravity_gpu_values_send_pair,
-    struct gravity_gpu_values_send* gravity_gpu_values_send_pair_d,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair_d,
-    struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    struct task* current_task, int ncells, int max_cell_size,
+    struct runner *r,
+    struct gravity_gpu_values_send *gravity_gpu_values_send_pair,
+    struct gravity_gpu_values_send *gravity_gpu_values_send_pair_d,
+    struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair,
+    struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair_d,
+    struct cell **grav_cells_pair, struct task **grav_tasks_pair,
+    struct task *current_task, int ncells, int max_cell_size,
     GPUStream stream) {
 
   const int ncells_flush = r->gpu.grav_batch_pair_count;
   if (ncells_flush == 0) return;
 
   /* Retrieve kernel parameters from the first pair in the batch. */
-  struct cell* ci_flush = grav_cells_pair[0];
-  struct cell* cj_flush = grav_cells_pair[1];
+  struct cell *ci_flush = grav_cells_pair[0];
+  struct cell *cj_flush = grav_cells_pair[1];
 
   if (ci_flush == NULL || cj_flush == NULL)
     error("pair flush: NULL packed cells");
 
-  const struct engine* e = r->e;
+  const struct engine *e = r->e;
   const int periodic = e->mesh->periodic;
   const float r_s_inv = e->mesh->r_s_inv;
   const double min_trunc = e->mesh->r_cut_min;
@@ -589,12 +589,12 @@ static void runner_dopair_grav_pp_flush(
         error("PAIR UNPACK: NULL task k=%d (j=%d) packed=%d qid=%d", j / 2, j,
               ncells_flush, r->qid);
 
-      struct cell* ci_pair = grav_cells_pair[j];
-      struct cell* cj_pair = grav_cells_pair[j + 1];
+      struct cell *ci_pair = grav_cells_pair[j];
+      struct cell *cj_pair = grav_cells_pair[j + 1];
       struct cell *a_pair = ci_pair, *b_pair = cj_pair;
 
       if (a_pair > b_pair) {
-        struct cell* tmp = a_pair;
+        struct cell *tmp = a_pair;
         a_pair = b_pair;
         b_pair = tmp;
       }
@@ -638,10 +638,10 @@ static void runner_dopair_grav_pp_flush(
 
   /* Complete any tasks from previous top-level calls that were packed
      into this batch, but skip current_task (still being walked). */
-  struct scheduler* sched = &r->e->sched;
-  struct task* prev_task = NULL;
+  struct scheduler *sched = &r->e->sched;
+  struct task *prev_task = NULL;
   for (int j = 0; j < ncells_flush; j += 2) {
-    struct task* batch_task = grav_tasks_pair[j / 2];
+    struct task *batch_task = grav_tasks_pair[j / 2];
     if (batch_task != prev_task && batch_task != current_task) {
       runner_gpu_complete_pair_task(r, sched, batch_task);
       prev_task = batch_task;
@@ -669,14 +669,14 @@ static void runner_dopair_grav_pp_flush(
  * @param allow_mpole Are we allowing the use of M2P interactions ?
  */
 enum runner_gpu_task_type runner_dopair_grav_pp_new(
-    struct runner* r, struct cell* ci, struct cell* cj, const int symmetric,
+    struct runner *r, struct cell *ci, struct cell *cj, const int symmetric,
     const int allow_mpole,
-    struct gravity_gpu_values_send* gravity_gpu_values_send_pair,
-    struct gravity_gpu_values_send* gravity_gpu_values_send_pair_d,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair_d,
-    struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    struct task* t, int ncells, int max_cell_size, GPUStream stream) {
+    struct gravity_gpu_values_send *gravity_gpu_values_send_pair,
+    struct gravity_gpu_values_send *gravity_gpu_values_send_pair_d,
+    struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair,
+    struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair_d,
+    struct cell **grav_cells_pair, struct task **grav_tasks_pair,
+    struct task *t, int ncells, int max_cell_size, GPUStream stream) {
 
   /* Pack the pair into the batch buffer. */
   runner_dopair_grav_pp_pack(r, ci, cj, symmetric, allow_mpole,
@@ -706,14 +706,14 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
  * @param max_cell_size The maximum number of particles per packed cell.
  * @return The outcome of the GPU wrapper for this task.
  */
-enum runner_gpu_task_type runner_doself_grav_pp_task_new(struct runner* r,
-                                                         struct cell* ci,
-                                                         struct task* t,
+enum runner_gpu_task_type runner_doself_grav_pp_task_new(struct runner *r,
+                                                         struct cell *ci,
+                                                         struct task *t,
                                                          int ncells,
                                                          int max_cell_size) {
 
-  const struct engine* e = r->e;
-  struct gravity_cache* const ci_cache = &r->ci_gravity_cache;
+  const struct engine *e = r->e;
+  struct gravity_cache *const ci_cache = &r->ci_gravity_cache;
   const int gcount = ci->grav.count;
   const int gcount_padded = gcount - (gcount % VEC_SIZE) + VEC_SIZE;
 
@@ -948,23 +948,23 @@ enum runner_gpu_task_type runner_doself_grav_pp_task_new(struct runner* r,
  * @param gettimer Are we timing this ?
  */
 enum runner_gpu_task_type runner_dopair_recursive_grav_new(
-    struct runner* r, struct cell* ci, struct cell* cj, const int gettimer,
-    struct gravity_gpu_values_send* gravity_gpu_values_send_pair,
-    struct gravity_gpu_values_send* gravity_gpu_values_send_pair_d,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv_pair_d,
-    struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    struct task* t, int ncells, int max_cell_size, GPUStream stream) {
+    struct runner *r, struct cell *ci, struct cell *cj, const int gettimer,
+    struct gravity_gpu_values_send *gravity_gpu_values_send_pair,
+    struct gravity_gpu_values_send *gravity_gpu_values_send_pair_d,
+    struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair,
+    struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair_d,
+    struct cell **grav_cells_pair, struct task **grav_tasks_pair,
+    struct task *t, int ncells, int max_cell_size, GPUStream stream) {
 
   if (ci == NULL || cj == NULL)
     error("runner_dopair_recursive_grav_new got NULL cell");
 
-  const struct engine* e = r->e;
+  const struct engine *e = r->e;
 
   if (!cell_are_gpart_drifted(ci, e))
-    cell_drift_gpart(ci, e, /*force=*/1, NULL);
+    cell_drift_gpart(ci, e, /*force=*/1, /*init_particles=*/0, NULL);
   if (!cell_are_gpart_drifted(cj, e))
-    cell_drift_gpart(cj, e, /*force=*/1, NULL);
+    cell_drift_gpart(cj, e, /*force=*/1, /*init_particles=*/0, NULL);
 
   /* Clear the flags */
   runner_clear_grav_flags(ci, e);
@@ -1004,8 +1004,8 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
   TIMER_TIC;
 
   /* Recover the multipole information */
-  struct gravity_tensors* const multi_i = ci->grav.multipole;
-  struct gravity_tensors* const multi_j = cj->grav.multipole;
+  struct gravity_tensors *const multi_i = ci->grav.multipole;
+  struct gravity_tensors *const multi_j = cj->grav.multipole;
 
   /* Get the distance between the CoMs */
   double dx = multi_i->CoM[0] - multi_j->CoM[0];
@@ -1199,10 +1199,10 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
  *
  * @param r The runner whose GPU state to initialise.
  */
-void runner_gpu_init(struct runner* r) {
+void runner_gpu_init(struct runner *r) {
 
-  struct gpu_runner* gpu = &r->gpu;
-  struct engine* e = r->e;
+  struct gpu_runner *gpu = &r->gpu;
+  struct engine *e = r->e;
 
   GPUSetDevice(0);
 
@@ -1236,38 +1236,38 @@ void runner_gpu_init(struct runner* r) {
 
   GPUStreamCreate(&gpu->stream);
 
-  GPUMalloc((void**)&gpu->gravity_gpu_values_send_self_d,
+  GPUMalloc((void **)&gpu->gravity_gpu_values_send_self_d,
             gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                 sizeof(struct gravity_gpu_values_send));
-  GPUHostMalloc((void**)&gpu->gravity_gpu_values_send_self,
+  GPUHostMalloc((void **)&gpu->gravity_gpu_values_send_self,
                 gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                     sizeof(struct gravity_gpu_values_send));
 
-  GPUMalloc((void**)&gpu->gravity_gpu_values_send_pair_d,
+  GPUMalloc((void **)&gpu->gravity_gpu_values_send_pair_d,
             gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                 sizeof(struct gravity_gpu_values_send));
-  GPUHostMalloc((void**)&gpu->gravity_gpu_values_send_pair,
+  GPUHostMalloc((void **)&gpu->gravity_gpu_values_send_pair,
                 gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                     sizeof(struct gravity_gpu_values_send));
 
-  GPUMalloc((void**)&gpu->gravity_gpu_values_recv_self_d,
+  GPUMalloc((void **)&gpu->gravity_gpu_values_recv_self_d,
             gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                 sizeof(struct gravity_gpu_values_recv));
-  GPUHostMalloc((void**)&gpu->gravity_gpu_values_recv_self,
+  GPUHostMalloc((void **)&gpu->gravity_gpu_values_recv_self,
                 gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                     sizeof(struct gravity_gpu_values_recv));
 
-  GPUMalloc((void**)&gpu->gravity_gpu_values_recv_pair_d,
+  GPUMalloc((void **)&gpu->gravity_gpu_values_recv_pair_d,
             gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                 sizeof(struct gravity_gpu_values_recv));
-  GPUHostMalloc((void**)&gpu->gravity_gpu_values_recv_pair,
+  GPUHostMalloc((void **)&gpu->gravity_gpu_values_recv_pair,
                 gpu->grav_batch_ncells * gpu->grav_max_cell_size *
                     sizeof(struct gravity_gpu_values_recv));
 
-  gpu->grav_cells_self = malloc(gpu->grav_batch_ncells * sizeof(struct cell*));
-  gpu->grav_cells_pair = malloc(gpu->grav_batch_ncells * sizeof(struct cell*));
-  gpu->grav_tasks_self = malloc(gpu->grav_batch_ncells * sizeof(struct task*));
-  gpu->grav_tasks_pair = malloc(gpu->grav_batch_ncells * sizeof(struct task*));
+  gpu->grav_cells_self = malloc(gpu->grav_batch_ncells * sizeof(struct cell *));
+  gpu->grav_cells_pair = malloc(gpu->grav_batch_ncells * sizeof(struct cell *));
+  gpu->grav_tasks_self = malloc(gpu->grav_batch_ncells * sizeof(struct task *));
+  gpu->grav_tasks_pair = malloc(gpu->grav_batch_ncells * sizeof(struct task *));
   gpu->cell_active = malloc(gpu->grav_batch_ncells * sizeof(int));
 
   if (gpu->grav_cells_self == NULL || gpu->grav_cells_pair == NULL ||
@@ -1285,9 +1285,9 @@ void runner_gpu_init(struct runner* r) {
  *
  * @param r The runner whose GPU state to clean.
  */
-void runner_gpu_clean(struct runner* r) {
+void runner_gpu_clean(struct runner *r) {
 
-  struct gpu_runner* gpu = &r->gpu;
+  struct gpu_runner *gpu = &r->gpu;
 
   GPUFreeHost(gpu->gravity_gpu_values_send_self);
   GPUFreeHost(gpu->gravity_gpu_values_recv_self);
@@ -1333,7 +1333,7 @@ void runner_gpu_clean(struct runner* r) {
  * @param r The runner whose GPU batch should be flushed.
  * @return The outcome of the leftover flush attempt.
  */
-enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner* r) {
+enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
 
   const int ncells_flush_self = r->gpu.grav_batch_self_count;
   const int max_cell_size = r->gpu.grav_max_cell_size;
@@ -1410,7 +1410,7 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner* r) {
  * @param r The runner whose GPU batch should be flushed.
  * @return The outcome of the leftover flush attempt.
  */
-enum runner_gpu_task_type runner_gpu_flush_leftover_pair(struct runner* r) {
+enum runner_gpu_task_type runner_gpu_flush_leftover_pair(struct runner *r) {
 
   const int ncells_flush_pair = r->gpu.grav_batch_pair_count;
   const int max_cell_size = r->gpu.grav_max_cell_size;
@@ -1434,13 +1434,13 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_pair(struct runner* r) {
     GPUError err4 = GPUGetLastError();
     if (err4 != GPU_SUCCESS) printf("Error4: %s\n", GPUGetErrorString(err4));
 
-    struct cell* ci_flush = r->gpu.grav_cells_pair[0];
-    struct cell* cj_flush = r->gpu.grav_cells_pair[1];
+    struct cell *ci_flush = r->gpu.grav_cells_pair[0];
+    struct cell *cj_flush = r->gpu.grav_cells_pair[1];
 
     if (ci_flush == NULL || cj_flush == NULL)
       error("pair flush: NULL packed cells");
 
-    const struct engine* e = r->e;
+    const struct engine *e = r->e;
     const int periodic = e->mesh->periodic;
     const float dim[3] = {(float)e->mesh->dim[0], (float)e->mesh->dim[1],
                           (float)e->mesh->dim[2]};
@@ -1492,12 +1492,12 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_pair(struct runner* r) {
         error("PAIR UNPACK: NULL task k=%d (j=%d) packed=%d qid=%d", j / 2, j,
               ncells_flush_pair, r->qid);
 
-      struct cell* ci0 = r->gpu.grav_cells_pair[j];
-      struct cell* cj0 = r->gpu.grav_cells_pair[j + 1];
+      struct cell *ci0 = r->gpu.grav_cells_pair[j];
+      struct cell *cj0 = r->gpu.grav_cells_pair[j + 1];
       struct cell *a = ci0, *b = cj0;
 
       if (a > b) {
-        struct cell* tmp = a;
+        struct cell *tmp = a;
         a = b;
         b = tmp;
       }
