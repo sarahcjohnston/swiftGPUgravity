@@ -105,10 +105,7 @@ static void runner_gpu_complete_self_task(struct runner *r,
 void runner_gpu_complete_pair_task(struct runner *r, struct scheduler *sched,
                                    struct task *t) {
   lock_lock(&sched->queues[r->qid].lock);
-  if (t->subtype == task_subtype_grav && t->type == task_type_self)
-    sched->queues[r->qid].gpu_self_tasks_left--;
-  else
-    sched->queues[r->qid].gpu_pair_tasks_left--;
+  sched->queues[r->qid].gpu_pair_tasks_left--;
   (void)lock_unlock(&sched->queues[r->qid].lock);
   scheduler_done(sched, t);
 }
@@ -153,7 +150,7 @@ void runner_gpu_complete_pair_batch(struct runner *r, struct scheduler *sched) {
 
   for (int i = 0; i < count; i += 2) {
     struct task *task = r->gpu.grav_tasks_pair[i / 2];
-    if (task != prev_task) {
+    if (task != prev_task && task != NULL) {
       runner_gpu_complete_pair_task(r, sched, task);
       prev_task = task;
     }
@@ -600,10 +597,6 @@ static void runner_dopair_grav_pp_flush(
         error("PAIR UNPACK: NULL cell j=%d packed=%d qid=%d", j, ncells_flush,
               r->qid);
 
-      if (grav_tasks_pair[j / 2] == NULL)
-        error("PAIR UNPACK: NULL task k=%d (j=%d) packed=%d qid=%d", j / 2, j,
-              ncells_flush, r->qid);
-
       struct cell *ci_pair = grav_cells_pair[j];
       struct cell *cj_pair = grav_cells_pair[j + 1];
       struct cell *a_pair = ci_pair, *b_pair = cj_pair;
@@ -657,7 +650,8 @@ static void runner_dopair_grav_pp_flush(
   struct task *prev_task = NULL;
   for (int j = 0; j < ncells_flush; j += 2) {
     struct task *batch_task = grav_tasks_pair[j / 2];
-    if (batch_task != prev_task && batch_task != current_task) {
+    if (batch_task != prev_task && batch_task != current_task &&
+        batch_task != NULL) {
       runner_gpu_complete_pair_task(r, sched, batch_task);
       prev_task = batch_task;
     }
@@ -991,8 +985,8 @@ static enum runner_gpu_task_type runner_doself_recursive_grav_task_new(
                     r->gpu.gravity_gpu_values_send_pair_d,
                     r->gpu.gravity_gpu_values_recv_pair,
                     r->gpu.gravity_gpu_values_recv_pair_d,
-                    r->gpu.grav_cells_pair, r->gpu.grav_tasks_pair, t, ncells,
-                    max_cell_size, r->gpu.stream);
+                    r->gpu.grav_cells_pair, r->gpu.grav_tasks_pair, NULL,
+                    ncells, max_cell_size, r->gpu.stream);
             if (pair_type > task_type) task_type = pair_type;
           }
         }
@@ -1602,10 +1596,6 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_pair(struct runner *r) {
       if (r->gpu.grav_cells_pair[j] == NULL ||
           r->gpu.grav_cells_pair[j + 1] == NULL)
         error("PAIR UNPACK: NULL cell j=%d packed=%d qid=%d", j,
-              ncells_flush_pair, r->qid);
-
-      if (r->gpu.grav_tasks_pair[j / 2] == NULL)
-        error("PAIR UNPACK: NULL task k=%d (j=%d) packed=%d qid=%d", j / 2, j,
               ncells_flush_pair, r->qid);
 
       struct cell *ci0 = r->gpu.grav_cells_pair[j];

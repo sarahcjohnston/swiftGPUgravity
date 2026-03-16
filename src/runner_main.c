@@ -648,6 +648,10 @@ void *runner_main(void *data) {
           break;
 
         case flushed_self_task:
+          if (r->gpu.grav_batch_pair_count > 0) {
+            runner_gpu_flush_leftover_pair(r);
+            runner_gpu_complete_pair_batch(r, sched);
+          }
           runner_gpu_complete_self_batch(r, sched);
           t = NULL;
           break;
