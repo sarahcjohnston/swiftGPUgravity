@@ -177,10 +177,6 @@ void *runner_main(void *data) {
     struct task *t = NULL;
     struct task *prev = NULL;
 
-    /* Reset the batch counts. */
-    r->gpu.grav_batch_self_count = 0;
-    r->gpu.grav_batch_pair_count = 0;
-
     /* Loop while there are tasks... */
     while (1) {
 
@@ -196,18 +192,14 @@ void *runner_main(void *data) {
         if (t == NULL) {
 
           if (runner_gpu_flush_leftover_self(r) == flushed_self_task) {
-            /* message("Flushed leftover self batch in runner %d.", r->id); */
-            runner_gpu_complete_self_batch(r, sched);
             prev = NULL;
             continue;
           }
 
           if (runner_gpu_flush_leftover_pair(r) == flushed_pair_task) {
-            /* message("Flushed leftover pair batch in runner %d.", r->id); */
-            runner_gpu_complete_pair_batch(r, sched);
-            prev = NULL;
-            continue;
-          }
+  		prev = NULL;
+  		continue;
+	  }
 
           break;
         }
@@ -247,8 +239,8 @@ void *runner_main(void *data) {
 
         case task_type_self:
           if (t->subtype == task_subtype_grav) {
-            gpu_task_type =
-                runner_doself_grav_pp_task_new(r, ci, t, ncells, max_cell_size);
+            struct gpu_runner_substream *substream = runner_gpu_acquire_substream(r);
+	    gpu_task_type = runner_doself_grav_pp_task_new(r, substream, ci, t, ncells, max_cell_size);
           } else if (t->subtype == task_subtype_external_grav)
             runner_do_grav_external(r, ci, 1);
           else if (t->subtype == task_subtype_density)
@@ -309,13 +301,14 @@ void *runner_main(void *data) {
 
         case task_type_pair:
           if (t->subtype == task_subtype_grav) {
-            gpu_task_type = runner_dopair_recursive_grav_new(
-                r, ci, cj, 1, r->gpu.gravity_gpu_values_send_pair,
-                r->gpu.gravity_gpu_values_send_pair_d,
-                r->gpu.gravity_gpu_values_recv_pair,
-                r->gpu.gravity_gpu_values_recv_pair_d, r->gpu.grav_cells_pair,
-                r->gpu.grav_tasks_pair, t, ncells, max_cell_size,
-                r->gpu.stream);
+            struct gpu_runner_substream *substream = runner_gpu_acquire_substream(r);
+
+	    gpu_task_type = runner_dopair_recursive_grav_new(
+		    r, substream, ci, cj, 1,
+		    substream->send_pair, substream->send_pair_d,
+		    substream->recv_pair, substream->recv_pair_d,
+		    substream->grav_cells_pair, substream->grav_tasks_pair,
+		    t, ncells, max_cell_size, substream->stream);
           } else if (t->subtype == task_subtype_density)
             runner_dosub_pair1_density(r, ci, cj, /*below_h_max=*/0, 1);
 #ifdef EXTRA_HYDRO_LOOP
@@ -648,21 +641,11 @@ void *runner_main(void *data) {
           break;
 
         case flushed_self_task:
-          runner_gpu_complete_self_batch(r, sched);
           t = NULL;
           break;
 
         case flushed_pair_task:
-          if (r->gpu.grav_batch_pair_count > 0) {
-            /* There are leftover pairs from after the last mid-walk flush.
-               Flush them and complete all tasks in the batch. */
-            runner_gpu_flush_leftover_pair(r);
-            runner_gpu_complete_pair_batch(r, sched);
-          } else {
-            /* The batch is empty (last mid-walk flush drained it exactly).
-               The current task still needs to be completed. */
-            runner_gpu_complete_pair_task(r, sched, t);
-          }
+          runner_gpu_complete_pair_task(r, sched, t);
           t = NULL;
           break;
 

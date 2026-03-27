@@ -18,7 +18,7 @@ for threads in "${threads_list[@]}"; do
                 --param="GPU:ncells_per_gpu_grav_pack:${ncells}" \
                 --param="GPU:gpu_grav_cell_size:${cellsize}" \
                 --threads="${threads}" -n "${steps}" "${params}"
-            out="timesteps_${ncells}_${cellsize}_${threads}_tiled.txt"
+            out="timesteps_${ncells}_${cellsize}_${threads}.txt"
             echo "Saving timesteps -> ${out}"
             mv timesteps.txt "${out}"
         done

@@ -35,11 +35,17 @@ typedef struct cudaDeviceProp GPUDeviceProp;
 #define GPUGetErrorString cudaGetErrorString
 
 #define GPUStreamCreate cudaStreamCreate
+#define GPUStreamCreateWithFlags cudaStreamCreateWithFlags
 #define GPUStreamDestroy cudaStreamDestroy
 #define GPUStreamSynchronize cudaStreamSynchronize
+#define GPUStreamQuery cudaStreamQuery
+#define GPUStreamNonBlocking cudaStreamNonBlocking
 
 #define GPUEventCreate cudaEventCreate
 #define GPUEventRecord cudaEventRecord
+#define GPUEventQuery cudaEventQuery
+#define GPUEventSynchronize cudaEventSynchronize
+#define GPUEventDestroy cudaEventDestroy
 
 #define GPUMalloc cudaMalloc
 #define GPUFree cudaFree
@@ -85,11 +91,17 @@ typedef hipDeviceProp_t GPUDeviceProp;
 #define GPUGetErrorString hipGetErrorString
 
 #define GPUStreamCreate hipStreamCreate
+#define GPUStreamCreateWithFlags hipStreamCreateWithFlags
 #define GPUStreamDestroy hipStreamDestroy
 #define GPUStreamSynchronize hipStreamSynchronize
+#define GPUStreamQuery hipStreamQuery
+#define GPUStreamNonBlocking hipStreamNonBlocking
 
 #define GPUEventCreate hipEventCreate
 #define GPUEventRecord hipEventRecord
+#define GPUEventQuery hipEventQuery
+#define GPUEventSynchronize hipEventSynchronize
+#define GPUEventDestroy hipEventDestroy
 
 #define GPUMalloc hipMalloc
 #define GPUFree hipFree

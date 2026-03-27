@@ -30,12 +30,17 @@ struct gravity_gpu_values_recv;
 struct gravity_gpu_values_send;
 
 /**
+ * @brief Number of explicit GPU streams used per runner for pair work.
+ */
+#define RUNNER_GPU_NSTREAMS 4
+
+/**
  * @brief Enumeration of the types of operation a GPU task can have performed.
  *
  * `regular_task` means the task completed normally and should be finished with
  * the standard scheduler path.
- * `packed_task` means the task was packed into a GPU batch but the batch was
- * not flushed yet.
+ * `packed_task` means the task completed packing into a GPU batch but the batch
+ * was not flushed yet.
  * `flushed_self_task` means a self-gravity GPU batch was flushed.
  * `flushed_pair_task` means a pair-gravity GPU batch was flushed.
  */
@@ -47,22 +52,56 @@ enum runner_gpu_task_type {
 };
 
 /**
- * @brief Initialise GPU parameters from the parameter file.
+ * @brief GPU pair-work state owned by a single runner substream.
  *
- * @param e The #engine to unpack parameters for.
+ * Each substream corresponds to one explicit GPU stream and owns one in-flight
+ * pair batch.
  */
-void runner_gpu_params_init(struct engine* e);
+struct gpu_runner_substream {
+
+  /*! Stream used for this substream's GPU pair work. */
+  GPUStream stream;
+
+  /*! Completion event for this substream's current async work. */
+  GPUEvent done;
+
+  /*! Whether this substream currently owns in-flight work. */
+  int busy;
+  
+  /*! Whether this cell is active*/
+  int *cell_active;
+  
+  /*! Number of self cells currently packed in this substream's GPU batch. */
+  int grav_batch_self_count;
+  
+  /*! Number of pair cells currently packed in this substream's GPU batch. */
+  int grav_batch_pair_count;
+  
+  /*! Host and device buffers for sent self interactions. */
+  struct gravity_gpu_values_send *send_self, *send_self_d;
+
+  /*! Host and device buffers for recieved self results. */
+  struct gravity_gpu_values_recv *recv_self, *recv_self_d;
+
+  /*! Packed self-batch cell and task handles. */
+  struct cell **grav_cells_self;
+  struct task **grav_tasks_self;
+
+  /*! Host and device buffers for sent pair interactions. */
+  struct gravity_gpu_values_send *send_pair, *send_pair_d;
+
+  /*! Host and device buffers for recieved pair results. */
+  struct gravity_gpu_values_recv *recv_pair, *recv_pair_d;
+
+  /*! Packed pair-batch cell and task handles. */
+  struct cell **grav_cells_pair;
+  struct task **grav_tasks_pair;
+};
 
 /**
  * @brief GPU-specific state owned by a single runner.
  */
 struct gpu_runner {
-
-  /*! Number of self cells currently packed in this runner's GPU batch. */
-  int grav_batch_self_count;
-
-  /*! Number of pair cells currently packed in this runner's GPU batch. */
-  int grav_batch_pair_count;
 
   /*! Number of cells that fit in one GPU batch for this runner. */
   int grav_batch_ncells;
@@ -70,50 +109,35 @@ struct gpu_runner {
   /*! Maximum number of particles packed per cell. */
   int grav_max_cell_size;
 
-  /*! Host and device buffers for packed self interactions. */
-  struct gravity_gpu_values_send *gravity_gpu_values_send_self,
-      *gravity_gpu_values_send_self_d;
+  /*! Pair-work substreams for explicit multi-stream execution. */
+  struct gpu_runner_substream substreams[RUNNER_GPU_NSTREAMS];
 
-  /*! Host and device buffers for packed pair interactions. */
-  struct gravity_gpu_values_send *gravity_gpu_values_send_pair,
-      *gravity_gpu_values_send_pair_d;
-
-  /*! Host and device buffers for unpacked self results. */
-  struct gravity_gpu_values_recv *gravity_gpu_values_recv_self,
-      *gravity_gpu_values_recv_self_d;
-
-  /*! Host and device buffers for unpacked pair results. */
-  struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair,
-      *gravity_gpu_values_recv_pair_d;
-
-  /*! Packed self-batch cell and task handles. */
-  struct cell** grav_cells_self;
-  struct task** grav_tasks_self;
-
-  /*! Packed pair-batch cell and task handles. */
-  struct cell** grav_cells_pair;
-  struct task** grav_tasks_pair;
-
-  /*! Per-cell activity flags used by the GPU path. */
-  int* cell_active;
-
-  /*! Stream used for this runner's GPU work. */
-  GPUStream stream;
+  /*! Next substream index to try when acquiring a pair-work substream. */
+  int next_substream;
 };
+
+struct gpu_runner_substream *runner_gpu_acquire_substream(struct runner *r);
+
+/**
+ * @brief Initialise GPU parameters from the parameter file.
+ *
+ * @param e The #engine to unpack parameters for.
+ */
+void runner_gpu_params_init(struct engine *e);
 
 /**
  * @brief Initialise the GPU-specific state attached to a runner.
  *
  * @param r The runner whose GPU state to initialise.
  */
-void runner_gpu_init(struct runner* r);
+void runner_gpu_init(struct runner *r);
 
 /**
  * @brief Clean the GPU-specific state attached to a runner.
  *
  * @param r The runner whose GPU state to clean.
  */
-void runner_gpu_clean(struct runner* r);
+void runner_gpu_clean(struct runner *r);
 
 /**
  * @brief Pack, launch, and unpack a batched self-gravity GPU task.
@@ -125,26 +149,24 @@ void runner_gpu_clean(struct runner* r);
  * @param max_cell_size The maximum number of particles per packed cell.
  * @return The outcome of the GPU wrapper for this task.
  */
-enum runner_gpu_task_type runner_doself_grav_pp_task_new(struct runner* r,
-                                                         struct cell* c,
-                                                         struct task* t,
-                                                         int ncells,
-                                                         int max_cell_size);
+enum runner_gpu_task_type runner_doself_grav_pp_task_new(
+    struct runner *r, struct gpu_runner_substream *substream,
+    struct cell *c, struct task *t, int ncells, int max_cell_size);
 
 /**
- * @brief Pack one leaf pair-gravity interaction into the runner GPU batch.
+ * @brief Pack one leaf pair-gravity interaction into the substream GPU batch.
  *
  * @return The outcome of the GPU wrapper for this task.
  */
 enum runner_gpu_task_type runner_dopair_grav_pp_new(
-    struct runner* r, struct cell* ci, struct cell* cj, const int symmetric,
-    const int allow_mpole,
-    struct gravity_gpu_values_send* gravity_gpu_values_send,
-    struct gravity_gpu_values_send* gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv_d,
-    struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    struct task* t, int ncells, int max_cell_size, GPUStream stream);
+    struct runner *r, struct gpu_runner_substream *substream, struct cell *ci,
+    struct cell *cj, const int symmetric, const int allow_mpole,
+    struct gravity_gpu_values_send *gravity_gpu_values_send_pair,
+    struct gravity_gpu_values_send *gravity_gpu_values_send_pair_d,
+    struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair,
+    struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair_d,
+    struct cell **grav_cells_pair, struct task **grav_tasks_pair,
+    struct task *t, int ncells, int max_cell_size, GPUStream stream);
 
 /**
  * @brief Recursively process a pair-gravity task with GPU batching.
@@ -152,13 +174,14 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
  * @return The outcome of the GPU wrapper for this task.
  */
 enum runner_gpu_task_type runner_dopair_recursive_grav_new(
-    struct runner* r, struct cell* ci, struct cell* cj, const int gettimer,
-    struct gravity_gpu_values_send* gravity_gpu_values_send,
-    struct gravity_gpu_values_send* gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv,
-    struct gravity_gpu_values_recv* gravity_gpu_values_recv_d,
-    struct cell** grav_cells_pair, struct task** grav_tasks_pair,
-    struct task* t, int ncells, int max_cell_size, GPUStream stream);
+    struct runner *r, struct gpu_runner_substream *substream, struct cell *ci,
+    struct cell *cj, const int gettimer,
+    struct gravity_gpu_values_send *gravity_gpu_values_send_pair,
+    struct gravity_gpu_values_send *gravity_gpu_values_send_pair_d,
+    struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair,
+    struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair_d,
+    struct cell **grav_cells_pair, struct task **grav_tasks_pair,
+    struct task *t, int ncells, int max_cell_size, GPUStream stream);
 
 /**
  * @brief Flush any leftover packed self-gravity work owned by a runner.
@@ -166,38 +189,33 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
  * @param r The runner whose GPU batch should be flushed.
  * @return The outcome of the leftover flush attempt.
  */
-enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner* r);
+enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r);
 
 /**
- * @brief Flush any leftover packed pair-gravity work owned by a runner.
+ * @brief Flush any leftover packed pair-gravity work owned by all substreams of a
+ * runner.
  *
- * @param r The runner whose GPU batch should be flushed.
+ * @param r The runner whose GPU pair batches should be flushed.
  * @return The outcome of the leftover flush attempt.
  */
-enum runner_gpu_task_type runner_gpu_flush_leftover_pair(struct runner* r);
+enum runner_gpu_task_type runner_gpu_flush_leftover_pair(struct runner *r);
 
 /**
  * @brief Complete all self tasks currently stored in the runner GPU batch.
  */
-void runner_gpu_complete_self_batch(struct runner* r, struct scheduler* sched);
+void runner_gpu_complete_self_batch(struct runner *r, struct scheduler *sched,
+                                    struct gpu_runner_substream *substream);
 
 /**
  * @brief Complete a single pair task (decrement queue counter and mark done).
  */
-void runner_gpu_complete_pair_task(struct runner* r, struct scheduler* sched,
-                                   struct task* t);
+void runner_gpu_complete_pair_task(struct runner *r, struct scheduler *sched,
+                                   struct task *t);
 
 /**
- * @brief Complete all unique pair tasks currently stored in the runner GPU
- * batch.
+ * @brief Complete all unique pair tasks currently stored in a substream GPU batch.
  */
-void runner_gpu_complete_pair_batch(struct runner* r, struct scheduler* sched);
-
-/**
- * @brief Initialise the GPU-specific parameters attached to an engine.
- *
- * @param e The engine whose GPU parameters to initialise.
- */
-void runner_gpu_params_init(struct engine* e);
+void runner_gpu_complete_pair_batch(struct runner *r, struct scheduler *sched,
+                                    struct gpu_runner_substream *substream);
 
 #endif /* SWIFT_RUNNER_GPU_H */
