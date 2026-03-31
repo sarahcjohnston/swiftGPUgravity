@@ -2128,7 +2128,7 @@ void runner_doself_grav_pp(struct runner *r, struct cell *c, float *d_h_i,
 
 extern void self_pp_offload_new(
     int periodic, float rmax_i, double min_trunc, const float *r_s_inv,
-    const int *gcount_i, const int *gcount_padded_i, int ci_active,
+    const int *counts_d, const int *offsets_d,
     struct gravity_gpu_values_send *gravity_gpu_values_send_d,
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells,
     int max_cell_size, GPUStream stream);
@@ -2149,8 +2149,12 @@ extern void self_pp_offload_new(
 void runner_doself_grav_pp_new(
     struct runner *r, struct cell *c,
     struct gravity_gpu_values_send *gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells,
-    int max_cell_size, GPUStream stream) {
+    struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
+    const int *counts_d,
+    const int *offsets_d,
+    int ncells,
+    int max_cell_size,
+    GPUStream stream) {
 
   /* Recover some useful constants */
   const struct engine *e = r->e;
@@ -2188,9 +2192,11 @@ void runner_doself_grav_pp_new(
 
   // printf("runner active: %i\n", cell_active[0]);
 
-  self_pp_offload_new(periodic, rmax, min_trunc, &r_s_inv, &gcount,
-                      &gcount_padded, ci_active, gravity_gpu_values_send_d,
-                      gravity_gpu_values_recv_d, ncells, max_cell_size, stream);
+  self_pp_offload_new(periodic, rmax, min_trunc, &r_s_inv,
+                    counts_d, offsets_d,
+                    gravity_gpu_values_send_d,
+                    gravity_gpu_values_recv_d,
+                    ncells, max_cell_size, stream);
 
   TIMER_TOC(timer_doself_grav_pp);
 }
@@ -2558,8 +2564,12 @@ void runner_dopair_recursive_grav(struct runner *r, struct cell *ci,
 void runner_doself_recursive_grav_new(
     struct runner *r, struct cell *c, const int gettimer,
     struct gravity_gpu_values_send *gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells,
-    int max_cell_size, GPUStream stream) {
+    struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
+    const int *counts_d,
+    const int *offsets_d,
+    int ncells,
+    int max_cell_size,
+    GPUStream stream) {
 
   /* Some constants */
   const struct engine *e = r->e;
@@ -2575,7 +2585,8 @@ void runner_doself_recursive_grav_new(
   TIMER_TIC;
 
   runner_doself_grav_pp_new(r, c, gravity_gpu_values_send_d,
-                            gravity_gpu_values_recv_d, ncells, max_cell_size,
+                            gravity_gpu_values_recv_d, counts_d, 
+                            offsets_d, ncells, max_cell_size,
                             stream);
 
   if (gettimer) TIMER_TOC(timer_dosub_self_grav);

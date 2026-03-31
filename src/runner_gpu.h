@@ -68,14 +68,9 @@ struct gpu_runner_substream {
   /*! Whether this substream currently owns in-flight work. */
   int busy;
   
-  /*! Whether this cell is active*/
-  int *cell_active;
-  
+  /*SELF OPERATIONS*/
   /*! Number of self cells currently packed in this substream's GPU batch. */
   int grav_batch_self_count;
-  
-  /*! Number of pair cells currently packed in this substream's GPU batch. */
-  int grav_batch_pair_count;
   
   /*! Host and device buffers for sent self interactions. */
   struct gravity_gpu_values_send *send_self, *send_self_d;
@@ -86,6 +81,15 @@ struct gpu_runner_substream {
   /*! Packed self-batch cell and task handles. */
   struct cell **grav_cells_self;
   struct task **grav_tasks_self;
+  
+  /*! Counts for self operations for cell packing*/
+  int *self_counts_h, *self_counts_d;
+  int *self_offsets_h, *self_offsets_d;
+  int self_total_count;
+  
+  /*PAIR OPERATIONS*/
+  /*! Number of pair cells currently packed in this substream's GPU batch. */
+  int grav_batch_pair_count;
 
   /*! Host and device buffers for sent pair interactions. */
   struct gravity_gpu_values_send *send_pair, *send_pair_d;
@@ -96,6 +100,11 @@ struct gpu_runner_substream {
   /*! Packed pair-batch cell and task handles. */
   struct cell **grav_cells_pair;
   struct task **grav_tasks_pair;
+  
+  /*! Counts for pair operations for cell packing*/
+  int *pair_counts_h, *pair_counts_d;
+  int *pair_offsets_h, *pair_offsets_d;
+  int pair_total_count;
 };
 
 /**
