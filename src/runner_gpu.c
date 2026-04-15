@@ -64,7 +64,14 @@ extern void pair_pp_offload_new(
     struct gravity_gpu_values_send *gravity_gpu_values_send_d,
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
     int ncells, int max_cell_size, GPUStream stream);
-
+    
+    
+extern void self_pp_offload_new(
+    int periodic, const float *rmax_d, double min_trunc, const float *r_s_inv,
+    const int *counts_d, const int *offsets_d,
+    struct gravity_gpu_values_send *gravity_gpu_values_send_d,
+    struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
+    int ncells, int max_cell_size, GPUStream stream);
 /**
  * @brief Unpack the GPU parameters from the parameter file.
  *
@@ -150,15 +157,30 @@ void runner_gpu_complete_pair_task(struct runner *r, struct scheduler *sched,
 void runner_gpu_complete_self_batch(struct runner *r, struct scheduler *sched,
                                     struct gpu_runner_substream *substream) {
   const int count = substream->grav_batch_self_count;
+  struct task *prev_task = NULL;
 
   for (int i = 0; i < count; i++) {
-    runner_gpu_complete_self_task(r, sched, substream->grav_tasks_self[i]);
+    struct task *task = substream->grav_tasks_self[i];
+
+    if (task != prev_task && !task->gpu_completed) {
+	  runner_gpu_complete_self_task(r, sched, task);
+	  task->gpu_completed = 1;
+	  prev_task = task;
+	}
+
     substream->grav_cells_self[i] = NULL;
     substream->grav_tasks_self[i] = NULL;
   }
 
   substream->grav_batch_self_count = 0;
   substream->busy = 0;
+
+  for (int i = 0; i < count; i++) {
+    substream->self_counts_h[i] = 0;
+    substream->self_offsets_h[i] = 0;
+    substream->self_rmax_h[i] = 0.f;
+  }
+  substream->self_total_count = 0;
 }
 
 /**
@@ -173,23 +195,28 @@ void runner_gpu_complete_pair_batch(struct runner *r, struct scheduler *sched,
   struct task *prev_task = NULL;
 
   for (int i = 0; i < count; i += 2) {
-    struct task *task = substream->grav_tasks_pair[i / 2];
-    if (task != prev_task) {
+    const int pair_slot = i / 2;
+    struct task *task = substream->grav_tasks_pair[pair_slot];
+    const int internal = substream->grav_pair_internal_from_self[pair_slot];
+
+    if (!internal && task != prev_task) {
       runner_gpu_complete_pair_task(r, sched, task);
       prev_task = task;
     }
+
     substream->grav_cells_pair[i] = NULL;
     substream->grav_cells_pair[i + 1] = NULL;
-    substream->grav_tasks_pair[i / 2] = NULL;
+    substream->grav_tasks_pair[pair_slot] = NULL;
+    substream->grav_pair_internal_from_self[pair_slot] = 0;
   }
 
   substream->grav_batch_pair_count = 0;
   substream->busy = 0;
-  
+
   for (int i = 0; i < count; i++) {
-  	substream->pair_counts_h[i] = 0;
-  	substream->pair_offsets_h[i] = 0;
-	}
+    substream->pair_counts_h[i] = 0;
+    substream->pair_offsets_h[i] = 0;
+  }
   substream->pair_total_count = 0;
 }
 
@@ -222,7 +249,9 @@ static void runner_dopair_grav_pp_pack(
     struct gravity_gpu_values_send *gravity_gpu_values_send_pair,
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair,
     struct cell **grav_cells_pair, struct task **grav_tasks_pair,
-    struct task *t, int max_cell_size, GPUStream stream) {
+    unsigned char *grav_pair_internal_from_self,
+    struct task *t, int internal_from_self,
+    int max_cell_size, GPUStream stream) {
 
   /* Recover some useful constants */
   const struct engine *e = r->e;
@@ -406,6 +435,8 @@ static void runner_dopair_grav_pp_pack(
   grav_cells_pair[substream->grav_batch_pair_count] = ci;
   grav_cells_pair[substream->grav_batch_pair_count + 1] = cj;
   grav_tasks_pair[substream->grav_batch_pair_count / 2] = t;
+  grav_pair_internal_from_self[substream->grav_batch_pair_count / 2] =
+    (unsigned char)internal_from_self;
 
   gravity_gpu_values_send_pair[off_i].cell_active = cell_is_active_gravity(ci, e);
   gravity_gpu_values_send_pair[off_j].cell_active = cell_is_active_gravity(cj, e);
@@ -625,27 +656,47 @@ static void runner_dopair_grav_pp_flush(
 
   /* Complete any tasks from previous top-level calls that were packed
      into this batch, but skip current_task (still being walked). */
-  struct scheduler *sched = &r->e->sched;
+    struct scheduler *sched = &r->e->sched;
   struct task *prev_task = NULL;
+
   for (int j = 0; j < ncells_flush; j += 2) {
-    struct task *batch_task = grav_tasks_pair[j / 2];
-    if (batch_task != prev_task && batch_task != current_task) {
-      runner_gpu_complete_pair_task(r, sched, batch_task);
+    const int pair_slot = j / 2;
+    struct task *batch_task = grav_tasks_pair[pair_slot];
+    const int internal = substream->grav_pair_internal_from_self[pair_slot];
+
+    if (batch_task == NULL)
+      error("Unexpected NULL task in pair GPU batch at slot %d", pair_slot);
+
+    if (!internal &&
+        batch_task != prev_task &&
+        batch_task != current_task &&
+        !batch_task->gpu_completed) {
+
+      if (batch_task->type == task_type_self) {
+        runner_gpu_complete_self_task(r, sched, batch_task);
+      } else if (batch_task->type == task_type_pair) {
+        runner_gpu_complete_pair_task(r, sched, batch_task);
+      } else {
+        error("Unexpected task type in pair GPU batch: %d", batch_task->type);
+      }
+
+      batch_task->gpu_completed = 1;
       prev_task = batch_task;
     }
+
     grav_cells_pair[j] = NULL;
     grav_cells_pair[j + 1] = NULL;
-    grav_tasks_pair[j / 2] = NULL;
+    grav_tasks_pair[pair_slot] = NULL;
+    substream->grav_pair_internal_from_self[pair_slot] = 0;
   }
 
-  /* Reset the batch counter so the buffer can be reused. */
   substream->grav_batch_pair_count = 0;
   substream->busy = 0;
-  
+
   for (int j = 0; j < ncells_flush; j++) {
-  	substream->pair_counts_h[j] = 0;
-  	substream->pair_offsets_h[j] = 0;
-	}
+    substream->pair_counts_h[j] = 0;
+    substream->pair_offsets_h[j] = 0;
+  }
   substream->pair_total_count = 0;
 }
 
@@ -663,23 +714,26 @@ static void runner_dopair_grav_pp_flush(
  * @param allow_mpole Are we allowing the use of M2P interactions ?
  */
 enum runner_gpu_task_type runner_dopair_grav_pp_new(
-    struct runner *r, struct gpu_runner_substream *substream,
-    struct cell *ci, struct cell *cj, const int symmetric,
-    const int allow_mpole,
+    struct runner *r, struct gpu_runner_substream *substream, struct cell *ci,
+    struct cell *cj, const int symmetric, const int allow_mpole,
     struct gravity_gpu_values_send *gravity_gpu_values_send_pair,
     struct gravity_gpu_values_send *gravity_gpu_values_send_pair_d,
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair,
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair_d,
     struct cell **grav_cells_pair, struct task **grav_tasks_pair,
-    struct task *t, int ncells, int max_cell_size, GPUStream stream) {
+    unsigned char *grav_pair_internal_from_self,
+    struct task *t, int internal_from_self,
+    int ncells, int max_cell_size, GPUStream stream) {
 
   /* Pack the pair into the batch buffer. */
   runner_dopair_grav_pp_pack(
-      r, substream, ci, cj, symmetric, allow_mpole,
-      gravity_gpu_values_send_pair,
-      gravity_gpu_values_recv_pair,
-      grav_cells_pair, grav_tasks_pair,
-      t, max_cell_size, stream);
+    r, substream, ci, cj, symmetric, allow_mpole,
+    gravity_gpu_values_send_pair,
+    gravity_gpu_values_recv_pair,
+    grav_cells_pair, grav_tasks_pair,
+    grav_pair_internal_from_self,
+    t, internal_from_self,
+    max_cell_size, stream);
 
   /* If we have filled our batch, flush it and reset the count. */
   if (substream->grav_batch_pair_count >= ncells) {
@@ -693,6 +747,26 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
   }
 
   return packed_task;
+}
+
+static void runner_doself_grav_pp_flush(
+    struct runner *r,
+    struct gpu_runner_substream *substream,
+    int nslots,
+    int max_cell_size,
+    GPUStream stream) {
+
+  const struct engine *e = r->e;
+  const int periodic = e->mesh->periodic;
+  const float r_s_inv = e->mesh->r_s_inv;
+  const double min_trunc = e->mesh->r_cut_min;
+
+  self_pp_offload_new(periodic, substream->self_rmax_d, min_trunc, &r_s_inv,
+                      substream->self_counts_d,
+                      substream->self_offsets_d,
+                      substream->send_self_d,
+                      substream->recv_self_d,
+                      nslots, max_cell_size, stream);
 }
 
 /**
@@ -742,6 +816,7 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
 
   /*record packed offset/count */
   append_packed_self_cell(substream, slot, gcount);
+  substream->self_rmax_h[slot] = 2.f * ci->grav.multipole->r_max;
   const int offset = substream->self_offsets_h[slot];
 
   /* Pack contiguously */
@@ -776,10 +851,13 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
     substream->recv_self[k].a_z_i = 0;
     substream->recv_self[k].pot_i = 0;
   }
+  
+  //printf("PACKED:%i  \n", substream->grav_batch_self_count);
 
   substream->grav_cells_self[slot] = ci;
   substream->grav_tasks_self[slot] = t;
   substream->grav_batch_self_count++;
+  substream->self_rmax_h[slot] = 2.f * ci->grav.multipole->r_max;
 
   gravity_cache_zero_output(ci_cache, gcount_padded);
   cell_gunlocktree(ci);
@@ -814,6 +892,13 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
         nslots * sizeof(int),
         GPU_MEMCPY_HOST_TO_DEVICE,
         substream->stream);
+        
+    GPUMemcpyAsync(
+    	substream->self_rmax_d,
+    	substream->self_rmax_h,
+    	nslots * sizeof(float),
+    	GPU_MEMCPY_HOST_TO_DEVICE,
+    	substream->stream);
 
     /* H2D: only live data */
     GPUMemcpyAsync(
@@ -831,15 +916,21 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
         substream->stream);
 
     /* kernel */
-    runner_doself_recursive_grav_new(
-    r, ci, 1,
+    /*runner_doself_recursive_grav_new(
+    r, substream, ci, 1,
     substream->send_self_d,
     substream->recv_self_d,
+    substream->grav_cells_self,
+    substream->grav_tasks_self,
+    t,
     substream->self_counts_d,
     substream->self_offsets_d,
     nslots,
     max_cell_size,
-    substream->stream);
+    substream->stream);*/
+    
+    runner_doself_grav_pp_flush(
+    r, substream, nslots, max_cell_size, substream->stream);
 
     /* D2H: only live data */
     GPUMemcpyAsync(
@@ -878,19 +969,7 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
 
     /* ===================== COMPLETE TASKS ===================== */
 
-    struct scheduler *sched = &r->e->sched;
-
-    for (int j = 0; j < nslots; j++) {
-      runner_gpu_complete_self_task(r, sched, substream->grav_tasks_self[j]);
-      substream->grav_cells_self[j] = NULL;
-      substream->grav_tasks_self[j] = NULL;
-      substream->self_counts_h[j] = 0;
-      substream->self_offsets_h[j] = 0;
-    }
-
-    substream->grav_batch_self_count = 0;
-    substream->self_total_count = 0;
-    substream->busy = 0;
+    runner_gpu_complete_self_batch(r, &r->e->sched, substream);
 
     return flushed_self_task;
   }
@@ -914,14 +993,16 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
  * @param gettimer Are we timing this ?
  */
 enum runner_gpu_task_type runner_dopair_recursive_grav_new(
-    struct runner *r, struct gpu_runner_substream *substream,
-    struct cell *ci, struct cell *cj, const int gettimer,
+    struct runner *r, struct gpu_runner_substream *substream, struct cell *ci,
+    struct cell *cj, const int gettimer,
     struct gravity_gpu_values_send *gravity_gpu_values_send_pair,
     struct gravity_gpu_values_send *gravity_gpu_values_send_pair_d,
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair,
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair_d,
     struct cell **grav_cells_pair, struct task **grav_tasks_pair,
-    struct task *t, int ncells, int max_cell_size, GPUStream stream) {
+    unsigned char *grav_pair_internal_from_self,
+    struct task *t, int internal_from_self,
+    int ncells, int max_cell_size, GPUStream stream) {
 
   if (ci == NULL || cj == NULL)
     error("runner_dopair_recursive_grav_new got NULL cell");
@@ -1044,7 +1125,9 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
     substream->recv_pair_d,
     substream->grav_cells_pair,
     substream->grav_tasks_pair,
-    t, ncells, max_cell_size, substream->stream);
+    substream->grav_pair_internal_from_self,
+    t, internal_from_self,
+    ncells, max_cell_size, substream->stream);
 
   } else {
 
@@ -1067,12 +1150,13 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
           if (ci->progeny[k] != NULL) {
             // runner_dopair_recursive_grav(r, ci->progeny[k], cj, 0);
             enum runner_gpu_task_type child_type =
-                runner_dopair_recursive_grav_new(
-                    r, substream, ci->progeny[k], cj, 1,
-		    substream->send_pair, substream->send_pair_d,
-		    substream->recv_pair, substream->recv_pair_d,
-		    substream->grav_cells_pair, substream->grav_tasks_pair,
-		    t, ncells, max_cell_size, substream->stream);
+    		runner_dopair_recursive_grav_new(
+        		r, substream, ci->progeny[k], cj, 0,
+        		substream->send_pair, substream->send_pair_d,
+        		substream->recv_pair, substream->recv_pair_d,
+        		substream->grav_cells_pair, substream->grav_tasks_pair,
+        		substream->grav_pair_internal_from_self,
+        		t, internal_from_self, ncells, max_cell_size, substream->stream);
             if (child_type > task_type) task_type = child_type;
           }
         }
@@ -1088,11 +1172,12 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
             // runner_dopair_recursive_grav(r, ci, cj->progeny[k], 0);
             enum runner_gpu_task_type child_type =
                 runner_dopair_recursive_grav_new(
-                    r, substream, ci, cj->progeny[k], 1,
+                    r, substream, ci, cj->progeny[k], 0,
 		    substream->send_pair, substream->send_pair_d,
 		    substream->recv_pair, substream->recv_pair_d,
 		    substream->grav_cells_pair, substream->grav_tasks_pair,
-		    t, ncells, max_cell_size, substream->stream);
+		    substream->grav_pair_internal_from_self,
+		    t, internal_from_self, ncells, max_cell_size, substream->stream);
             if (child_type > task_type) task_type = child_type;
           }
         }
@@ -1108,11 +1193,12 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
             // runner_dopair_recursive_grav(r, ci, cj->progeny[k], 0);
             enum runner_gpu_task_type child_type =
                 runner_dopair_recursive_grav_new(
-                    r, substream, ci, cj->progeny[k], 1,
+                    r, substream, ci, cj->progeny[k], 0,
 		    substream->send_pair, substream->send_pair_d,
 		    substream->recv_pair, substream->recv_pair_d,
 		    substream->grav_cells_pair, substream->grav_tasks_pair,
-		    t, ncells, max_cell_size, substream->stream);
+		    substream->grav_pair_internal_from_self,
+		    t, internal_from_self, ncells, max_cell_size, substream->stream);
             if (child_type > task_type) task_type = child_type;
           }
         }
@@ -1128,11 +1214,12 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
             // runner_dopair_recursive_grav(r, ci->progeny[k], cj, 0);
             enum runner_gpu_task_type child_type =
                 runner_dopair_recursive_grav_new(
-                    r, substream, ci->progeny[k], cj, 1,
+                    r, substream, ci->progeny[k], cj, 0,
 		    substream->send_pair, substream->send_pair_d,
 		    substream->recv_pair, substream->recv_pair_d,
 		    substream->grav_cells_pair, substream->grav_tasks_pair,
-		    t, ncells, max_cell_size, substream->stream);
+		    substream->grav_pair_internal_from_self,
+		    t, internal_from_self, ncells, max_cell_size, substream->stream);
             if (child_type > task_type) task_type = child_type;
           }
         }
@@ -1227,6 +1314,12 @@ void runner_gpu_init(struct runner *r) {
     substream->grav_tasks_pair =
         malloc(gpu->grav_batch_ncells * sizeof(struct task *));
         
+    /* allocate and set flag*/
+    substream->grav_pair_internal_from_self =
+    	malloc(gpu->grav_batch_ncells * sizeof(unsigned char));
+    memset(substream->grav_pair_internal_from_self, 0,
+       gpu->grav_batch_ncells * sizeof(unsigned char));
+        
     substream->pair_total_count = 0;
 
     substream->pair_counts_h =
@@ -1265,15 +1358,20 @@ void runner_gpu_init(struct runner *r) {
         malloc(gpu->grav_batch_ncells * sizeof(int));
     substream->self_offsets_h =
         malloc(gpu->grav_batch_ncells * sizeof(int));
+        
+    substream->self_rmax_h =
+        malloc(gpu->grav_batch_ncells * sizeof(float));
 
+    GPUMalloc((void **)&substream->self_rmax_d,
+              gpu->grav_batch_ncells * sizeof(float));
     GPUMalloc((void **)&substream->self_counts_d,
               gpu->grav_batch_ncells * sizeof(int));
     GPUMalloc((void **)&substream->self_offsets_d,
               gpu->grav_batch_ncells * sizeof(int));
               
     for (int j = 0; j < gpu->grav_batch_ncells; j++) {
-    	substream->pair_counts_h[j] = 0;
-    	substream->pair_offsets_h[j] = 0;
+    	substream->self_counts_h[j] = 0;
+    	substream->self_offsets_h[j] = 0;
   	}
 
     /* ---------- checks ---------- */
@@ -1287,7 +1385,9 @@ void runner_gpu_init(struct runner *r) {
     if (substream->grav_cells_self == NULL ||
         substream->grav_tasks_self == NULL ||
         substream->self_counts_h == NULL ||
-        substream->self_offsets_h == NULL)
+        substream->self_offsets_h == NULL ||
+        substream->self_rmax_h == NULL ||
+        substream->self_rmax_d == NULL)
       error("Failed to allocate runner GPU self substream metadata arrays.");
   }
 
@@ -1372,6 +1472,7 @@ void runner_gpu_clean(struct runner *r) {
 
     free(substream->grav_cells_pair);
     free(substream->grav_tasks_pair);
+    free(substream->grav_pair_internal_from_self);
     
     free(substream->pair_counts_h);
     free(substream->pair_offsets_h);
@@ -1391,6 +1492,9 @@ void runner_gpu_clean(struct runner *r) {
     free(substream->self_offsets_h);
     GPUFree(substream->self_counts_d);
     GPUFree(substream->self_offsets_d);
+    
+    free(substream->self_rmax_h);
+    GPUFree(substream->self_rmax_d);
 
     /* Stream/event */
     GPUEventDestroy(substream->done);
@@ -1403,6 +1507,7 @@ void runner_gpu_clean(struct runner *r) {
     substream->recv_pair_d = NULL;
     substream->grav_cells_pair = NULL;
     substream->grav_tasks_pair = NULL;
+    substream->grav_pair_internal_from_self = NULL;
     substream->grav_batch_pair_count = 0;
     substream->pair_counts_h = NULL;
     substream->pair_offsets_h = NULL;
@@ -1422,6 +1527,8 @@ void runner_gpu_clean(struct runner *r) {
     substream->self_counts_d = NULL;
     substream->self_offsets_d = NULL;
     substream->self_total_count = 0;
+    substream->self_rmax_h = NULL;
+    substream->self_rmax_d = NULL;
 
     substream->busy = 0;
   }
@@ -1456,6 +1563,10 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
     GPUMemcpyAsync(substream->self_offsets_d, substream->self_offsets_h,
                    nslots * sizeof(int),
                    GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
+                   
+    GPUMemcpyAsync(substream->self_rmax_d, substream->self_rmax_h,
+               nslots * sizeof(float),
+               GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
 
     GPUMemcpyAsync(substream->send_self_d, substream->send_self,
                    total * sizeof(struct gravity_gpu_values_send),
@@ -1464,16 +1575,9 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
     GPUMemcpyAsync(substream->recv_self_d, substream->recv_self,
                    total * sizeof(struct gravity_gpu_values_recv),
                    GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
-
-    runner_doself_recursive_grav_new(
-    r, substream->grav_cells_self[0], 1,
-    substream->send_self_d,
-    substream->recv_self_d,
-    substream->self_counts_d,
-    substream->self_offsets_d,
-    nslots,
-    max_cell_size,
-    substream->stream);
+    
+    runner_doself_grav_pp_flush(
+    r, substream, nslots, max_cell_size, substream->stream);
 
     GPUMemcpyAsync(substream->recv_self, substream->recv_self_d,
                    total * sizeof(struct gravity_gpu_values_recv),
@@ -1497,26 +1601,13 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
         c_unpack->grav.parts[i].a_grav[1] += substream->recv_self[k].a_y_i;
         c_unpack->grav.parts[i].a_grav[2] += substream->recv_self[k].a_z_i;
         c_unpack->grav.parts[i].potential += substream->recv_self[k].pot_i;
+        
       }
 
       cell_gunlocktree(c_unpack);
     }
 
-    {
-      struct scheduler *sched = &r->e->sched;
-
-      for (int j = 0; j < nslots; j++) {
-        runner_gpu_complete_self_task(r, sched, substream->grav_tasks_self[j]);
-        substream->grav_cells_self[j] = NULL;
-        substream->grav_tasks_self[j] = NULL;
-        substream->self_counts_h[j] = 0;
-        substream->self_offsets_h[j] = 0;
-      }
-
-      substream->grav_batch_self_count = 0;
-      substream->self_total_count = 0;
-      substream->busy = 0;
-    }
+    runner_gpu_complete_self_batch(r, &r->e->sched, substream);
 
     result = flushed_self_task;
   }

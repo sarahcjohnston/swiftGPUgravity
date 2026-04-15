@@ -31,7 +31,7 @@
  */
 extern "C" void self_pp_offload_new(
     int periodic,
-    float rmax_i,
+    const float *rmax_d,
     double min_trunc,
     const float *r_s_inv,
     const int *counts_d,
@@ -40,7 +40,7 @@ extern "C" void self_pp_offload_new(
     struct gravity_gpu_values_recv *recv_d,
     int ncells,
     int max_cell_size,
-    GPUStream stream){
+    GPUStream stream) {
 
 	/* memory allocation was here - this is all done in runner_main now */
 
@@ -53,33 +53,18 @@ extern "C" void self_pp_offload_new(
 	
 	int max_r_decision = 0;
 	
-	if (!periodic) {
+	/* Full kernel handles:
+     - all non-periodic cells
+     - periodic cells whose packed self-cell rmax <= min_trunc */
+  doself_grav_pp_full_new_refactor_tiled<<<grid, block, shmem, stream>>>(
+      send_d, recv_d, counts_d, offsets_d, rmax_d, *r_s_inv,
+      periodic, (float)min_trunc, ncells);
 
-    /* Not periodic -> Can always use Newtonian potential */
-    doself_grav_pp_full_new_refactor_tiled<<<grid, block, shmem, stream>>>(
-    send_d, recv_d, counts_d, offsets_d, *r_s_inv,
-    periodic, max_r_decision, ncells);
-
-  } else {
-
-    /* Do we need to use the truncated interactions ? */
-    if (rmax_i > min_trunc) {
-
-      /* Periodic but far-away cells must use the truncated potential */
-      doself_grav_pp_truncated_new_refactor_tiled<<<grid, block, shmem, stream>>>(
-    send_d, recv_d, counts_d, offsets_d, *r_s_inv,
-    periodic, max_r_decision, ncells);
-                                    
-    } else {
-    
-    max_r_decision = 1;
-
-      /* Periodic but close-by cells can use the full Newtonian potential */
-      doself_grav_pp_full_new_refactor_tiled<<<grid, block, shmem, stream>>>(
-    send_d, recv_d, counts_d, offsets_d, *r_s_inv,
-    periodic, max_r_decision, ncells);
-    }
-  }
+  /* Truncated kernel handles:
+     - periodic cells whose packed self-cell rmax > min_trunc */
+  doself_grav_pp_truncated_new_refactor_tiled<<<grid, block, shmem, stream>>>(
+      send_d, recv_d, counts_d, offsets_d, rmax_d, *r_s_inv,
+      periodic, (float)min_trunc, ncells);
 
 	GPUError err2 = GPUGetLastError();
 	    if (err2 != GPU_SUCCESS)

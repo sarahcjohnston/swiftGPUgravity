@@ -2002,14 +2002,12 @@ static INLINE void runner_doself_grav_pp_truncated(
   }
 }
 
-extern void self_pp_offload(int periodic, float rmax_i, double min_trunc,
-                            const float *r_s_inv, const int *gcount_i,
-                            const int *gcount_padded_i, int ci_active,
-                            float *d_h_i, float *d_mass_i, float *d_x_i,
-                            float *d_y_i, float *d_z_i, float *d_a_x_i,
-                            float *d_a_y_i, float *d_a_z_i, float *d_pot_i,
-                            int *d_active_i, int ncells, int max_cell_size,
-                            int *gcounts, int *cell_active, GPUStream stream);
+extern void self_pp_offload(
+    int periodic, const float *rmax_d, double min_trunc, const float *r_s_inv,
+    const int *counts_d, const int *offsets_d,
+    struct gravity_gpu_values_send *gravity_gpu_values_send_d,
+    struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
+    int ncells, int max_cell_size, GPUStream stream);
 /**
  * @brief Computes the interaction of all the particles in a cell with all the
  * other ones.
@@ -2077,10 +2075,10 @@ void runner_doself_grav_pp(struct runner *r, struct cell *c, float *d_h_i,
   // printf("runner active: %i\n", cell_active[0]);
   TIMER_TOC(timer_doself_grav_pp);
 
-  self_pp_offload(periodic, rmax, min_trunc, &r_s_inv, &gcount, &gcount_padded,
+  /*self_pp_offload(periodic, rmax, min_trunc, &r_s_inv, &gcount, &gcount_padded,
                   ci_active, d_h_i, d_mass_i, d_x_i, d_y_i, d_z_i, d_a_x_i,
                   d_a_y_i, d_a_z_i, d_pot_i, d_active_i, ncells, max_cell_size,
-                  gcounts, cell_active, stream);
+                  gcounts, cell_active, stream);*/
 
   if (2 < 1) {
     /* Can we use the Newtonian version or do we need the truncated one ? */
@@ -2127,11 +2125,11 @@ void runner_doself_grav_pp(struct runner *r, struct cell *c, float *d_h_i,
 }
 
 extern void self_pp_offload_new(
-    int periodic, float rmax_i, double min_trunc, const float *r_s_inv,
+    int periodic, const float *rmax_d, double min_trunc, const float *r_s_inv,
     const int *counts_d, const int *offsets_d,
     struct gravity_gpu_values_send *gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv *gravity_gpu_values_recv_d, int ncells,
-    int max_cell_size, GPUStream stream);
+    struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
+    int ncells, int max_cell_size, GPUStream stream);
 /**
  * @brief Computes the interaction of all the particles in a cell with all the
  * other ones.
@@ -2186,46 +2184,16 @@ void runner_doself_grav_pp_new(
                                   gcount, gcount_padded, loc, c,
                                   e->gravity_properties);
 
-  const float rmax = 2. * c->grav.multipole->r_max;
-  const int ci_active =
-      cell_is_active_gravity(c, e) && (c->nodeID == e->nodeID);
+  //const float rmax = 2. * c->grav.multipole->r_max;
 
-  // printf("runner active: %i\n", cell_active[0]);
-
-  self_pp_offload_new(periodic, rmax, min_trunc, &r_s_inv,
-                    counts_d, offsets_d,
-                    gravity_gpu_values_send_d,
-                    gravity_gpu_values_recv_d,
-                    ncells, max_cell_size, stream);
+  self_pp_offload_new(periodic, NULL, min_trunc, &r_s_inv,
+                      counts_d, offsets_d,
+                      gravity_gpu_values_send_d,
+                      gravity_gpu_values_recv_d,
+                      ncells, max_cell_size, stream);
 
   TIMER_TOC(timer_doself_grav_pp);
 }
-
-/**
- * @brief Computes the interaction of the field tensor and multipole
- * of two cells symmetrically.
- *
- * @param r The #runner.
- * @param ci The first #cell.
- * @param cj The second #cell.
- */
-
-/**
- * @brief Computes the interaction of the field tensor in a cell with the
- * multipole of another cell.
- *
- * @param r The #runner.
- * @param ci The #cell with field tensor to interact.
- * @param cj The #cell with the multipole.
- */
-
-/**
- * @brief Call the M-M calculation on two cells if active.
- *
- * @param r The #runner object.
- * @param ci The first #cell.
- * @param cj The second #cell.
- */
 
 /**
  * @brief Computes all the M-M interactions between all the well-separated (at
@@ -2561,33 +2529,104 @@ void runner_dopair_recursive_grav(struct runner *r, struct cell *ci,
  * @param c The first #cell.
  * @param gettimer Are we timing this ?
  */
-void runner_doself_recursive_grav_new(
-    struct runner *r, struct cell *c, const int gettimer,
+enum runner_gpu_task_type runner_doself_recursive_grav_new(
+    struct runner *r, struct gpu_runner_substream *substream,
+    struct cell *c, const int gettimer,
     struct gravity_gpu_values_send *gravity_gpu_values_send_d,
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
+    struct cell **grav_cells_self, struct task **grav_tasks_self,
+    struct task *t,
     const int *counts_d,
     const int *offsets_d,
     int ncells,
     int max_cell_size,
     GPUStream stream) {
 
-  /* Some constants */
   const struct engine *e = r->e;
 
-  /* Clear the flags */
   runner_clear_grav_flags(c, e);
 
 #ifdef SWIFT_DEBUG_CHECKS
-  /* Early abort? */
   if (c->grav.count == 0) error("Doing self gravity on an empty cell !");
 #endif
 
   TIMER_TIC;
 
-  runner_doself_grav_pp_new(r, c, gravity_gpu_values_send_d,
-                            gravity_gpu_values_recv_d, counts_d, 
-                            offsets_d, ncells, max_cell_size,
-                            stream);
+  if (!cell_is_active_gravity(c, e)) {
+    if (gettimer) TIMER_TOC(timer_dosub_self_grav);
+    return regular_task;
+  }
+
+  enum runner_gpu_task_type task_type = regular_task;
+
+  if (c->split) {
+
+    for (int j = 0; j < 8; j++) {
+      if (c->progeny[j] == NULL) continue;
+
+      enum runner_gpu_task_type child_self_type =
+          runner_doself_recursive_grav_new(
+              r, substream, c->progeny[j], 0,
+              gravity_gpu_values_send_d, gravity_gpu_values_recv_d,
+              grav_cells_self, grav_tasks_self, t,
+              counts_d, offsets_d, ncells, max_cell_size, stream);
+
+      if (child_self_type > task_type) task_type = child_self_type;
+
+      for (int k = j + 1; k < 8; k++) {
+        if (c->progeny[k] == NULL) continue;
+
+        enum runner_gpu_task_type child_pair_type =
+    	runner_dopair_recursive_grav_new(
+        	r, substream, c->progeny[j], c->progeny[k], 0,
+        	substream->send_pair, substream->send_pair_d,
+        	substream->recv_pair, substream->recv_pair_d,
+        	substream->grav_cells_pair, substream->grav_tasks_pair,
+        	substream->grav_pair_internal_from_self,
+        	t, 1, ncells, max_cell_size, substream->stream);
+
+        if (child_pair_type > task_type) task_type = child_pair_type;
+      }
+    }
+
+  } else {
+
+    /* Leaf self cell: pack it */
+    task_type = runner_doself_grav_pp_task_new(
+        r, substream, c, t, ncells, max_cell_size);
+  }
+
+    enum runner_gpu_task_type final_type = regular_task;
+
+  if (task_type == packed_task) {
+    final_type = packed_task;
+  } else if (task_type == flushed_self_task ||
+             task_type == flushed_pair_task) {
+    final_type = flushed_self_task;
+  } else {
+    final_type = regular_task;
+  }
+
+  if (gettimer) {
+
+    const enum runner_gpu_task_type self_res =
+        runner_gpu_flush_leftover_self(r);
+
+    const enum runner_gpu_task_type pair_res =
+        runner_gpu_flush_leftover_pair(r);
+
+    if (self_res == flushed_self_task || pair_res == flushed_pair_task) {
+      final_type = flushed_self_task;
+    }
+
+    TIMER_TOC(timer_doself_recursive_grav);
+  }
+  
+  #ifdef SWIFT_DEBUG_CHECKS
+  if (gettimer && substream->grav_batch_self_count != 0)
+    error("Top-level self task returned with leftover packed self work.");
+  #endif
 
   if (gettimer) TIMER_TOC(timer_dosub_self_grav);
+  return final_type;
 }

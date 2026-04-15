@@ -74,16 +74,6 @@ void runner_doself_recursive_grav(
     float *d_CoM_i, float *d_CoM_j, int ncells, int max_cell_size,
     int *d_gcounts, int *d_cell_active, GPUStream stream);
 
-void runner_doself_recursive_grav_new(
-    struct runner *r, struct cell *c, const int gettimer,
-    struct gravity_gpu_values_send *gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
-    const int *counts_d,
-    const int *offsets_d,
-    int ncells,
-    int max_cell_size,
-    GPUStream stream);
-
 void runner_dopair_recursive_grav(struct runner *r, struct cell *ci,
                                   struct cell *cj, int gettimer);
 void runner_dopair_grav_mm_progenies(struct runner *r, const long long flags,

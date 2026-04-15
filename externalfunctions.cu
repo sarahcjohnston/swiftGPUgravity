@@ -472,34 +472,34 @@ __global__ void doself_grav_pp_full_new_refactor_tiled(
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
     const int *counts_d,
     const int *offsets_d,
+    const float *rmax_d,
     float r_s_inv,
     const int periodic,
-    int max_r_decision,
+    float min_trunc,
     int ncells) {
 
-  int cell = blockIdx.x;
+  const int cell = blockIdx.x;
   if (cell >= ncells) return;
 
   const int counts = counts_d[cell];
   const int cell_offset = offsets_d[cell];
-
   if (counts <= 0) return;
 
-  float factor1 =
-      gravity_gpu_values_send_d[cell_offset].cell_active * abs(periodic - 1);
-  float factor2 =
-      gravity_gpu_values_send_d[cell_offset].cell_active * periodic * max_r_decision;
+  /* This kernel handles:
+     - all non-periodic self cells
+     - periodic self cells with rmax <= min_trunc */
+  const int use_full = (!periodic) || (rmax_d[cell] <= min_trunc);
+  if (!use_full) return;
 
-  int pid = blockIdx.y * blockDim.x + threadIdx.x;
-  int valid_pid = (pid < counts);
+  const float factor =
+      gravity_gpu_values_send_d[cell_offset].cell_active ? 1.f : 0.f;
+  if (factor == 0.f) return;
 
-  /* values for particle */
-  float xi = 0.f;
-  float yi = 0.f;
-  float zi = 0.f;
-  float hi = 0.f;
+  const int pid = blockIdx.y * blockDim.x + threadIdx.x;
+  const int valid_pid = (pid < counts);
 
-  /* fill values for valid ids */
+  float xi = 0.f, yi = 0.f, zi = 0.f, hi = 0.f;
+
   if (valid_pid) {
     xi = gravity_gpu_values_send_d[cell_offset + pid].x_i;
     yi = gravity_gpu_values_send_d[cell_offset + pid].y_i;
@@ -507,36 +507,30 @@ __global__ void doself_grav_pp_full_new_refactor_tiled(
     hi = gravity_gpu_values_send_d[cell_offset + pid].h_i;
   }
 
-  /* Local accumulators for the acceleration and potential */
   float a_x = 0.f, a_y = 0.f, a_z = 0.f, pot = 0.f;
 
   extern __shared__ gravity_gpu_values_send send[];
 
   for (int i0 = 0; i0 < counts; i0 += blockDim.x) {
-
-    int i = i0 + threadIdx.x;
+    const int i = i0 + threadIdx.x;
     if (i < counts) send[threadIdx.x] = gravity_gpu_values_send_d[cell_offset + i];
     __syncthreads();
 
-    int tile = min(blockDim.x, counts - i0);
+    const int tile = min(blockDim.x, counts - i0);
 
     if (valid_pid) {
       for (int j = 0; j < tile; j++) {
-        int pjd = i0 + j;
-
-        /* No self interaction */
+        const int pjd = i0 + j;
         if (pid == pjd) continue;
 
         const gravity_gpu_values_send pj = send[j];
-
         const float mass_i = pj.mass_i;
 
-        float dx = pj.x_i - xi;
-        float dy = pj.y_i - yi;
-        float dz = pj.z_i - zi;
+        const float dx = pj.x_i - xi;
+        const float dy = pj.y_i - yi;
+        const float dz = pj.z_i - zi;
 
         const float r2 = dx * dx + dy * dy + dz * dz;
-
         const float h = max(hi, pj.h_i);
         const float h2 = h * h;
         const float h_inv = 1.f / h;
@@ -554,15 +548,14 @@ __global__ void doself_grav_pp_full_new_refactor_tiled(
     __syncthreads();
   }
 
-  int act = 0;
-  if (valid_pid && gravity_gpu_values_send_d[cell_offset + pid].active_i > 0)
-    act = 1;
+  const int act =
+      valid_pid && (gravity_gpu_values_send_d[cell_offset + pid].active_i > 0);
 
   if (valid_pid) {
-    gravity_gpu_values_recv_d[cell_offset + pid].a_x_i += a_x * act * (factor1 + factor2);
-    gravity_gpu_values_recv_d[cell_offset + pid].a_y_i += a_y * act * (factor1 + factor2);
-    gravity_gpu_values_recv_d[cell_offset + pid].a_z_i += a_z * act * (factor1 + factor2);
-    gravity_gpu_values_recv_d[cell_offset + pid].pot_i += pot * act * (factor1 + factor2);
+    gravity_gpu_values_recv_d[cell_offset + pid].a_x_i += a_x * act * factor;
+    gravity_gpu_values_recv_d[cell_offset + pid].a_y_i += a_y * act * factor;
+    gravity_gpu_values_recv_d[cell_offset + pid].a_z_i += a_z * act * factor;
+    gravity_gpu_values_recv_d[cell_offset + pid].pot_i += pot * act * factor;
   }
 }
 
@@ -586,32 +579,31 @@ __global__ void doself_grav_pp_truncated_new_refactor_tiled(
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
     const int *counts_d,
     const int *offsets_d,
+    const float *rmax_d,
     float r_s_inv,
     const int periodic,
-    int max_r_decision,
+    float min_trunc,
     int ncells) {
 
-  int cell = blockIdx.x;
+  const int cell = blockIdx.x;
   if (cell >= ncells) return;
 
   const int counts = counts_d[cell];
   const int cell_offset = offsets_d[cell];
-
   if (counts <= 0) return;
 
-  float factor =
-      gravity_gpu_values_send_d[cell_offset].cell_active *
-      (periodic ? 1.f : 0.f) * abs(max_r_decision - 1);
+  /* This kernel handles only periodic self cells with rmax > min_trunc */
+  const int use_truncated = periodic && (rmax_d[cell] > min_trunc);
+  if (!use_truncated) return;
 
-  if (factor == 0) return;
+  const float factor =
+      gravity_gpu_values_send_d[cell_offset].cell_active ? 1.f : 0.f;
+  if (factor == 0.f) return;
 
-  int pid = blockIdx.y * blockDim.x + threadIdx.x;
-  int valid_pid = (pid < counts);
+  const int pid = blockIdx.y * blockDim.x + threadIdx.x;
+  const int valid_pid = (pid < counts);
 
-  float xi = 0.f;
-  float yi = 0.f;
-  float zi = 0.f;
-  float hi = 0.f;
+  float xi = 0.f, yi = 0.f, zi = 0.f, hi = 0.f;
 
   if (valid_pid) {
     xi = gravity_gpu_values_send_d[cell_offset + pid].x_i;
@@ -625,28 +617,25 @@ __global__ void doself_grav_pp_truncated_new_refactor_tiled(
   extern __shared__ gravity_gpu_values_send send[];
 
   for (int i0 = 0; i0 < counts; i0 += blockDim.x) {
-
-    int i = i0 + threadIdx.x;
+    const int i = i0 + threadIdx.x;
     if (i < counts) send[threadIdx.x] = gravity_gpu_values_send_d[cell_offset + i];
     __syncthreads();
 
-    int tile = min(blockDim.x, counts - i0);
+    const int tile = min(blockDim.x, counts - i0);
 
     if (valid_pid) {
       for (int j = 0; j < tile; j++) {
-        int pjd = i0 + j;
-
+        const int pjd = i0 + j;
         if (pid == pjd) continue;
 
         const gravity_gpu_values_send pj = send[j];
         const float mass_i = pj.mass_i;
 
-        float dx = pj.x_i - xi;
-        float dy = pj.y_i - yi;
-        float dz = pj.z_i - zi;
+        const float dx = pj.x_i - xi;
+        const float dy = pj.y_i - yi;
+        const float dz = pj.z_i - zi;
 
         const float r2 = dx * dx + dy * dy + dz * dz;
-
         const float h = max(hi, pj.h_i);
         const float h2 = h * h;
         const float h_inv = 1.f / h;
@@ -665,11 +654,14 @@ __global__ void doself_grav_pp_truncated_new_refactor_tiled(
     __syncthreads();
   }
 
+  const int act =
+      valid_pid && (gravity_gpu_values_send_d[cell_offset + pid].active_i > 0);
+
   if (valid_pid) {
-    gravity_gpu_values_recv_d[cell_offset + pid].a_x_i = a_x * factor;
-    gravity_gpu_values_recv_d[cell_offset + pid].a_y_i = a_y * factor;
-    gravity_gpu_values_recv_d[cell_offset + pid].a_z_i = a_z * factor;
-    gravity_gpu_values_recv_d[cell_offset + pid].pot_i = pot * factor;
+    gravity_gpu_values_recv_d[cell_offset + pid].a_x_i += a_x * act * factor;
+    gravity_gpu_values_recv_d[cell_offset + pid].a_y_i += a_y * act * factor;
+    gravity_gpu_values_recv_d[cell_offset + pid].a_z_i += a_z * act * factor;
+    gravity_gpu_values_recv_d[cell_offset + pid].pot_i += pot * act * factor;
   }
 }
 

@@ -296,6 +296,9 @@ struct task {
   integertime_t ti_run;
 #endif /* SWIFT_DEBUG_CHECKS */
 
+  /* GPU completion flag */
+  int gpu_completed;
+
 } SWIFT_STRUCT_ALIGN;
 
 /* Function prototypes. */

@@ -32,7 +32,7 @@ struct gravity_gpu_values_send;
 /**
  * @brief Number of explicit GPU streams used per runner for pair work.
  */
-#define RUNNER_GPU_NSTREAMS 4
+#define RUNNER_GPU_NSTREAMS 1
 
 /**
  * @brief Enumeration of the types of operation a GPU task can have performed.
@@ -87,6 +87,9 @@ struct gpu_runner_substream {
   int *self_offsets_h, *self_offsets_d;
   int self_total_count;
   
+  /*! rmax values */
+  float *self_rmax_h, *self_rmax_d;
+  
   /*PAIR OPERATIONS*/
   /*! Number of pair cells currently packed in this substream's GPU batch. */
   int grav_batch_pair_count;
@@ -100,6 +103,9 @@ struct gpu_runner_substream {
   /*! Packed pair-batch cell and task handles. */
   struct cell **grav_cells_pair;
   struct task **grav_tasks_pair;
+  
+  /* Flag for pairs spawned from self recursion */
+  unsigned char *grav_pair_internal_from_self;
   
   /*! Counts for pair operations for cell packing*/
   int *pair_counts_h, *pair_counts_d;
@@ -175,7 +181,9 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair,
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair_d,
     struct cell **grav_cells_pair, struct task **grav_tasks_pair,
-    struct task *t, int ncells, int max_cell_size, GPUStream stream);
+    unsigned char *grav_pair_internal_from_self,
+    struct task *t, int internal_from_self,
+    int ncells, int max_cell_size, GPUStream stream);
 
 /**
  * @brief Recursively process a pair-gravity task with GPU batching.
@@ -190,7 +198,26 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair,
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair_d,
     struct cell **grav_cells_pair, struct task **grav_tasks_pair,
-    struct task *t, int ncells, int max_cell_size, GPUStream stream);
+    unsigned char *grav_pair_internal_from_self,
+    struct task *t, int internal_from_self,
+    int ncells, int max_cell_size, GPUStream stream);
+    
+    
+enum runner_gpu_task_type runner_doself_recursive_grav_new(
+    struct runner *r,
+    struct gpu_runner_substream *substream,
+    struct cell *c,
+    const int gettimer,
+    struct gravity_gpu_values_send *gravity_gpu_values_send_d,
+    struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
+    struct cell **grav_cells_self,
+    struct task **grav_tasks_self,
+    struct task *t,
+    const int *counts_d,
+    const int *offsets_d,
+    int ncells,
+    int max_cell_size,
+    GPUStream stream);
 
 /**
  * @brief Flush any leftover packed self-gravity work owned by a runner.

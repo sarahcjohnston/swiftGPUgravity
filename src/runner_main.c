@@ -240,7 +240,19 @@ void *runner_main(void *data) {
         case task_type_self:
           if (t->subtype == task_subtype_grav) {
             struct gpu_runner_substream *substream = runner_gpu_acquire_substream(r);
-	    gpu_task_type = runner_doself_grav_pp_task_new(r, substream, ci, t, ncells, max_cell_size);
+            t->gpu_completed = 0;
+	    gpu_task_type = runner_doself_recursive_grav_new(
+		    r, substream, ci, 1,
+		    substream->send_self_d,
+		    substream->recv_self_d,
+		    substream->grav_cells_self,
+		    substream->grav_tasks_self,
+		    t,
+		    substream->self_counts_d,
+		    substream->self_offsets_d,
+		    ncells,
+		    max_cell_size,
+		    substream->stream);
           } else if (t->subtype == task_subtype_external_grav)
             runner_do_grav_external(r, ci, 1);
           else if (t->subtype == task_subtype_density)
@@ -302,13 +314,14 @@ void *runner_main(void *data) {
         case task_type_pair:
           if (t->subtype == task_subtype_grav) {
             struct gpu_runner_substream *substream = runner_gpu_acquire_substream(r);
-
+	    t->gpu_completed = 0;
 	    gpu_task_type = runner_dopair_recursive_grav_new(
-		    r, substream, ci, cj, 1,
-		    substream->send_pair, substream->send_pair_d,
-		    substream->recv_pair, substream->recv_pair_d,
-		    substream->grav_cells_pair, substream->grav_tasks_pair,
-		    t, ncells, max_cell_size, substream->stream);
+    		r, substream, ci, cj, 1,
+    		substream->send_pair, substream->send_pair_d,
+   		substream->recv_pair, substream->recv_pair_d,
+    		substream->grav_cells_pair, substream->grav_tasks_pair,
+    		substream->grav_pair_internal_from_self,
+    		t, 0, ncells, max_cell_size, substream->stream);
           } else if (t->subtype == task_subtype_density)
             runner_dosub_pair1_density(r, ci, cj, /*below_h_max=*/0, 1);
 #ifdef EXTRA_HYDRO_LOOP
