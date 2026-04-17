@@ -30,11 +30,6 @@ struct gravity_gpu_values_recv;
 struct gravity_gpu_values_send;
 
 /**
- * @brief Number of explicit GPU streams used per runner for pair work.
- */
-#define RUNNER_GPU_NSTREAMS 1
-
-/**
  * @brief Enumeration of the types of operation a GPU task can have performed.
  *
  * `regular_task` means the task completed normally and should be finished with
@@ -117,15 +112,17 @@ struct gpu_runner_substream {
  * @brief GPU-specific state owned by a single runner.
  */
 struct gpu_runner {
+  /*! Substreams for explicit multi-stream execution. */
+  struct gpu_runner_substream *substreams;
+  
+  /*! Number of GPU streams launched per runner. */
+  int nstreams;
 
   /*! Number of cells that fit in one GPU batch for this runner. */
   int grav_batch_ncells;
 
   /*! Maximum number of particles packed per cell. */
   int grav_max_cell_size;
-
-  /*! Pair-work substreams for explicit multi-stream execution. */
-  struct gpu_runner_substream substreams[RUNNER_GPU_NSTREAMS];
 
   /*! Next substream index to try when acquiring a pair-work substream. */
   int next_substream;

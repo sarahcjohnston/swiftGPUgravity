@@ -42,33 +42,18 @@ extern "C" void self_pp_offload_new(
     int max_cell_size,
     GPUStream stream) {
 
-	/* memory allocation was here - this is all done in runner_main now */
+  int threads = 256;
+  dim3 block(threads);
+  dim3 grid(ncells, (max_cell_size + threads - 1) / threads);
+  size_t shmem = threads * sizeof(gravity_gpu_values_send);
 
-	//call kernel function 
-	//int nblocks = gcount_i/256;
-	int threads = 256;
-	dim3 block(threads);
-	dim3 grid(ncells, (max_cell_size + threads - 1) / threads);
-	size_t shmem = threads * sizeof(gravity_gpu_values_send);
-	
-	int max_r_decision = 0;
-	
-	/* Full kernel handles:
-     - all non-periodic cells
-     - periodic cells whose packed self-cell rmax <= min_trunc */
-  doself_grav_pp_full_new_refactor_tiled<<<grid, block, shmem, stream>>>(
+  self_grav_pp_kernel_tiled<<<grid, block, shmem, stream>>>(
       send_d, recv_d, counts_d, offsets_d, rmax_d, *r_s_inv,
       periodic, (float)min_trunc, ncells);
 
-  /* Truncated kernel handles:
-     - periodic cells whose packed self-cell rmax > min_trunc */
-  doself_grav_pp_truncated_new_refactor_tiled<<<grid, block, shmem, stream>>>(
-      send_d, recv_d, counts_d, offsets_d, rmax_d, *r_s_inv,
-      periodic, (float)min_trunc, ncells);
-
-	GPUError err2 = GPUGetLastError();
-	    if (err2 != GPU_SUCCESS)
-	printf("Error - self_pp: %s\n", GPUGetErrorString(err2));
+  GPUError err = GPUGetLastError();
+  if (err != GPU_SUCCESS)
+    printf("Error - self_pp: %s\n", GPUGetErrorString(err));
 }
 
 /**

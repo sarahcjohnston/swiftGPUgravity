@@ -81,9 +81,11 @@ void runner_gpu_params_init(struct engine *e) {
 
   /* Unpack the number of cells we will pack onto the GPU at a time. */
   e->ncells_per_gpu_grav_pack = parser_get_opt_param_int(
-      e->parameter_file, "GPU:ncells_per_gpu_grav_pack", 8);
-  if (e->ncells_per_gpu_grav_pack < 2) {
-    error("GPU:ncells_per_gpu_grav_pack must be >= 2");
+      e->parameter_file, "GPU:ncells_per_gpu_grav_pack", -1);
+
+  if (e->ncells_per_gpu_grav_pack == 0 ||
+      e->ncells_per_gpu_grav_pack < -1) {
+    error("GPU:ncells_per_gpu_grav_pack must be >= 1 for user selected or -1 for auto");
   }
 }
 
@@ -311,6 +313,12 @@ static void runner_dopair_grav_pp_pack(
   const int gcount_padded_j = gcount_j - (gcount_j % VEC_SIZE) + VEC_SIZE;
   const int allow_multipole_i = allow_mpole && ci->grav.count > 1;
   const int allow_multipole_j = allow_mpole && cj->grav.count > 1;
+  
+    if (gcount_i > max_cell_size)
+    error("Pair pack overflow: gcount_i=%d > max_cell_size=%d", gcount_i, max_cell_size);
+
+  if (gcount_j > max_cell_size)
+    error("Pair pack overflow: gcount_j=%d > max_cell_size=%d", gcount_j, max_cell_size);
 
   /* Fill the caches */
   if (ci->nodeID == e->nodeID) {
@@ -351,9 +359,9 @@ static void runner_dopair_grav_pp_pack(
     ;
   }
 
-  GPUEvent startpack, stoppack;
-  GPUEventCreate(&startpack);
-  GPUEventCreate(&stoppack);
+  //GPUEvent startpack, stoppack;
+  //GPUEventCreate(&startpack);
+  //GPUEventCreate(&stoppack);
   
   const int slot_i = substream->grav_batch_pair_count;
   const int slot_j = slot_i + 1;
@@ -364,7 +372,7 @@ static void runner_dopair_grav_pp_pack(
   const int off_i = substream->pair_offsets_h[slot_i];
   const int off_j = substream->pair_offsets_h[slot_j];
 
-  GPUEventRecord(startpack, stream);
+  //GPUEventRecord(startpack, stream);
 
   /* ---- Pack ci data into the send buffer ---- */
   {
@@ -532,6 +540,8 @@ static void runner_dopair_grav_pp_flush(
   const float dim_0 = (float)e->mesh->dim[0];
   const float dim_1 = (float)e->mesh->dim[1];
   const float dim_2 = (float)e->mesh->dim[2];
+  
+  const int pair_capacity = r->gpu.grav_batch_ncells * r->gpu.grav_max_cell_size;
 
   /* ---- H2D copy ---- */
   {
@@ -539,6 +549,14 @@ static void runner_dopair_grav_pp_flush(
 
     const int nslots = substream->grav_batch_pair_count;
     const int total = substream->pair_total_count;
+    
+    if (nslots < 0 || nslots > r->gpu.grav_batch_ncells)
+    error("Bad nslots in pair flush: %d (capacity %d)",
+          nslots, r->gpu.grav_batch_ncells);
+
+  if (total < 0 || total > pair_capacity)
+    error("Bad pair_total_count in pair flush: %d (capacity %d)",
+          total, pair_capacity);
 
 	GPUMemcpyAsync(
 	    substream->pair_counts_d,
@@ -558,11 +576,17 @@ static void runner_dopair_grav_pp_flush(
 	    total * sizeof(struct gravity_gpu_values_send),
 	    GPU_MEMCPY_HOST_TO_DEVICE, stream);
 
-	GPUMemcpyAsync(
+	/*GPUMemcpyAsync(
 	    gravity_gpu_values_recv_pair_d,
 	    gravity_gpu_values_recv_pair,
 	    total * sizeof(struct gravity_gpu_values_recv),
-	    GPU_MEMCPY_HOST_TO_DEVICE, stream);
+	    GPU_MEMCPY_HOST_TO_DEVICE, stream);*/
+	    
+	GPUMemsetAsync(
+	    gravity_gpu_values_recv_pair_d,
+	    0,
+	    total * sizeof(struct gravity_gpu_values_recv),
+	    stream);
 
     GPUError err2 = GPUGetLastError();
     if (err2 != GPU_SUCCESS)
@@ -632,7 +656,8 @@ static void runner_dopair_grav_pp_flush(
 	  ci_pair->grav.parts[i].a_grav[1] += substream->recv_pair[k].a_y_i;
 	  ci_pair->grav.parts[i].a_grav[2] += substream->recv_pair[k].a_z_i;
 	  ci_pair->grav.parts[i].potential += substream->recv_pair[k].pot_i;
-	}
+	} 
+	
       cell_gunlocktree(a_pair);
 
       while (cell_glocktree(b_pair)) {
@@ -648,6 +673,19 @@ static void runner_dopair_grav_pp_flush(
 	  cj_pair->grav.parts[i].a_grav[2] += substream->recv_pair[k].a_z_i;
 	  cj_pair->grav.parts[i].potential += substream->recv_pair[k].pot_i;
 	}
+	#ifdef SWIFT_DEBUG_CHECKS
+      for (int i = 0; i < count_j; i++) {
+        for (int p = 0; p < count_i; p++) {
+          accumulate_inc_ll(&cj_pair->grav.parts[i].num_interacted);
+        	}
+      	}
+      	
+      	for (int i = 0; i < count_i; i++) {
+        for (int p = 0; p < count_j; p++) {
+          accumulate_inc_ll(&ci_pair->grav.parts[i].num_interacted);
+        	}
+      	}
+	#endif
       cell_gunlocktree(b_pair);
     }
 
@@ -725,17 +763,25 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
     struct task *t, int internal_from_self,
     int ncells, int max_cell_size, GPUStream stream) {
 
-  /* Pack the pair into the batch buffer. */
-  runner_dopair_grav_pp_pack(
-    r, substream, ci, cj, symmetric, allow_mpole,
-    gravity_gpu_values_send_pair,
-    gravity_gpu_values_recv_pair,
-    grav_cells_pair, grav_tasks_pair,
-    grav_pair_internal_from_self,
-    t, internal_from_self,
-    max_cell_size, stream);
+  /* Need 2 free slots for one pair */
+  if (substream->grav_batch_pair_count + 2 > ncells) {
+    runner_dopair_grav_pp_flush(
+        r, substream,
+        gravity_gpu_values_send_pair, gravity_gpu_values_send_pair_d,
+        gravity_gpu_values_recv_pair, gravity_gpu_values_recv_pair_d,
+        grav_cells_pair, grav_tasks_pair,
+        t, ncells, max_cell_size, stream);
+  }
 
-  /* If we have filled our batch, flush it and reset the count. */
+  runner_dopair_grav_pp_pack(
+      r, substream, ci, cj, symmetric, allow_mpole,
+      gravity_gpu_values_send_pair,
+      gravity_gpu_values_recv_pair,
+      grav_cells_pair, grav_tasks_pair,
+      grav_pair_internal_from_self,
+      t, internal_from_self,
+      max_cell_size, stream);
+
   if (substream->grav_batch_pair_count >= ncells) {
     runner_dopair_grav_pp_flush(
         r, substream,
@@ -908,27 +954,19 @@ static void runner_doself_grav_pp_flush(
         GPU_MEMCPY_HOST_TO_DEVICE,
         substream->stream);
 
-    GPUMemcpyAsync(
+    /*GPUMemcpyAsync(
         substream->recv_self_d,
         substream->recv_self,
         total * sizeof(struct gravity_gpu_values_recv),
         GPU_MEMCPY_HOST_TO_DEVICE,
-        substream->stream);
+        substream->stream);*/
+    GPUMemsetAsync(
+	    substream->recv_self_d,
+	    0,
+	    total * sizeof(struct gravity_gpu_values_recv),
+	    substream->stream);
 
     /* kernel */
-    /*runner_doself_recursive_grav_new(
-    r, substream, ci, 1,
-    substream->send_self_d,
-    substream->recv_self_d,
-    substream->grav_cells_self,
-    substream->grav_tasks_self,
-    t,
-    substream->self_counts_d,
-    substream->self_offsets_d,
-    nslots,
-    max_cell_size,
-    substream->stream);*/
-    
     runner_doself_grav_pp_flush(
     r, substream, nslots, max_cell_size, substream->stream);
 
@@ -1252,6 +1290,108 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
   return regular_task;
 }
 
+
+/**
+ * @brief Choose number of cells in a batch
+ */
+static int runner_gpu_choose_batch_ncells(const struct engine *e,
+                                          int max_cell_size) {
+                                          
+  /* User override (<=0 means "not set") */
+  const int user_ncells = e->ncells_per_gpu_grav_pack;
+
+  size_t free_bytes = 0, total_bytes = 0;
+  GPUMemGetInfo(&free_bytes, &total_bytes);
+
+  /* Leave headroom for CUDA/HIP context/runtime overhead */
+  const double usable_fraction = 0.70;
+  const size_t usable_bytes = (size_t)(free_bytes * usable_fraction);
+  
+  const int nstreams = parser_get_opt_param_int(
+      e->parameter_file, "GPU:nstreams", 2);
+
+  const size_t bytes_per_cell_per_substream =
+      (size_t)max_cell_size *
+      (2 * sizeof(struct gravity_gpu_values_send) +
+       2 * sizeof(struct gravity_gpu_values_recv));
+
+  const size_t bytes_per_cell_per_runner =
+      (size_t)nstreams * bytes_per_cell_per_substream;
+
+  /* Replace with the actual number of runners that allocate GPU buffers */
+  const int nr_gpu_runners = e->nr_threads > 0 ? e->nr_threads : 1;
+
+  const size_t metadata = 64ULL * 1024ULL * 1024ULL; /* 64 MB */
+
+  size_t budget = 0;
+  if (usable_bytes > metadata)
+    budget = usable_bytes - metadata;
+
+  const size_t per_runner_budget = budget / (size_t)nr_gpu_runners;
+
+  int ncells = (int)(per_runner_budget / bytes_per_cell_per_runner);
+
+  if (ncells < 2) ncells = 2;
+  if (ncells > 2048) ncells = 2048;
+
+  if (user_ncells > 0) {
+
+    if (user_ncells > ncells) {
+      if (e->verbose) {
+        message("GPU:ncells_per_gpu_grav_pack=%d too large, limiting to %d",
+                user_ncells, ncells);
+      }
+      return ncells;
+    }
+
+    return user_ncells;
+  }
+
+  return ncells;
+}
+
+
+/**
+ * @brief Choose number of streams per runner
+ */
+static int runner_gpu_choose_nstreams(const struct engine *e,
+                                      int max_cell_size,
+                                      int ncells) {
+
+  size_t free_bytes = 0, total_bytes = 0;
+  GPUMemGetInfo(&free_bytes, &total_bytes);
+
+  /* Leave headroom for other allocations */
+  const double usable_fraction = 0.70;
+  const size_t usable_bytes = (size_t)(free_bytes * usable_fraction);
+
+  const int nr_gpu_runners = e->nr_threads > 0 ? e->nr_threads : 1;
+  const size_t metadata = 64ULL * 1024ULL * 1024ULL; /* 64 MB */
+
+  size_t budget = 0;
+  if (usable_bytes > metadata)
+    budget = usable_bytes - metadata;
+
+  const size_t per_runner_budget = budget / (size_t)nr_gpu_runners;
+
+  const size_t bytes_per_substream =
+      (size_t)ncells * (size_t)max_cell_size *
+      (2 * sizeof(struct gravity_gpu_values_send) +
+       2 * sizeof(struct gravity_gpu_values_recv));
+
+  if (bytes_per_substream == 0)
+    return 1;
+
+  int max_safe_nstreams = (int)(per_runner_budget / bytes_per_substream);
+
+  if (max_safe_nstreams < 1) max_safe_nstreams = 1;
+
+  /* Profiling/tuning usually stops helping after a few streams */
+  //if (max_safe_nstreams > 4) max_safe_nstreams = 4;
+
+  return max_safe_nstreams;
+}
+
 /**
  * @brief Initialise the GPU-specific state attached to a runner.
  *
@@ -1270,28 +1410,78 @@ void runner_gpu_init(struct runner *r) {
   const int max_cell_size = space_subsize_self_grav + 100;
 
   gpu->grav_max_cell_size = max_cell_size;
-  gpu->grav_batch_ncells = e->ncells_per_gpu_grav_pack;
+  gpu->grav_batch_ncells =
+      runner_gpu_choose_batch_ncells(e, gpu->grav_max_cell_size);
 
-  const size_t send_bytes = gpu->grav_batch_ncells * gpu->grav_max_cell_size *
-                            sizeof(struct gravity_gpu_values_send);
-  const size_t recv_bytes = gpu->grav_batch_ncells * gpu->grav_max_cell_size *
-                            sizeof(struct gravity_gpu_values_recv);
+  /* Pair batches consume 2 slots at a time */
+  if (gpu->grav_batch_ncells % 2 != 0)
+    gpu->grav_batch_ncells--;
+
+  if (gpu->grav_batch_ncells < 2)
+    gpu->grav_batch_ncells = 2;
+
+  /* User may request nstreams, otherwise auto-pick based on ncells/max_cell_size */
+  const int user_nstreams = parser_get_opt_param_int(
+      e->parameter_file, "GPU:nstreams", 2);
+
+  const int auto_nstreams =
+      runner_gpu_choose_nstreams(e,
+                                 gpu->grav_max_cell_size,
+                                 gpu->grav_batch_ncells);
+
+  if (user_nstreams > 0) {
+    gpu->nstreams = user_nstreams;
+    if (gpu->nstreams > auto_nstreams) {
+      if (r->id == 0) {
+        message("GPU:nstreams=%d too large for current ncells/max_cell_size, "
+                "limiting to %d",
+                user_nstreams, auto_nstreams);
+      }
+      gpu->nstreams = auto_nstreams;
+    }
+  } else {
+    gpu->nstreams = auto_nstreams;
+  }
+
+  if (gpu->nstreams < 1) gpu->nstreams = 1;
+  if (gpu->nstreams > 8) gpu->nstreams = 8;
+
+  gpu->substreams = malloc((size_t)gpu->nstreams *
+                           sizeof(struct gpu_runner_substream));
+  if (gpu->substreams == NULL)
+    error("Failed to allocate GPU substreams");
+
+  const size_t send_bytes =
+      (size_t)gpu->grav_batch_ncells *
+      (size_t)gpu->grav_max_cell_size *
+      sizeof(struct gravity_gpu_values_send);
+
+  const size_t recv_bytes =
+      (size_t)gpu->grav_batch_ncells *
+      (size_t)gpu->grav_max_cell_size *
+      sizeof(struct gravity_gpu_values_recv);
 
   const size_t bytes_per_substream =
       2 * send_bytes + 2 * recv_bytes; /* self + pair */
 
+  size_t free_bytes = 0, total_bytes = 0;
+  GPUMemGetInfo(&free_bytes, &total_bytes);
+
   if (r->id == 0) {
     message("GPU device: %s", prop.name);
-    message("Total GPU memory: %.2f B", (float)prop.totalGlobalMem);
+    message("GPU free memory: %.2f GB",
+            free_bytes / (1024.0 * 1024.0 * 1024.0));
+    message("GPU total memory: %.2f GB",
+            total_bytes / (1024.0 * 1024.0 * 1024.0));
     message("Max cell size: %i", gpu->grav_max_cell_size);
     message("ncells per pack: %i", gpu->grav_batch_ncells);
+    message("Streams per runner: %i", gpu->nstreams);
     message("Per-substream buffer bytes: %zu", bytes_per_substream);
-    message("Streams per runner: %i", RUNNER_GPU_NSTREAMS);
   }
 
   gpu->next_substream = 0;
 
-  for (int i = 0; i < RUNNER_GPU_NSTREAMS; i++) {
+  for (int i = 0; i < gpu->nstreams; i++) {
 
     struct gpu_runner_substream *substream = &gpu->substreams[i];
 
@@ -1310,32 +1500,33 @@ void runner_gpu_init(struct runner *r) {
     GPUHostMalloc((void **)&substream->recv_pair, recv_bytes);
 
     substream->grav_cells_pair =
-        malloc(gpu->grav_batch_ncells * sizeof(struct cell *));
+        malloc((size_t)gpu->grav_batch_ncells * sizeof(struct cell *));
     substream->grav_tasks_pair =
-        malloc(gpu->grav_batch_ncells * sizeof(struct task *));
-        
-    /* allocate and set flag*/
+        malloc((size_t)gpu->grav_batch_ncells * sizeof(struct task *));
     substream->grav_pair_internal_from_self =
-    	malloc(gpu->grav_batch_ncells * sizeof(unsigned char));
-    memset(substream->grav_pair_internal_from_self, 0,
-       gpu->grav_batch_ncells * sizeof(unsigned char));
-        
+        malloc((size_t)gpu->grav_batch_ncells * sizeof(unsigned char));
+
+    if (substream->grav_pair_internal_from_self != NULL) {
+      memset(substream->grav_pair_internal_from_self, 0,
+             (size_t)gpu->grav_batch_ncells * sizeof(unsigned char));
+    }
+
     substream->pair_total_count = 0;
 
     substream->pair_counts_h =
-    	malloc(gpu->grav_batch_ncells * sizeof(int));
+        malloc((size_t)gpu->grav_batch_ncells * sizeof(int));
     substream->pair_offsets_h =
-    	malloc(gpu->grav_batch_ncells * sizeof(int));
+        malloc((size_t)gpu->grav_batch_ncells * sizeof(int));
 
     GPUMalloc((void **)&substream->pair_counts_d,
-          gpu->grav_batch_ncells * sizeof(int));
+              (size_t)gpu->grav_batch_ncells * sizeof(int));
     GPUMalloc((void **)&substream->pair_offsets_d,
-          gpu->grav_batch_ncells * sizeof(int));
-          
+              (size_t)gpu->grav_batch_ncells * sizeof(int));
+
     for (int j = 0; j < gpu->grav_batch_ncells; j++) {
-    	substream->pair_counts_h[j] = 0;
-    	substream->pair_offsets_h[j] = 0;
-  	}
+      substream->pair_counts_h[j] = 0;
+      substream->pair_offsets_h[j] = 0;
+    }
 
     /* ---------- Self state ---------- */
 
@@ -1348,36 +1539,37 @@ void runner_gpu_init(struct runner *r) {
     GPUHostMalloc((void **)&substream->recv_self, recv_bytes);
 
     substream->grav_cells_self =
-        malloc(gpu->grav_batch_ncells * sizeof(struct cell *));
+        malloc((size_t)gpu->grav_batch_ncells * sizeof(struct cell *));
     substream->grav_tasks_self =
-        malloc(gpu->grav_batch_ncells * sizeof(struct task *));
-        
+        malloc((size_t)gpu->grav_batch_ncells * sizeof(struct task *));
+
     substream->self_total_count = 0;
 
     substream->self_counts_h =
-        malloc(gpu->grav_batch_ncells * sizeof(int));
+        malloc((size_t)gpu->grav_batch_ncells * sizeof(int));
     substream->self_offsets_h =
-        malloc(gpu->grav_batch_ncells * sizeof(int));
-        
+        malloc((size_t)gpu->grav_batch_ncells * sizeof(int));
     substream->self_rmax_h =
-        malloc(gpu->grav_batch_ncells * sizeof(float));
+        malloc((size_t)gpu->grav_batch_ncells * sizeof(float));
 
     GPUMalloc((void **)&substream->self_rmax_d,
-              gpu->grav_batch_ncells * sizeof(float));
+              (size_t)gpu->grav_batch_ncells * sizeof(float));
     GPUMalloc((void **)&substream->self_counts_d,
-              gpu->grav_batch_ncells * sizeof(int));
+              (size_t)gpu->grav_batch_ncells * sizeof(int));
     GPUMalloc((void **)&substream->self_offsets_d,
-              gpu->grav_batch_ncells * sizeof(int));
-              
+              (size_t)gpu->grav_batch_ncells * sizeof(int));
+
     for (int j = 0; j < gpu->grav_batch_ncells; j++) {
-    	substream->self_counts_h[j] = 0;
-    	substream->self_offsets_h[j] = 0;
-  	}
+      substream->self_counts_h[j] = 0;
+      substream->self_offsets_h[j] = 0;
+      substream->self_rmax_h[j] = 0.f;
+    }
 
     /* ---------- checks ---------- */
 
     if (substream->grav_cells_pair == NULL ||
         substream->grav_tasks_pair == NULL ||
+        substream->grav_pair_internal_from_self == NULL ||
         substream->pair_counts_h == NULL ||
         substream->pair_offsets_h == NULL)
       error("Failed to allocate runner GPU pair substream metadata arrays.");
@@ -1386,8 +1578,7 @@ void runner_gpu_init(struct runner *r) {
         substream->grav_tasks_self == NULL ||
         substream->self_counts_h == NULL ||
         substream->self_offsets_h == NULL ||
-        substream->self_rmax_h == NULL ||
-        substream->self_rmax_d == NULL)
+        substream->self_rmax_h == NULL)
       error("Failed to allocate runner GPU self substream metadata arrays.");
   }
 
@@ -1406,15 +1597,15 @@ runner_gpu_acquire_substream(struct runner *r) {
 
   struct gpu_runner *gpu = &r->gpu;
 
-  for (int i = 0; i < RUNNER_GPU_NSTREAMS; i++) {
-    int idx = (gpu->next_substream + i) % RUNNER_GPU_NSTREAMS;
+  for (int i = 0; i < gpu->nstreams; i++) {
+    int idx = (gpu->next_substream + i) % gpu->nstreams;
     struct gpu_runner_substream *substream = &gpu->substreams[idx];
 
     if (!substream->busy ||
         GPUEventQuery(substream->done) == GPU_SUCCESS) {
 
       substream->busy = 1;
-      gpu->next_substream = (idx + 1) % RUNNER_GPU_NSTREAMS;
+      gpu->next_substream = (idx + 1) % gpu->nstreams;
       return substream;
     }
   }
@@ -1424,7 +1615,7 @@ runner_gpu_acquire_substream(struct runner *r) {
   GPUEventSynchronize(substream->done);
   substream->busy = 1;
 
-  gpu->next_substream = (gpu->next_substream + 1) % RUNNER_GPU_NSTREAMS;
+  gpu->next_substream = (gpu->next_substream + 1) % gpu->nstreams;
   return substream;
 }
 
@@ -1434,7 +1625,7 @@ runner_gpu_acquire_substream(struct runner *r) {
  * @param r The runner whose GPU state to clean.
  */
 static inline void runner_gpu_flush_all_pair_substreams(struct runner *r) {
-  for (int i = 0; i < RUNNER_GPU_NSTREAMS; i++) {
+  for (int i = 0; i < r->gpu.nstreams; i++) {
     struct gpu_runner_substream *substream = &r->gpu.substreams[i];
 
     if (substream->grav_batch_pair_count > 0) {
@@ -1460,7 +1651,7 @@ void runner_gpu_clean(struct runner *r) {
 
   struct gpu_runner *gpu = &r->gpu;
 
-  for (int i = 0; i < RUNNER_GPU_NSTREAMS; i++) {
+  for (int i = 0; i < gpu->nstreams; i++) {
 
     struct gpu_runner_substream *substream = &gpu->substreams[i];
 
@@ -1536,6 +1727,10 @@ void runner_gpu_clean(struct runner *r) {
   gpu->next_substream = 0;
   gpu->grav_batch_ncells = 0;
   gpu->grav_max_cell_size = 0;
+  
+  free(gpu->substreams);
+  gpu->substreams = NULL;
+  gpu->nstreams = 0;
 }
 
 /**
@@ -1548,7 +1743,7 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
 
   enum runner_gpu_task_type result = regular_task;
 
-  for (int l = 0; l < RUNNER_GPU_NSTREAMS; l++) {
+  for (int l = 0; l < r->gpu.nstreams; l++) {
     struct gpu_runner_substream *substream = &r->gpu.substreams[l];
     const int nslots = substream->grav_batch_self_count;
     const int total = substream->self_total_count;
@@ -1572,9 +1767,12 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
                    total * sizeof(struct gravity_gpu_values_send),
                    GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
 
-    GPUMemcpyAsync(substream->recv_self_d, substream->recv_self,
+    /*GPUMemcpyAsync(substream->recv_self_d, substream->recv_self,
                    total * sizeof(struct gravity_gpu_values_recv),
-                   GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
+                   GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);*/
+    GPUMemsetAsync(substream->recv_self_d, 0,
+               total * sizeof(struct gravity_gpu_values_recv),
+               substream->stream);
     
     runner_doself_grav_pp_flush(
     r, substream, nslots, max_cell_size, substream->stream);
@@ -1625,7 +1823,7 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_pair(struct runner *r) {
 
   enum runner_gpu_task_type result = regular_task;
 
-  for (int l = 0; l < RUNNER_GPU_NSTREAMS; l++) {
+  for (int l = 0; l < r->gpu.nstreams; l++) {
     struct gpu_runner_substream *substream = &r->gpu.substreams[l];
 
     if (substream->grav_batch_pair_count == 0) continue;

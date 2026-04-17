@@ -53,9 +53,11 @@ typedef struct cudaDeviceProp GPUDeviceProp;
 #define GPUFreeHost cudaFreeHost
 
 #define GPUMemcpyAsync cudaMemcpyAsync
+#define GPUMemsetAsync cudaMemsetAsync
 
 #define GPUSetDevice cudaSetDevice
 #define GPUGetDeviceProperties cudaGetDeviceProperties
+#define GPUMemGetInfo cudaMemGetInfo
 
 /**
  * @brief Allocate pinned host memory for GPU transfers.
@@ -109,9 +111,11 @@ typedef hipDeviceProp_t GPUDeviceProp;
 #define GPUFreeHost hipFreeHost
 
 #define GPUMemcpyAsync hipMemcpyAsync
+#define GPUMemsetAsync hipMemsetAsync
 
 #define GPUSetDevice hipSetDevice
 #define GPUGetDeviceProperties hipGetDeviceProperties
+#define GPUMemGetInfo hipMemGetInfo
 
 /**
  * @brief Allocate pinned host memory for GPU transfers.
