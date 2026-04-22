@@ -841,18 +841,25 @@ if test "x$with_cuda" != "xno"; then
          AC_MSG_ERROR([Could not find nvcc on PATH. Use --with-cuda=PATH to specify the CUDA root])
       fi
       GPUCC="$CUDA_NVCC"
+
+      dnl derive CUDA root from nvcc
+      CUDA_ROOT=`AS_DIRNAME(["$CUDA_NVCC"])`
+      CUDA_ROOT=`AS_DIRNAME(["$CUDA_ROOT"])`
+
    else
       CUDA_ROOT="$with_cuda"
       GPUCC="$CUDA_ROOT/bin/nvcc"
+
       if test ! -x "$GPUCC"; then
          AC_MSG_ERROR([Could not find nvcc at $GPUCC])
       fi
-      CUDA_CPPFLAGS="$CUDA_CPPFLAGS -I$CUDA_ROOT/include"
+
+      CUDA_CPPFLAGS="-I$CUDA_ROOT/include"
+
       if test -d "$CUDA_ROOT/lib64"; then
-         CUDA_LDFLAGS="$CUDA_LDFLAGS -L$CUDA_ROOT/lib64"
-      fi
-      if test -d "$CUDA_ROOT/lib"; then
-         CUDA_LDFLAGS="$CUDA_LDFLAGS -L$CUDA_ROOT/lib"
+         CUDA_LDFLAGS="-L$CUDA_ROOT/lib64"
+      elif test -d "$CUDA_ROOT/lib"; then
+         CUDA_LDFLAGS="-L$CUDA_ROOT/lib"
       fi
    fi
 
@@ -868,6 +875,7 @@ if test "x$with_cuda" != "xno"; then
    GPU_DEVICE_LINK_FLAGS="-dlink"
    GPU_DEVICE_LINK_LIBS="-lcudadevrt"
    GPU_DLINK_OBJECT="gpu_link.o"
+
    AC_DEFINE([WITH_CUDA], 1, [Compile with the CUDA GPU backend])
 fi
 

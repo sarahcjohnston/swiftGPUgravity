@@ -82,6 +82,11 @@ struct gpu_runner_substream {
   int *self_offsets_h, *self_offsets_d;
   int self_total_count;
   
+  /*! Active-target compaction metadata for self work. */
+  int *self_active_counts_h, *self_active_counts_d;
+  int *self_active_index_h, *self_active_index_d;
+  int self_max_active_count;
+  
   /*! rmax values */
   float *self_rmax_h, *self_rmax_d;
   
@@ -106,6 +111,11 @@ struct gpu_runner_substream {
   int *pair_counts_h, *pair_counts_d;
   int *pair_offsets_h, *pair_offsets_d;
   int pair_total_count;
+  
+  /*! Active-target compaction metadata for pair work. */
+  int *pair_active_counts_h, *pair_active_counts_d;
+  int *pair_active_index_h, *pair_active_index_d;
+  int pair_max_active_count;
 };
 
 /**

@@ -36,20 +36,23 @@ extern "C" void self_pp_offload_new(
     const float *r_s_inv,
     const int *counts_d,
     const int *offsets_d,
+    const int *active_counts_d,
+    const int *active_index_d,
     struct gravity_gpu_values_send *send_d,
     struct gravity_gpu_values_recv *recv_d,
     int ncells,
     int max_cell_size,
+    int max_active_count,
     GPUStream stream) {
 
   int threads = 256;
   dim3 block(threads);
-  dim3 grid(ncells, (max_cell_size + threads - 1) / threads);
+  dim3 grid(ncells, (max_active_count + threads - 1) / threads);
   size_t shmem = threads * sizeof(gravity_gpu_values_send);
 
   self_grav_pp_kernel_tiled<<<grid, block, shmem, stream>>>(
-      send_d, recv_d, counts_d, offsets_d, rmax_d, *r_s_inv,
-      periodic, (float)min_trunc, ncells);
+      send_d, recv_d, counts_d, offsets_d, active_counts_d, active_index_d,
+      rmax_d, *r_s_inv, periodic, (float)min_trunc, ncells, max_cell_size);
 
   GPUError err = GPUGetLastError();
   if (err != GPU_SUCCESS)
@@ -89,21 +92,23 @@ extern "C" void pair_pp_offload_new(
     const float *r_s_inv,
     const int *pair_counts_d,
     const int *pair_offsets_d,
+    const int *pair_active_counts_d,
+    const int *pair_active_index_d,
     int ci_active, int cj_active,
     float dim_0, float dim_1, float dim_2, int symmetric,
     struct gravity_gpu_values_send *gravity_gpu_values_send_d,
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
-    int ncells, int max_cell_size, GPUStream stream) {
+    int ncells, int max_cell_size, int max_active_count, GPUStream stream) {
 
-	  int threads = 256;
+  int threads = 256;
   dim3 block(threads);
   int npairs = ncells / 2;
-  dim3 grid(npairs, (max_cell_size + threads - 1) / threads);
+  dim3 grid(npairs, (max_active_count + threads - 1) / threads);
   size_t shmem = threads * sizeof(gravity_gpu_values_send);
 
   pair_grav_pp_kernel_tiled<<<grid, block, shmem, stream>>>(
       gravity_gpu_values_send_d, gravity_gpu_values_recv_d,
-      pair_counts_d, pair_offsets_d,
+      pair_counts_d, pair_offsets_d, pair_active_counts_d, pair_active_index_d,
       periodic, *r_s_inv, symmetric, /*swap=*/0,
       dim_0, dim_1, dim_2, max_cell_size, ncells);
 
@@ -115,7 +120,7 @@ extern "C" void pair_pp_offload_new(
   if (symmetric) {
     pair_grav_pp_kernel_tiled<<<grid, block, shmem, stream>>>(
         gravity_gpu_values_send_d, gravity_gpu_values_recv_d,
-        pair_counts_d, pair_offsets_d,
+        pair_counts_d, pair_offsets_d, pair_active_counts_d, pair_active_index_d,
         periodic, *r_s_inv, symmetric, /*swap=*/1,
         dim_0, dim_1, dim_2, max_cell_size, ncells);
   }
