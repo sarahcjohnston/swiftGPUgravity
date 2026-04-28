@@ -473,6 +473,7 @@ __global__ void doself_grav_pp_full_new_refactor_tiled(
     const int *counts_d,
     const int *offsets_d,
     const int *active_counts_d,
+    const int *active_offsets_d,
     const int *active_index_d,
     const float *rmax_d,
     float r_s_inv,
@@ -498,10 +499,12 @@ __global__ void doself_grav_pp_full_new_refactor_tiled(
       gravity_gpu_values_send_d[cell_offset].flags0.w ? 1.f : 0.f;
   if (factor == 0.f) return;
 
-  const int pid = blockIdx.y * blockDim.x + threadIdx.x;
+  const int active_slot = blockIdx.y * blockDim.x + threadIdx.x;
   const int active_count = active_counts_d[cell];
-  const int valid_pid = (pid < active_count);
-  const int local_pid = valid_pid ? active_index_d[cell * max_cell_size + pid] : 0;
+  const int valid_pid = (active_slot < active_count);
+  const int active_base = active_offsets_d[cell];
+  const int local_pid =
+    valid_pid ? active_index_d[active_base + active_slot] : 0;
 
   float xi = 0.f, yi = 0.f, zi = 0.f, hi = 0.f;
 
@@ -554,10 +557,12 @@ __global__ void doself_grav_pp_full_new_refactor_tiled(
   }
 
   if (valid_pid) {
-    gravity_gpu_values_recv_d[cell_offset + local_pid].values_i.x += a_x * factor;
-    gravity_gpu_values_recv_d[cell_offset + local_pid].values_i.y += a_y * factor;
-    gravity_gpu_values_recv_d[cell_offset + local_pid].values_i.z += a_z * factor;
-    gravity_gpu_values_recv_d[cell_offset + local_pid].values_i.w += pot * factor;
+    const int out = active_base + active_slot;
+
+	gravity_gpu_values_recv_d[out].values_i.x = a_x * factor;
+	gravity_gpu_values_recv_d[out].values_i.y = a_y * factor;
+	gravity_gpu_values_recv_d[out].values_i.z = a_z * factor;
+	gravity_gpu_values_recv_d[out].values_i.w = pot * factor;
   }
 }
 
@@ -676,6 +681,7 @@ __global__ void self_grav_pp_kernel_tiled(
     const int *__restrict__ counts_d,
     const int *__restrict__ offsets_d,
     const int *__restrict__ active_counts_d,
+    const int *__restrict__ active_offsets_d,
     const int *__restrict__ active_index_d,
     const float *__restrict__ rmax_d,
     float r_s_inv,
@@ -704,9 +710,10 @@ __global__ void self_grav_pp_kernel_tiled(
   const int active_slot = blockIdx.y * blockDim.x + threadIdx.x;
   const int valid_target = (active_slot < active_count);
 
+  const int active_base = active_offsets_d[cell];
   int local_pid = 0;
   if (valid_target) {
-    local_pid = active_index_d[cell * max_cell_size + active_slot];
+    local_pid = active_index_d[active_base + active_slot];
   }
 
   float xi = 0.f, yi = 0.f, zi = 0.f, hi = 0.f;
@@ -772,11 +779,12 @@ __global__ void self_grav_pp_kernel_tiled(
   }
 
   if (valid_target) {
-    gravity_gpu_values_recv_d[cell_offset + local_pid].values_i.x += a_x * factor;
-    gravity_gpu_values_recv_d[cell_offset + local_pid].values_i.y += a_y * factor;
-    gravity_gpu_values_recv_d[cell_offset + local_pid].values_i.z += a_z * factor;
-    gravity_gpu_values_recv_d[cell_offset + local_pid].values_i.w += pot * factor;
-  }
+	  const int out = active_base + active_slot;
+	  gravity_gpu_values_recv_d[out].values_i.x = a_x * factor;
+	  gravity_gpu_values_recv_d[out].values_i.y = a_y * factor;
+	  gravity_gpu_values_recv_d[out].values_i.z = a_z * factor;
+	  gravity_gpu_values_recv_d[out].values_i.w = pot * factor;
+ }
 }
 /**
  * @brief Compute direct pair-cell P-P gravity interactions for one side of each packed pair.
@@ -903,6 +911,7 @@ __global__ void pair_grav_pp_kernel_tiled(
     const int *pair_counts_d,
     const int *pair_offsets_d,
     const int *pair_active_counts_d,
+    const int *pair_active_offsets_d,
     const int *pair_active_index_d,
     int periodic, float r_s_inv,
     int symmetric,
@@ -931,8 +940,9 @@ __global__ void pair_grav_pp_kernel_tiled(
   int ci_active = send[base_i].flags0.w;
   if (!ci_active) return;
 
+  const int active_base = pair_active_offsets_d[target_slot];
   const int local_pid_i =
-      valid_pid ? pair_active_index_d[target_slot * max_cell_size + pid] : 0;
+    valid_pid ? pair_active_index_d[active_base + pid] : 0;
 
   float xi = 0.f;
   float yi = 0.f;
@@ -1006,9 +1016,11 @@ __global__ void pair_grav_pp_kernel_tiled(
   }
 
   if (valid_pid) {
-    recv[base_i + local_pid_i].values_i.x += ax;
-    recv[base_i + local_pid_i].values_i.y += ay;
-    recv[base_i + local_pid_i].values_i.z += az;
-    recv[base_i + local_pid_i].values_i.w += pot;
+    const int out = active_base + pid;
+
+	recv[out].values_i.x = ax;
+	recv[out].values_i.y = ay;
+	recv[out].values_i.z = az;
+	recv[out].values_i.w = pot;;
   }
 }

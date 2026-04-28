@@ -72,6 +72,7 @@ struct gpu_runner_substream {
 
   /*! Host and device buffers for recieved self results. */
   struct gravity_gpu_values_recv *recv_self, *recv_self_d;
+  struct gravity_gpu_values_recv *recv_self_active, *recv_self_active_d;
 
   /*! Packed self-batch cell and task handles. */
   struct cell **grav_cells_self;
@@ -84,7 +85,9 @@ struct gpu_runner_substream {
   
   /*! Active-target compaction metadata for self work. */
   int *self_active_counts_h, *self_active_counts_d;
+  int *self_active_offsets_h, *self_active_offsets_d;
   int *self_active_index_h, *self_active_index_d;
+  int self_total_active_count;
   int self_max_active_count;
   
   /*! rmax values */
@@ -99,6 +102,7 @@ struct gpu_runner_substream {
 
   /*! Host and device buffers for recieved pair results. */
   struct gravity_gpu_values_recv *recv_pair, *recv_pair_d;
+  struct gravity_gpu_values_recv *recv_pair_active, *recv_pair_active_d;
 
   /*! Packed pair-batch cell and task handles. */
   struct cell **grav_cells_pair;
@@ -114,7 +118,9 @@ struct gpu_runner_substream {
   
   /*! Active-target compaction metadata for pair work. */
   int *pair_active_counts_h, *pair_active_counts_d;
+  int *pair_active_offsets_h, *pair_active_offsets_d;
   int *pair_active_index_h, *pair_active_index_d;
+  int pair_total_active_count;
   int pair_max_active_count;
 };
 

@@ -37,6 +37,7 @@ extern "C" void self_pp_offload_new(
     const int *counts_d,
     const int *offsets_d,
     const int *active_counts_d,
+    const int *active_offsets_d,
     const int *active_index_d,
     struct gravity_gpu_values_send *send_d,
     struct gravity_gpu_values_recv *recv_d,
@@ -51,7 +52,7 @@ extern "C" void self_pp_offload_new(
   size_t shmem = threads * sizeof(gravity_gpu_values_send);
 
   self_grav_pp_kernel_tiled<<<grid, block, shmem, stream>>>(
-      send_d, recv_d, counts_d, offsets_d, active_counts_d, active_index_d,
+      send_d, recv_d, counts_d, offsets_d, active_counts_d, active_offsets_d, active_index_d,
       rmax_d, *r_s_inv, periodic, (float)min_trunc, ncells, max_cell_size);
 
   GPUError err = GPUGetLastError();
@@ -88,45 +89,75 @@ extern "C" void self_pp_offload_new(
  * @param stream GPU stream used for the kernel launch.
  */
 extern "C" void pair_pp_offload_new(
-    int periodic, float rmax_i, float rmax_j, double min_trunc,
+    int periodic,
+    double min_trunc,
     const float *r_s_inv,
     const int *pair_counts_d,
     const int *pair_offsets_d,
     const int *pair_active_counts_d,
+    const int *pair_active_offsets_d,
     const int *pair_active_index_d,
-    int ci_active, int cj_active,
-    float dim_0, float dim_1, float dim_2, int symmetric,
+    float dim_0, float dim_1, float dim_2,
     struct gravity_gpu_values_send *gravity_gpu_values_send_d,
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
-    int ncells, int max_cell_size, int max_active_count, GPUStream stream) {
+    int ncells,
+    int max_cell_size,
+    int max_active_count,
+    GPUStream stream) {
 
-  int threads = 256;
+  (void)min_trunc; /* use_full is already packed per pair slot */
+
+  const int threads = 256;
   dim3 block(threads);
-  int npairs = ncells / 2;
-  dim3 grid(npairs, (max_active_count + threads - 1) / threads);
-  size_t shmem = threads * sizeof(gravity_gpu_values_send);
 
+  const int npairs = ncells / 2;
+  dim3 grid(npairs, (max_active_count + threads - 1) / threads);
+
+  const size_t shmem = threads * sizeof(gravity_gpu_values_send);
+
+  /* i <- j direction */
   pair_grav_pp_kernel_tiled<<<grid, block, shmem, stream>>>(
-      gravity_gpu_values_send_d, gravity_gpu_values_recv_d,
-      pair_counts_d, pair_offsets_d, pair_active_counts_d, pair_active_index_d,
-      periodic, *r_s_inv, symmetric, /*swap=*/0,
-      dim_0, dim_1, dim_2, max_cell_size, ncells);
+      gravity_gpu_values_send_d,
+      gravity_gpu_values_recv_d,
+      pair_counts_d,
+      pair_offsets_d,
+      pair_active_counts_d,
+      pair_active_offsets_d,
+      pair_active_index_d,
+      periodic,
+      *r_s_inv,
+      /*symmetric=*/1,
+      /*swap=*/0,
+      dim_0, dim_1, dim_2,
+      max_cell_size,
+      ncells);
 
   GPUError err1 = GPUGetPeekAtLastError();
-  if (err1 != GPU_SUCCESS)
+  if (err1 != GPU_SUCCESS) {
     printf("KERNEL LAUNCH ERROR (swap = 0): %s\n",
            GPUGetErrorString(err1));
-
-  if (symmetric) {
-    pair_grav_pp_kernel_tiled<<<grid, block, shmem, stream>>>(
-        gravity_gpu_values_send_d, gravity_gpu_values_recv_d,
-        pair_counts_d, pair_offsets_d, pair_active_counts_d, pair_active_index_d,
-        periodic, *r_s_inv, symmetric, /*swap=*/1,
-        dim_0, dim_1, dim_2, max_cell_size, ncells);
   }
 
+  /* j <- i direction */
+  pair_grav_pp_kernel_tiled<<<grid, block, shmem, stream>>>(
+      gravity_gpu_values_send_d,
+      gravity_gpu_values_recv_d,
+      pair_counts_d,
+      pair_offsets_d,
+      pair_active_counts_d,
+      pair_active_offsets_d,
+      pair_active_index_d,
+      periodic,
+      *r_s_inv,
+      /*symmetric=*/1,
+      /*swap=*/1,
+      dim_0, dim_1, dim_2,
+      max_cell_size,
+      ncells);
+
   GPUError err2 = GPUGetPeekAtLastError();
-  if (err2 != GPU_SUCCESS)
+  if (err2 != GPU_SUCCESS) {
     printf("KERNEL LAUNCH ERROR (swap = 1): %s\n",
            GPUGetErrorString(err2));
+  }
 }

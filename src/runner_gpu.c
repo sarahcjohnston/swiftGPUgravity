@@ -55,17 +55,21 @@
  * @param stream GPU stream used for the kernel launch.
  */
 extern void pair_pp_offload_new(
-    int periodic, float rmax_i, float rmax_j, double min_trunc,
+    int periodic,
+    double min_trunc,
     const float *r_s_inv,
     const int *pair_counts_d,
     const int *pair_offsets_d,
     const int *pair_active_counts_d,
+    const int *pair_active_offsets_d,
     const int *pair_active_index_d,
-    int ci_active, int cj_active,
-    float dim_0, float dim_1, float dim_2, int symmetric,
+    float dim_0, float dim_1, float dim_2,
     struct gravity_gpu_values_send *gravity_gpu_values_send_d,
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
-    int ncells, int max_cell_size, int max_active_count, GPUStream stream);
+    int ncells,
+    int max_cell_size,
+    int max_active_count,
+    GPUStream stream);
     
     
 extern void self_pp_offload_new(
@@ -76,6 +80,7 @@ extern void self_pp_offload_new(
     const int *counts_d,
     const int *offsets_d,
     const int *active_counts_d,
+    const int *active_offsets_d,
     const int *active_index_d,
     struct gravity_gpu_values_send *send_d,
     struct gravity_gpu_values_recv *recv_d,
@@ -191,9 +196,12 @@ void runner_gpu_complete_self_batch(struct runner *r, struct scheduler *sched,
   for (int i = 0; i < count; i++) {
     substream->self_counts_h[i] = 0;
     substream->self_offsets_h[i] = 0;
+    substream->self_active_counts_h[i] = 0;
     substream->self_rmax_h[i] = 0.f;
   }
   substream->self_total_count = 0;
+  substream->self_max_active_count = 0;
+  substream->self_total_active_count = 0;
 }
 
 /**
@@ -385,20 +393,30 @@ static void runner_dopair_grav_pp_pack(
 
   int active_count_i = 0;
   int active_count_j = 0;
-  const int active_base_i = slot_i * max_cell_size;
-  const int active_base_j = slot_j * max_cell_size;
+  const int active_base_i = substream->pair_total_active_count;
+  substream->pair_active_offsets_h[slot_i] = active_base_i;
+
   for (int i = 0; i < gcount_i; i++) {
-    if (ci_cache->active[i] > 0) {
-      substream->pair_active_index_h[active_base_i + active_count_i] = i;
-      active_count_i++;
-    }
+  	if (ci_cache->active[i] > 0) {
+    		substream->pair_active_index_h[active_base_i + active_count_i] = i;
+    		active_count_i++;
+  	}
   }
+
+  substream->pair_total_active_count += active_count_i;
+  
+  const int active_base_j = substream->pair_total_active_count;
+  substream->pair_active_offsets_h[slot_j] = active_base_j;
+
   for (int i = 0; i < gcount_j; i++) {
-    if (cj_cache->active[i] > 0) {
-      substream->pair_active_index_h[active_base_j + active_count_j] = i;
-      active_count_j++;
-    }
+  	if (cj_cache->active[i] > 0) {
+    		substream->pair_active_index_h[active_base_j + active_count_j] = i;
+    		active_count_j++;
+  	}
   }
+
+  substream->pair_total_active_count += active_count_j;
+
   substream->pair_active_counts_h[slot_i] = active_count_i;
   substream->pair_active_counts_h[slot_j] = active_count_j;
   if (active_count_i > substream->pair_max_active_count)
@@ -483,7 +501,7 @@ static void runner_dopair_grav_pp_pack(
       gravity_gpu_values_send_pair[k].flags1.w = 0;
 	}
 
-    for (int i = 0; i < gcount_i; i++) {
+    /*for (int i = 0; i < gcount_i; i++) {
     	const int k = off_i + i;
   	gravity_gpu_values_recv_pair[k].values_i.x = 0.0f;
   	gravity_gpu_values_recv_pair[k].values_i.y = 0.0f;
@@ -507,7 +525,7 @@ static void runner_dopair_grav_pp_pack(
   	gravity_gpu_values_recv_pair[k].values_j.y = 0.0f;
   	gravity_gpu_values_recv_pair[k].values_j.z = 0.0f;
   	gravity_gpu_values_recv_pair[k].values_j.w = 0.0f;
-	}
+	}*/
     TIMER_TOC(timer_doself_grav_pp);
   }
 
@@ -523,9 +541,9 @@ static void runner_dopair_grav_pp_pack(
 
   gravity_gpu_values_send_pair[off_i].flags0.w = cell_is_active_gravity(ci, e);
   gravity_gpu_values_send_pair[off_j].flags0.w = cell_is_active_gravity(cj, e);
-
-  //gravity_gpu_values_send_pair[off_i].flags1.x = use_full;
-  //gravity_gpu_values_send_pair[off_j].flags1.x = use_full;
+  
+  gravity_gpu_values_send_pair[off_i].mass.z = rmax_i;
+  gravity_gpu_values_send_pair[off_j].mass.z = rmax_j;
 
   int use_full = 1;
   if (periodic) {
@@ -591,27 +609,11 @@ static void runner_dopair_grav_pp_flush(
   if (ncells_flush == 0) return;
 
   /* Retrieve kernel parameters from the first pair in the batch. */
-  struct cell *ci_flush = grav_cells_pair[0];
-  struct cell *cj_flush = grav_cells_pair[1];
-
-  if (ci_flush == NULL || cj_flush == NULL)
-    error("pair flush: NULL packed cells");
-
-  const struct engine *e = r->e;
+    const struct engine *e = r->e;
   const int periodic = e->mesh->periodic;
   const float r_s_inv = e->mesh->r_s_inv;
   const double min_trunc = e->mesh->r_cut_min;
 
-  const int ci_active =
-      cell_is_active_gravity(ci_flush, e) && (ci_flush->nodeID == e->nodeID);
-  const int cj_active =
-      cell_is_active_gravity(cj_flush, e) && (cj_flush->nodeID == e->nodeID);
-  const float rmax_i = ci_flush->grav.multipole->r_max;
-  const float rmax_j = cj_flush->grav.multipole->r_max;
-  const int gcount_i = ci_flush->grav.count;
-  const int gcount_j = cj_flush->grav.count;
-  const int gcount_padded_i = gcount_i - (gcount_i % VEC_SIZE) + VEC_SIZE;
-  const int gcount_padded_j = gcount_j - (gcount_j % VEC_SIZE) + VEC_SIZE;
   const float dim_0 = (float)e->mesh->dim[0];
   const float dim_1 = (float)e->mesh->dim[1];
   const float dim_2 = (float)e->mesh->dim[2];
@@ -652,10 +654,16 @@ static void runner_dopair_grav_pp_flush(
 	    GPU_MEMCPY_HOST_TO_DEVICE, stream);
 
 	GPUMemcpyAsync(
-	    substream->pair_active_index_d,
-	    substream->pair_active_index_h,
-	    (size_t)nslots * (size_t)max_cell_size * sizeof(int),
-	    GPU_MEMCPY_HOST_TO_DEVICE, stream);
+    		substream->pair_active_offsets_d,
+    		substream->pair_active_offsets_h,
+    		nslots * sizeof(int),
+    		GPU_MEMCPY_HOST_TO_DEVICE, stream);
+
+	GPUMemcpyAsync(
+    		substream->pair_active_index_d,
+    		substream->pair_active_index_h,
+    		(size_t)substream->pair_total_active_count * sizeof(int),
+    		GPU_MEMCPY_HOST_TO_DEVICE, stream);
 
 	GPUMemcpyAsync(
 	    gravity_gpu_values_send_pair_d,
@@ -664,9 +672,10 @@ static void runner_dopair_grav_pp_flush(
 	    GPU_MEMCPY_HOST_TO_DEVICE, stream);
 	    
 	GPUMemsetAsync(
-	    gravity_gpu_values_recv_pair_d,
+	    substream->recv_pair_active_d,
 	    0,
-	    total * sizeof(struct gravity_gpu_values_recv),
+	    (size_t)substream->pair_total_active_count *
+		sizeof(struct gravity_gpu_values_recv),
 	    stream);
 
     GPUError err2 = GPUGetLastError();
@@ -675,23 +684,26 @@ static void runner_dopair_grav_pp_flush(
 
     /* ---- Kernel launch ---- */
     pair_pp_offload_new(
-    periodic, rmax_i, rmax_j, min_trunc, &r_s_inv,
+    periodic, min_trunc, &r_s_inv,
     substream->pair_counts_d,
     substream->pair_offsets_d,
     substream->pair_active_counts_d,
+    substream->pair_active_offsets_d,
     substream->pair_active_index_d,
-    ci_active, cj_active,
-    dim_0, dim_1, dim_2, 1,
+    dim_0, dim_1, dim_2,
     gravity_gpu_values_send_pair_d,
-    gravity_gpu_values_recv_pair_d,
-    ncells_flush, max_cell_size, substream->pair_max_active_count, stream);
+    substream->recv_pair_active_d,
+    ncells_flush, max_cell_size,
+    substream->pair_max_active_count, stream);
 
     /* ---- D2H copy ---- */
     GPUMemcpyAsync(
-	    gravity_gpu_values_recv_pair,
-	    gravity_gpu_values_recv_pair_d,
-	    total * sizeof(struct gravity_gpu_values_recv),
-	    GPU_MEMCPY_DEVICE_TO_HOST, stream);
+	    substream->recv_pair_active,
+	    substream->recv_pair_active_d,
+	    (size_t)substream->pair_total_active_count *
+		sizeof(struct gravity_gpu_values_recv),
+	    GPU_MEMCPY_DEVICE_TO_HOST,
+	    stream);
 
     GPUEventRecord(substream->done, substream->stream);
     GPUEventSynchronize(substream->done);
@@ -733,13 +745,22 @@ static void runner_dopair_grav_pp_flush(
       const int count_i = substream->pair_counts_h[j];
       const int off_i = substream->pair_offsets_h[j];
 
-      for (int i = 0; i < count_i; i++) {
-	  const int k = off_i + i;
-	  ci_pair->grav.parts[i].a_grav[0] += substream->recv_pair[k].values_i.x;
-	  ci_pair->grav.parts[i].a_grav[1] += substream->recv_pair[k].values_i.y;
-	  ci_pair->grav.parts[i].a_grav[2] += substream->recv_pair[k].values_i.z;
-	  ci_pair->grav.parts[i].potential += substream->recv_pair[k].values_i.w;
-	} 
+      const int active_count_i = substream->pair_active_counts_h[j];
+	const int active_base_i = substream->pair_active_offsets_h[j];
+
+	for (int a = 0; a < active_count_i; a++) {
+	  const int local_pid = substream->pair_active_index_h[active_base_i + a];
+	  const int k = active_base_i + a;
+
+	  ci_pair->grav.parts[local_pid].a_grav[0] +=
+	      substream->recv_pair_active[k].values_i.x;
+	  ci_pair->grav.parts[local_pid].a_grav[1] +=
+	      substream->recv_pair_active[k].values_i.y;
+	  ci_pair->grav.parts[local_pid].a_grav[2] +=
+	      substream->recv_pair_active[k].values_i.z;
+	  ci_pair->grav.parts[local_pid].potential +=
+	      substream->recv_pair_active[k].values_i.w;
+	}
 	
       cell_gunlocktree(a_pair);
 
@@ -749,13 +770,23 @@ static void runner_dopair_grav_pp_flush(
      const int count_j = substream->pair_counts_h[j + 1];
      const int off_j = substream->pair_offsets_h[j + 1];
 
-     for (int i = 0; i < count_j; i++) {
-	  const int k = off_j + i;
-	  cj_pair->grav.parts[i].a_grav[0] += substream->recv_pair[k].values_i.x;
-	  cj_pair->grav.parts[i].a_grav[1] += substream->recv_pair[k].values_i.y;
-	  cj_pair->grav.parts[i].a_grav[2] += substream->recv_pair[k].values_i.z;
-	  cj_pair->grav.parts[i].potential += substream->recv_pair[k].values_i.w;
+     const int active_count_j = substream->pair_active_counts_h[j + 1];
+	const int active_base_j = substream->pair_active_offsets_h[j + 1];
+
+	for (int a = 0; a < active_count_j; a++) {
+	  const int local_pid = substream->pair_active_index_h[active_base_j + a];
+	  const int k = active_base_j + a;
+
+	  cj_pair->grav.parts[local_pid].a_grav[0] +=
+	      substream->recv_pair_active[k].values_i.x;
+	  cj_pair->grav.parts[local_pid].a_grav[1] +=
+	      substream->recv_pair_active[k].values_i.y;
+	  cj_pair->grav.parts[local_pid].a_grav[2] +=
+	      substream->recv_pair_active[k].values_i.z;
+	  cj_pair->grav.parts[local_pid].potential +=
+	      substream->recv_pair_active[k].values_i.w;
 	}
+	
 	#ifdef SWIFT_DEBUG_CHECKS
       for (int i = 0; i < count_j; i++) {
         for (int p = 0; p < count_i; p++) {
@@ -821,6 +852,7 @@ static void runner_dopair_grav_pp_flush(
   }
   substream->pair_total_count = 0;
   substream->pair_max_active_count = 0;
+  substream->pair_total_active_count = 0;
 }
 
 /**
@@ -894,13 +926,14 @@ static void runner_doself_grav_pp_flush(
   const double min_trunc = e->mesh->r_cut_min;
 
   self_pp_offload_new(periodic, substream->self_rmax_d, min_trunc, &r_s_inv,
-                      substream->self_counts_d,
-                      substream->self_offsets_d,
-                      substream->self_active_counts_d,
-                      substream->self_active_index_d,
-                      substream->send_self_d,
-                      substream->recv_self_d,
-                      nslots, max_cell_size, max_active_count, stream);
+                    substream->self_counts_d,
+                    substream->self_offsets_d,
+                    substream->self_active_counts_d,
+                    substream->self_active_offsets_d,
+                    substream->self_active_index_d,
+                    substream->send_self_d,
+                    substream->recv_self_active_d,
+                    nslots, max_cell_size, max_active_count, stream);
 }
 
 /**
@@ -955,13 +988,18 @@ static void runner_doself_grav_pp_flush(
 
   /* Build compact active-target list for this cell. */
   int active_count = 0;
-  const int active_base = slot * max_cell_size;
+  const int active_base = substream->self_total_active_count;
+  substream->self_active_offsets_h[slot] = active_base;
+
   for (int i = 0; i < gcount; i++) {
-    if (ci_cache->active[i] > 0) {
-      substream->self_active_index_h[active_base + active_count] = i;
-      active_count++;
-    }
+  	if (ci_cache->active[i] > 0) {
+    		substream->self_active_index_h[active_base + active_count] = i;
+    		active_count++;
+  	}
   }
+
+  substream->self_total_active_count += active_count;
+  
   substream->self_active_counts_h[slot] = active_count;
   if (active_count > substream->self_max_active_count)
     substream->self_max_active_count = active_count;
@@ -991,13 +1029,13 @@ static void runner_doself_grav_pp_flush(
   }
 
   /* Zero only the live recv span, not max_cell_size */
-  for (int i = 0; i < gcount; i++) {
+  /*for (int i = 0; i < gcount; i++) {
     const int k = offset + i;
     substream->recv_self[k].values_i.x = 0.0f;
     substream->recv_self[k].values_i.y = 0.0f;
     substream->recv_self[k].values_i.z = 0.0f;
     substream->recv_self[k].values_i.w = 0.0f;
-  }
+  }*/
   
   //printf("PACKED:%i  \n", substream->grav_batch_self_count);
 
@@ -1048,11 +1086,18 @@ static void runner_doself_grav_pp_flush(
         substream->stream);
 
     GPUMemcpyAsync(
-        substream->self_active_index_d,
-        substream->self_active_index_h,
-        (size_t)nslots * (size_t)max_cell_size * sizeof(int),
-        GPU_MEMCPY_HOST_TO_DEVICE,
-        substream->stream);
+    substream->self_active_offsets_d,
+    substream->self_active_offsets_h,
+    nslots * sizeof(int),
+    GPU_MEMCPY_HOST_TO_DEVICE,
+    substream->stream);
+
+    GPUMemcpyAsync(
+    substream->self_active_index_d,
+    substream->self_active_index_h,
+    (size_t)substream->self_total_active_count * sizeof(int),
+    GPU_MEMCPY_HOST_TO_DEVICE,
+    substream->stream);
         
     GPUMemcpyAsync(
     	substream->self_rmax_d,
@@ -1070,9 +1115,10 @@ static void runner_doself_grav_pp_flush(
         substream->stream);
 
     GPUMemsetAsync(
-	    substream->recv_self_d,
+	    substream->recv_self_active_d,
 	    0,
-	    total * sizeof(struct gravity_gpu_values_recv),
+	    (size_t)substream->self_total_active_count *
+		sizeof(struct gravity_gpu_values_recv),
 	    substream->stream);
 
     /* kernel */
@@ -1081,11 +1127,12 @@ static void runner_doself_grav_pp_flush(
 
     /* D2H: only live data */
     GPUMemcpyAsync(
-        substream->recv_self,
-        substream->recv_self_d,
-        total * sizeof(struct gravity_gpu_values_recv),
-        GPU_MEMCPY_DEVICE_TO_HOST,
-        substream->stream);
+	    substream->recv_self_active,
+	    substream->recv_self_active_d,
+	    (size_t)substream->self_total_active_count *
+		sizeof(struct gravity_gpu_values_recv),
+	    GPU_MEMCPY_DEVICE_TO_HOST,
+	    substream->stream);
 
     GPUEventRecord(substream->done, substream->stream);
     GPUEventSynchronize(substream->done);
@@ -1417,7 +1464,7 @@ static int runner_gpu_choose_batch_ncells(const struct engine *e,
   const size_t usable_bytes = (size_t)(free_bytes * usable_fraction);
   
   const int nstreams = parser_get_opt_param_int(
-      e->parameter_file, "GPU:nstreams", 2);
+      e->parameter_file, "GPU:nstreams", 2); //try changing this to 1 and see if it works better?
 
   const size_t bytes_per_cell_per_substream =
       (size_t)max_cell_size *
@@ -1531,7 +1578,7 @@ void runner_gpu_init(struct runner *r) {
 
   /* User may request nstreams, otherwise auto-pick based on ncells/max_cell_size */
   const int user_nstreams = parser_get_opt_param_int(
-      e->parameter_file, "GPU:nstreams", 2);
+      e->parameter_file, "GPU:nstreams", 1);
 
   const int auto_nstreams =
       runner_gpu_choose_nstreams(e,
@@ -1607,6 +1654,14 @@ void runner_gpu_init(struct runner *r) {
 
     GPUMalloc((void **)&substream->recv_pair_d, recv_bytes);
     GPUHostMalloc((void **)&substream->recv_pair, recv_bytes);
+    
+    const size_t active_recv_bytes =
+    (size_t)gpu->grav_batch_ncells *
+    (size_t)gpu->grav_max_cell_size *
+    sizeof(struct gravity_gpu_values_recv);
+
+    GPUMalloc((void **)&substream->recv_pair_active_d, active_recv_bytes);
+    GPUHostMalloc((void **)&substream->recv_pair_active, active_recv_bytes);
 
     substream->grav_cells_pair =
         malloc((size_t)gpu->grav_batch_ncells * sizeof(struct cell *));
@@ -1622,29 +1677,37 @@ void runner_gpu_init(struct runner *r) {
 
     substream->pair_total_count = 0;
     substream->pair_max_active_count = 0;
+    substream->pair_total_active_count = 0;
 
     substream->pair_counts_h =
         malloc((size_t)gpu->grav_batch_ncells * sizeof(int));
     substream->pair_offsets_h =
         malloc((size_t)gpu->grav_batch_ncells * sizeof(int));
     substream->pair_active_counts_h =
-        malloc((size_t)gpu->grav_batch_ncells * sizeof(int));
+    	malloc((size_t)gpu->grav_batch_ncells * sizeof(int));
+    substream->pair_active_offsets_h =
+    	malloc((size_t)gpu->grav_batch_ncells * sizeof(int));
     substream->pair_active_index_h =
-        malloc((size_t)gpu->grav_batch_ncells * (size_t)gpu->grav_max_cell_size * sizeof(int));
+    	malloc((size_t)gpu->grav_batch_ncells *
+           (size_t)gpu->grav_max_cell_size * sizeof(int));
 
     GPUMalloc((void **)&substream->pair_counts_d,
               (size_t)gpu->grav_batch_ncells * sizeof(int));
     GPUMalloc((void **)&substream->pair_offsets_d,
               (size_t)gpu->grav_batch_ncells * sizeof(int));
     GPUMalloc((void **)&substream->pair_active_counts_d,
-              (size_t)gpu->grav_batch_ncells * sizeof(int));
+          (size_t)gpu->grav_batch_ncells * sizeof(int));
+    GPUMalloc((void **)&substream->pair_active_offsets_d,
+          (size_t)gpu->grav_batch_ncells * sizeof(int));
     GPUMalloc((void **)&substream->pair_active_index_d,
-              (size_t)gpu->grav_batch_ncells * (size_t)gpu->grav_max_cell_size * sizeof(int));
+          (size_t)gpu->grav_batch_ncells *
+          (size_t)gpu->grav_max_cell_size * sizeof(int));
 
     for (int j = 0; j < gpu->grav_batch_ncells; j++) {
       substream->pair_counts_h[j] = 0;
       substream->pair_offsets_h[j] = 0;
       substream->pair_active_counts_h[j] = 0;
+      substream->pair_active_offsets_h[j] = 0;
     }
 
     /* ---------- Self state ---------- */
@@ -1656,6 +1719,9 @@ void runner_gpu_init(struct runner *r) {
 
     GPUMalloc((void **)&substream->recv_self_d, recv_bytes);
     GPUHostMalloc((void **)&substream->recv_self, recv_bytes);
+    
+    GPUMalloc((void **)&substream->recv_self_active_d, active_recv_bytes);
+    GPUHostMalloc((void **)&substream->recv_self_active, active_recv_bytes);
 
     substream->grav_cells_self =
         malloc((size_t)gpu->grav_batch_ncells * sizeof(struct cell *));
@@ -1664,7 +1730,7 @@ void runner_gpu_init(struct runner *r) {
 
     substream->self_total_count = 0;
     substream->self_max_active_count = 0;
-    substream->self_max_active_count = 0;
+    substream->self_total_active_count = 0;
 
     substream->self_counts_h =
         malloc((size_t)gpu->grav_batch_ncells * sizeof(int));
@@ -1672,8 +1738,11 @@ void runner_gpu_init(struct runner *r) {
         malloc((size_t)gpu->grav_batch_ncells * sizeof(int));
     substream->self_active_counts_h =
         malloc((size_t)gpu->grav_batch_ncells * sizeof(int));
+    substream->self_active_offsets_h =
+    	malloc((size_t)gpu->grav_batch_ncells * sizeof(int));
     substream->self_active_index_h =
-        malloc((size_t)gpu->grav_batch_ncells * (size_t)gpu->grav_max_cell_size * sizeof(int));
+    	malloc((size_t)gpu->grav_batch_ncells *
+           (size_t)gpu->grav_max_cell_size * sizeof(int));
     substream->self_rmax_h =
         malloc((size_t)gpu->grav_batch_ncells * sizeof(float));
 
@@ -1684,14 +1753,18 @@ void runner_gpu_init(struct runner *r) {
     GPUMalloc((void **)&substream->self_offsets_d,
               (size_t)gpu->grav_batch_ncells * sizeof(int));
     GPUMalloc((void **)&substream->self_active_counts_d,
-              (size_t)gpu->grav_batch_ncells * sizeof(int));
+          (size_t)gpu->grav_batch_ncells * sizeof(int));
+    GPUMalloc((void **)&substream->self_active_offsets_d,
+          (size_t)gpu->grav_batch_ncells * sizeof(int));
     GPUMalloc((void **)&substream->self_active_index_d,
-              (size_t)gpu->grav_batch_ncells * (size_t)gpu->grav_max_cell_size * sizeof(int));
+          (size_t)gpu->grav_batch_ncells *
+          (size_t)gpu->grav_max_cell_size * sizeof(int));
 
     for (int j = 0; j < gpu->grav_batch_ncells; j++) {
       substream->self_counts_h[j] = 0;
       substream->self_offsets_h[j] = 0;
       substream->self_active_counts_h[j] = 0;
+      substream->self_active_offsets_h[j] = 0;
       substream->self_rmax_h[j] = 0.f;
     }
 
@@ -1807,6 +1880,9 @@ void runner_gpu_clean(struct runner *r) {
     GPUFree(substream->pair_offsets_d);
     GPUFree(substream->pair_active_counts_d);
     GPUFree(substream->pair_active_index_d);
+    
+    GPUFreeHost(substream->recv_pair_active);
+    GPUFree(substream->recv_pair_active_d);
 
     /* Self buffers */
     GPUFreeHost(substream->send_self);
@@ -1821,6 +1897,9 @@ void runner_gpu_clean(struct runner *r) {
     free(substream->self_offsets_h);
     GPUFree(substream->self_counts_d);
     GPUFree(substream->self_offsets_d);
+    
+    GPUFreeHost(substream->recv_self_active);
+    GPUFree(substream->recv_self_active_d);
     
     free(substream->self_rmax_h);
     GPUFree(substream->self_rmax_d);
@@ -1903,9 +1982,15 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
                    nslots * sizeof(int),
                    GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
 
-    GPUMemcpyAsync(substream->self_active_index_d, substream->self_active_index_h,
-                   (size_t)nslots * (size_t)max_cell_size * sizeof(int),
-                   GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
+    GPUMemcpyAsync(substream->self_active_offsets_d,
+               substream->self_active_offsets_h,
+               nslots * sizeof(int),
+               GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
+
+    GPUMemcpyAsync(substream->self_active_index_d,
+               substream->self_active_index_h,
+               (size_t)substream->self_total_active_count * sizeof(int),
+               GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
                    
     GPUMemcpyAsync(substream->self_rmax_d, substream->self_rmax_h,
                nslots * sizeof(float),
@@ -1915,16 +2000,23 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
                    total * sizeof(struct gravity_gpu_values_send),
                    GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
 
-    GPUMemsetAsync(substream->recv_self_d, 0,
-               total * sizeof(struct gravity_gpu_values_recv),
-               substream->stream);
+    GPUMemsetAsync(
+	    substream->recv_self_active_d,
+	    0,
+	    (size_t)substream->self_total_active_count *
+		sizeof(struct gravity_gpu_values_recv),
+	    substream->stream);
     
     runner_doself_grav_pp_flush(
     r, substream, nslots, substream->self_max_active_count, max_cell_size, substream->stream);
 
-    GPUMemcpyAsync(substream->recv_self, substream->recv_self_d,
-                   total * sizeof(struct gravity_gpu_values_recv),
-                   GPU_MEMCPY_DEVICE_TO_HOST, substream->stream);
+    GPUMemcpyAsync(
+	    substream->recv_self_active,
+	    substream->recv_self_active_d,
+	    (size_t)substream->self_total_active_count *
+		sizeof(struct gravity_gpu_values_recv),
+	    GPU_MEMCPY_DEVICE_TO_HOST,
+	    substream->stream);
 
     GPUEventRecord(substream->done, substream->stream);
     GPUEventSynchronize(substream->done);
@@ -1938,14 +2030,22 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
         ;
       }
 
-      for (int i = 0; i < count; i++) {
-        const int k = offset + i;
-        c_unpack->grav.parts[i].a_grav[0] += substream->recv_self[k].values_i.x;
-        c_unpack->grav.parts[i].a_grav[1] += substream->recv_self[k].values_i.y;
-        c_unpack->grav.parts[i].a_grav[2] += substream->recv_self[k].values_i.z;
-        c_unpack->grav.parts[i].potential += substream->recv_self[k].values_i.w;
-        
-      }
+      const int active_count = substream->self_active_counts_h[j];
+	const int active_base = substream->self_active_offsets_h[j];
+
+	for (int a = 0; a < active_count; a++) {
+  		const int local_pid = substream->self_active_index_h[active_base + a];
+  		const int k = active_base + a;
+
+	  c_unpack->grav.parts[local_pid].a_grav[0] +=
+	      substream->recv_self_active[k].values_i.x;
+	  c_unpack->grav.parts[local_pid].a_grav[1] +=
+	      substream->recv_self_active[k].values_i.y;
+	  c_unpack->grav.parts[local_pid].a_grav[2] +=
+	      substream->recv_self_active[k].values_i.z;
+	  c_unpack->grav.parts[local_pid].potential +=
+	      substream->recv_self_active[k].values_i.w;
+	}
 
       cell_gunlocktree(c_unpack);
     }

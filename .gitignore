@@ -419,3 +419,4 @@ black_formatting_env
 # YouCompleteMe
 .ycm_extra_conf.py
 
+examples/EAGLE_DMO_low_z/EAGLE_DMO_25/run_prof.sh
