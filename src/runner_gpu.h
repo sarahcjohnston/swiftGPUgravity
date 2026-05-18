@@ -99,6 +99,13 @@ struct gpu_runner_substream {
 
   /*! Host and device buffers for sent pair interactions. */
   struct gravity_gpu_values_send *send_pair, *send_pair_d;
+  
+  /*! Compact host and device buffers for coalesced pair source-tile loads. */
+  float4 *send_pair_pos_mass;
+  float4 *send_pair_pos_mass_d;
+
+  float *send_pair_h;
+  float *send_pair_h_d;
 
   /*! Host and device buffers for recieved pair results. */
   struct gravity_gpu_values_recv *recv_pair, *recv_pair_d;

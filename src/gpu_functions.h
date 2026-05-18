@@ -8,7 +8,7 @@ extern "C" {
 }
 #endif
 
-struct gravity_gpu_values_send {
+struct __align__(16) gravity_gpu_values_send {
   /* floats needed for GPU calculations*/
   float4 values_i; //x:a_x, y:a_y, z:a_z, w:h for cell i
   float4 values_j; //x:a_x, y:a_y, z:a_z, w:h for cell j
@@ -17,8 +17,13 @@ struct gravity_gpu_values_send {
   int4 flags1; //x:use_full, y:0, z:0, w:0
 };
 
-struct gravity_gpu_values_recv {
+struct __align__(16) gravity_gpu_values_recv {
   /* floats needed for GPU calculations*/
   float4 values_i; //x:a_x, y:a_y, z:a_z, w:pot for cell i
   float4 values_j; //x:a_x, y:a_y, z:a_z, w:pot for cell j
 };
+
+/*struct __align__(16) gravity_gpu_values_compact {
+  float4 pos_h;   // x, y, z, h
+  float4 mass;    // mass, unused, unused, unused
+};*/

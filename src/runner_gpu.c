@@ -29,6 +29,94 @@
 #include "timers.h"
 
 #include <stdlib.h>
+#include <stdio.h>
+#include <time.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+
+
+/* ------------------------------------------------------------------------- */
+/* GPU timing helpers: thread-local state only, no struct layout changes.     */
+/* This avoids changing runner_gpu.h and avoids shared locks in runner threads.*/
+/* ------------------------------------------------------------------------- */
+
+static __thread double runner_gpu_self_pack_time_s = 0.0;
+static __thread double runner_gpu_pair_pack_time_s = 0.0;
+
+static inline double runner_gpu_walltime_s(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (double)ts.tv_sec + 1.0e-9 * (double)ts.tv_nsec;
+}
+
+/*
+ * GPU event timing for asynchronous work.
+ * pack_s/unpack_s use CPU wall-clock time because they run on the CPU.
+ * h2d_s/kernel_s/d2h_s use GPU events because copies and kernel launches are async.
+ */
+static double runner_gpu_event_elapsed_s(GPUEvent start, GPUEvent stop) {
+  float ms = 0.0f;
+
+  GPUEventSynchronize(stop);
+
+#if defined(HAVE_HIP) || defined(SWIFT_HIP)
+  hipEventElapsedTime(&ms, start, stop);
+#else
+  cudaEventElapsedTime(&ms, start, stop);
+#endif
+
+  return 1.0e-3 * (double)ms;
+}
+
+static void runner_gpu_write_timing_row(
+    const char *kind,
+    long long step,
+    int runner_id,
+    int stream_id,
+    int nslots,
+    int nparts,
+    double pack_s,
+    double h2d_s,
+    double kernel_s,
+    double d2h_s,
+    double unpack_s) {
+
+  const char *path = getenv("SWIFT_GPU_TIMING_FILE");
+
+  if (path == NULL || path[0] == '\0')
+    path = "gpu_timing.csv";
+
+  FILE *fp = fopen(path, "a");
+
+  if (fp == NULL)
+    return;
+
+  fseek(fp, 0, SEEK_END);
+
+  if (ftell(fp) == 0) {
+    fprintf(fp,
+            "kind,step,runner,stream,nslots,nparticles,"
+            "pack_s,h2d_s,kernel_s,d2h_s,unpack_s\n");
+  }
+
+  fprintf(fp,
+          "%s,%lld,%d,%d,%d,%d,%.9e,%.9e,%.9e,%.9e,%.9e\n",
+          kind,
+          step,
+          runner_id,
+          stream_id,
+          nslots,
+          nparts,
+          pack_s,
+          h2d_s,
+          kernel_s,
+          d2h_s,
+          unpack_s);
+
+  fclose(fp);
+}
 
 /**
  * @brief Launch the GPU P-P gravity kernel for a packed batch.
@@ -55,9 +143,7 @@
  * @param stream GPU stream used for the kernel launch.
  */
 extern void pair_pp_offload_new(
-    int periodic,
-    double min_trunc,
-    const float *r_s_inv,
+    int periodic, double min_trunc, const float *r_s_inv,
     const int *pair_counts_d,
     const int *pair_offsets_d,
     const int *pair_active_counts_d,
@@ -65,6 +151,8 @@ extern void pair_pp_offload_new(
     const int *pair_active_index_d,
     float dim_0, float dim_1, float dim_2,
     struct gravity_gpu_values_send *gravity_gpu_values_send_d,
+    float4 *send_pair_pos_mass_d,
+    float *send_pair_h_d,
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
     int ncells,
     int max_cell_size,
@@ -281,6 +369,8 @@ static void runner_dopair_grav_pp_pack(
                         (float)e->mesh->dim[2]};
   const double min_trunc = e->mesh->r_cut_min;
 
+  const double pack_time_start = runner_gpu_walltime_s();
+
   TIMER_TIC;
 
   /* Record activity status */
@@ -438,6 +528,13 @@ static void runner_dopair_grav_pp_pack(
     	const float hi = ci_cache->epsilon[i];
     	const float mi = ci_cache->m[i];
     	const int   ai = ci_cache->active[i];
+    	
+    	substream->send_pair_pos_mass[k].x = xi;
+	substream->send_pair_pos_mass[k].y = yi;
+	substream->send_pair_pos_mass[k].z = zi;
+	substream->send_pair_pos_mass[k].w = mi;
+
+	substream->send_pair_h[k] = hi;
 
     	 gravity_gpu_values_send_pair[k].values_i.x = xi;
       gravity_gpu_values_send_pair[k].values_i.y = yi;
@@ -474,6 +571,13 @@ static void runner_dopair_grav_pp_pack(
     const float hj = cj_cache->epsilon[i];
     const float mj = cj_cache->m[i];
     const int   aj = cj_cache->active[i];
+    
+    substream->send_pair_pos_mass[k].x = xj;
+	substream->send_pair_pos_mass[k].y = yj;
+	substream->send_pair_pos_mass[k].z = zj;
+	substream->send_pair_pos_mass[k].w = mj;
+
+	substream->send_pair_h[k] = hj;
 
     gravity_gpu_values_send_pair[k].values_j.x = xj;
       gravity_gpu_values_send_pair[k].values_j.y = yj;
@@ -570,6 +674,8 @@ static void runner_dopair_grav_pp_pack(
 
   cell_gunlocktree(b);
   cell_gunlocktree(a);
+
+  runner_gpu_pair_pack_time_s += runner_gpu_walltime_s() - pack_time_start;
 }
 
 /**
@@ -608,6 +714,22 @@ static void runner_dopair_grav_pp_flush(
   const int ncells_flush = substream->grav_batch_pair_count;
   if (ncells_flush == 0) return;
 
+  double h2d_s = 0.0;
+  double kernel_s = 0.0;
+  double d2h_s = 0.0;
+  double unpack_s = 0.0;
+
+  GPUEvent h2d_start, h2d_stop;
+  GPUEvent kernel_start, kernel_stop;
+  GPUEvent d2h_start, d2h_stop;
+
+  GPUEventCreate(&h2d_start);
+  GPUEventCreate(&h2d_stop);
+  GPUEventCreate(&kernel_start);
+  GPUEventCreate(&kernel_stop);
+  GPUEventCreate(&d2h_start);
+  GPUEventCreate(&d2h_stop);
+
   /* Retrieve kernel parameters from the first pair in the batch. */
     const struct engine *e = r->e;
   const int periodic = e->mesh->periodic;
@@ -634,6 +756,8 @@ static void runner_dopair_grav_pp_flush(
   if (total < 0 || total > pair_capacity)
     error("Bad pair_total_count in pair flush: %d (capacity %d)",
           total, pair_capacity);
+
+    GPUEventRecord(h2d_start, stream);
 
 	GPUMemcpyAsync(
 	    substream->pair_counts_d,
@@ -671,18 +795,40 @@ static void runner_dopair_grav_pp_flush(
 	    total * sizeof(struct gravity_gpu_values_send),
 	    GPU_MEMCPY_HOST_TO_DEVICE, stream);
 	    
-	GPUMemsetAsync(
+	GPUMemcpyAsync(
+	    substream->send_pair_pos_mass_d,
+	    substream->send_pair_pos_mass,
+	    total * sizeof(float4),
+	    GPU_MEMCPY_HOST_TO_DEVICE, stream);
+
+	GPUMemcpyAsync(
+	    substream->send_pair_h_d,
+	    substream->send_pair_h,
+	    total * sizeof(float),
+	    GPU_MEMCPY_HOST_TO_DEVICE, stream);
+
+    GPUEventRecord(h2d_stop, stream);
+	    
+	/*GPUMemcpyAsync(
+    		substream->send_pair_compact_d,
+    		substream->send_pair_compact,
+    		total * sizeof(struct gravity_gpu_values_compact),
+    		GPU_MEMCPY_HOST_TO_DEVICE, stream);*/
+	    
+	/*GPUMemsetAsync(
 	    substream->recv_pair_active_d,
 	    0,
 	    (size_t)substream->pair_total_active_count *
 		sizeof(struct gravity_gpu_values_recv),
-	    stream);
+	    stream);*/
 
     GPUError err2 = GPUGetLastError();
     if (err2 != GPU_SUCCESS)
       printf("Error (flush H2D): %s\n", GPUGetErrorString(err2));
 
     /* ---- Kernel launch ---- */
+    GPUEventRecord(kernel_start, stream);
+
     pair_pp_offload_new(
     periodic, min_trunc, &r_s_inv,
     substream->pair_counts_d,
@@ -692,11 +838,17 @@ static void runner_dopair_grav_pp_flush(
     substream->pair_active_index_d,
     dim_0, dim_1, dim_2,
     gravity_gpu_values_send_pair_d,
+    substream->send_pair_pos_mass_d,
+    substream->send_pair_h_d,
     substream->recv_pair_active_d,
     ncells_flush, max_cell_size,
     substream->pair_max_active_count, stream);
 
+    GPUEventRecord(kernel_stop, stream);
+
     /* ---- D2H copy ---- */
+    GPUEventRecord(d2h_start, stream);
+
     GPUMemcpyAsync(
 	    substream->recv_pair_active,
 	    substream->recv_pair_active_d,
@@ -705,8 +857,13 @@ static void runner_dopair_grav_pp_flush(
 	    GPU_MEMCPY_DEVICE_TO_HOST,
 	    stream);
 
+    GPUEventRecord(d2h_stop, stream);
     GPUEventRecord(substream->done, substream->stream);
     GPUEventSynchronize(substream->done);
+
+    h2d_s = runner_gpu_event_elapsed_s(h2d_start, h2d_stop);
+    kernel_s = runner_gpu_event_elapsed_s(kernel_start, kernel_stop);
+    d2h_s = runner_gpu_event_elapsed_s(d2h_start, d2h_stop);
 
     TIMER_TOC(timer_doself_grav_pp);
   }
@@ -717,6 +874,8 @@ static void runner_dopair_grav_pp_flush(
 
   /* ---- Unpack results back to particles ---- */
   {
+    const double unpack_t0 = runner_gpu_walltime_s();
+
     TIMER_TIC;
 
     for (int j = 0; j < ncells_flush; j += 2) {
@@ -804,7 +963,22 @@ static void runner_dopair_grav_pp_flush(
     }
 
     TIMER_TOC(timer_doself_grav_pp);
+
+    unpack_s = runner_gpu_walltime_s() - unpack_t0;
   }
+
+  const double pair_pack_s = runner_gpu_pair_pack_time_s;
+  runner_gpu_pair_pack_time_s = 0.0;
+  runner_gpu_write_timing_row("pair", (long long)r->e->step, r->id, r->qid, ncells_flush,
+                              substream->pair_total_count, pair_pack_s,
+                              h2d_s, kernel_s, d2h_s, unpack_s);
+
+  GPUEventDestroy(h2d_start);
+  GPUEventDestroy(h2d_stop);
+  GPUEventDestroy(kernel_start);
+  GPUEventDestroy(kernel_stop);
+  GPUEventDestroy(d2h_start);
+  GPUEventDestroy(d2h_stop);
 
   /* Complete any tasks from previous top-level calls that were packed
      into this batch, but skip current_task (still being walked). */
@@ -890,14 +1064,14 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
         t, ncells, max_cell_size, stream);
   }
 
-  runner_dopair_grav_pp_pack(
-      r, substream, ci, cj, symmetric, allow_mpole,
-      gravity_gpu_values_send_pair,
-      gravity_gpu_values_recv_pair,
-      grav_cells_pair, grav_tasks_pair,
-      grav_pair_internal_from_self,
-      t, internal_from_self,
-      max_cell_size, stream);
+ runner_dopair_grav_pp_pack(
+    r, substream, ci, cj, symmetric, allow_mpole,
+    gravity_gpu_values_send_pair,
+    gravity_gpu_values_recv_pair,
+    grav_cells_pair, grav_tasks_pair,
+    grav_pair_internal_from_self,
+    t, internal_from_self,
+    max_cell_size, stream);
 
   if (substream->grav_batch_pair_count >= ncells) {
     runner_dopair_grav_pp_flush(
@@ -953,6 +1127,8 @@ static void runner_doself_grav_pp_flush(
     struct task *t,
     int ncells,
     int max_cell_size) {
+
+  const double pack_time_start = runner_gpu_walltime_s();
 
   const struct engine *e = r->e;
   struct gravity_cache *const ci_cache = &r->ci_gravity_cache;
@@ -1047,6 +1223,8 @@ static void runner_doself_grav_pp_flush(
   gravity_cache_zero_output(ci_cache, gcount_padded);
   cell_gunlocktree(ci);
 
+  runner_gpu_self_pack_time_s += runner_gpu_walltime_s() - pack_time_start;
+
 #ifdef SWIFT_DEBUG_CHECKS
   for (int j = 0; j < gcount; j++) {
     for (int i = 0; i < gcount; i++) {
@@ -1063,7 +1241,24 @@ static void runner_doself_grav_pp_flush(
     const int nslots = substream->grav_batch_self_count;
     const int total = substream->self_total_count;
 
+    double h2d_s = 0.0;
+    double kernel_s = 0.0;
+    double d2h_s = 0.0;
+    double unpack_s = 0.0;
+
+    GPUEvent h2d_start, h2d_stop;
+    GPUEvent kernel_start, kernel_stop;
+    GPUEvent d2h_start, d2h_stop;
+
+    GPUEventCreate(&h2d_start);
+    GPUEventCreate(&h2d_stop);
+    GPUEventCreate(&kernel_start);
+    GPUEventCreate(&kernel_stop);
+    GPUEventCreate(&d2h_start);
+    GPUEventCreate(&d2h_stop);
+
     /* copy packed metadata */
+    GPUEventRecord(h2d_start, substream->stream);
     GPUMemcpyAsync(
         substream->self_counts_d,
         substream->self_counts_h,
@@ -1114,18 +1309,26 @@ static void runner_doself_grav_pp_flush(
         GPU_MEMCPY_HOST_TO_DEVICE,
         substream->stream);
 
-    GPUMemsetAsync(
+    GPUEventRecord(h2d_stop, substream->stream);
+
+    /*GPUMemsetAsync(
 	    substream->recv_self_active_d,
 	    0,
 	    (size_t)substream->self_total_active_count *
 		sizeof(struct gravity_gpu_values_recv),
-	    substream->stream);
+	    substream->stream);*/
 
     /* kernel */
+    GPUEventRecord(kernel_start, substream->stream);
+
     runner_doself_grav_pp_flush(
     r, substream, nslots, substream->self_max_active_count, max_cell_size, substream->stream);
 
+    GPUEventRecord(kernel_stop, substream->stream);
+
     /* D2H: only live data */
+    GPUEventRecord(d2h_start, substream->stream);
+
     GPUMemcpyAsync(
 	    substream->recv_self_active,
 	    substream->recv_self_active_d,
@@ -1134,10 +1337,17 @@ static void runner_doself_grav_pp_flush(
 	    GPU_MEMCPY_DEVICE_TO_HOST,
 	    substream->stream);
 
+    GPUEventRecord(d2h_stop, substream->stream);
     GPUEventRecord(substream->done, substream->stream);
     GPUEventSynchronize(substream->done);
 
+    h2d_s = runner_gpu_event_elapsed_s(h2d_start, h2d_stop);
+    kernel_s = runner_gpu_event_elapsed_s(kernel_start, kernel_stop);
+    d2h_s = runner_gpu_event_elapsed_s(d2h_start, d2h_stop);
+
     /* ===================== UNPACK ===================== */
+
+    const double unpack_t0 = runner_gpu_walltime_s();
 
     for (int j = 0; j < nslots; j++) {
 
@@ -1149,17 +1359,40 @@ static void runner_doself_grav_pp_flush(
         ;
       }
 
-      for (int i = 0; i < count; i++) {
-        const int k = offset + i;
+      const int active_count = substream->self_active_counts_h[j];
+	const int active_base = substream->self_active_offsets_h[j];
 
-        c_unpack->grav.parts[i].a_grav[0] += substream->recv_self[k].values_i.x;
-        c_unpack->grav.parts[i].a_grav[1] += substream->recv_self[k].values_i.y;
-        c_unpack->grav.parts[i].a_grav[2] += substream->recv_self[k].values_i.z;
-        c_unpack->grav.parts[i].potential += substream->recv_self[k].values_i.w;
-      }
+	for (int a = 0; a < active_count; a++) {
+	  const int local_pid = substream->self_active_index_h[active_base + a];
+	  const int k = active_base + a;
+
+	  c_unpack->grav.parts[local_pid].a_grav[0] +=
+	      substream->recv_self_active[k].values_i.x;
+	  c_unpack->grav.parts[local_pid].a_grav[1] +=
+	      substream->recv_self_active[k].values_i.y;
+	  c_unpack->grav.parts[local_pid].a_grav[2] +=
+	      substream->recv_self_active[k].values_i.z;
+	  c_unpack->grav.parts[local_pid].potential +=
+	      substream->recv_self_active[k].values_i.w;
+	}
 
       cell_gunlocktree(c_unpack);
     }
+
+    unpack_s = runner_gpu_walltime_s() - unpack_t0;
+
+    const double self_pack_s = runner_gpu_self_pack_time_s;
+    runner_gpu_self_pack_time_s = 0.0;
+    runner_gpu_write_timing_row("self", (long long)r->e->step, r->id, r->qid, nslots, total,
+                                self_pack_s, h2d_s, kernel_s, d2h_s,
+                                unpack_s);
+
+    GPUEventDestroy(h2d_start);
+    GPUEventDestroy(h2d_stop);
+    GPUEventDestroy(kernel_start);
+    GPUEventDestroy(kernel_stop);
+    GPUEventDestroy(d2h_start);
+    GPUEventDestroy(d2h_stop);
 
     /* ===================== COMPLETE TASKS ===================== */
 
@@ -1651,6 +1884,22 @@ void runner_gpu_init(struct runner *r) {
 
     GPUMalloc((void **)&substream->send_pair_d, send_bytes);
     GPUHostMalloc((void **)&substream->send_pair, send_bytes);
+    
+    const size_t pos_mass_bytes =
+    (size_t)gpu->grav_batch_ncells *
+    (size_t)gpu->grav_max_cell_size *
+    sizeof(float4);
+
+	const size_t h_bytes =
+	    (size_t)gpu->grav_batch_ncells *
+	    (size_t)gpu->grav_max_cell_size *
+	    sizeof(float);
+
+	GPUMalloc((void **)&substream->send_pair_pos_mass_d, pos_mass_bytes);
+	GPUHostMalloc((void **)&substream->send_pair_pos_mass, pos_mass_bytes);
+
+	GPUMalloc((void **)&substream->send_pair_h_d, h_bytes);
+	GPUHostMalloc((void **)&substream->send_pair_h, h_bytes);
 
     GPUMalloc((void **)&substream->recv_pair_d, recv_bytes);
     GPUHostMalloc((void **)&substream->recv_pair, recv_bytes);
@@ -1865,6 +2114,11 @@ void runner_gpu_clean(struct runner *r) {
     /* Pair buffers */
     GPUFreeHost(substream->send_pair);
     GPUFree(substream->send_pair_d);
+    GPUFreeHost(substream->send_pair_pos_mass);
+	GPUFree(substream->send_pair_pos_mass_d);
+
+	GPUFreeHost(substream->send_pair_h);
+	GPUFree(substream->send_pair_h_d);;
     GPUFreeHost(substream->recv_pair);
     GPUFree(substream->recv_pair_d);
 
@@ -1970,6 +2224,26 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
 
     if (nslots == 0) continue;
 
+    double h2d_s = 0.0;
+    double kernel_s = 0.0;
+    double d2h_s = 0.0;
+    double unpack_s = 0.0;
+
+    GPUEvent h2d_start, h2d_stop;
+    GPUEvent kernel_start, kernel_stop;
+    GPUEvent d2h_start, d2h_stop;
+
+    GPUEventCreate(&h2d_start);
+    GPUEventCreate(&h2d_stop);
+    GPUEventCreate(&kernel_start);
+    GPUEventCreate(&kernel_stop);
+    GPUEventCreate(&d2h_start);
+    GPUEventCreate(&d2h_stop);
+
+    /* ===================== H2D ===================== */
+
+    GPUEventRecord(h2d_start, substream->stream);
+
     GPUMemcpyAsync(substream->self_counts_d, substream->self_counts_h,
                    nslots * sizeof(int),
                    GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
@@ -1991,7 +2265,7 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
                substream->self_active_index_h,
                (size_t)substream->self_total_active_count * sizeof(int),
                GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
-                   
+
     GPUMemcpyAsync(substream->self_rmax_d, substream->self_rmax_h,
                nslots * sizeof(float),
                GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
@@ -2001,54 +2275,91 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
                    GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
 
     GPUMemsetAsync(
-	    substream->recv_self_active_d,
-	    0,
-	    (size_t)substream->self_total_active_count *
-		sizeof(struct gravity_gpu_values_recv),
-	    substream->stream);
-    
+        substream->recv_self_active_d,
+        0,
+        (size_t)substream->self_total_active_count *
+            sizeof(struct gravity_gpu_values_recv),
+        substream->stream);
+
+    GPUEventRecord(h2d_stop, substream->stream);
+
+    /* ===================== KERNEL ===================== */
+
+    GPUEventRecord(kernel_start, substream->stream);
+
     runner_doself_grav_pp_flush(
-    r, substream, nslots, substream->self_max_active_count, max_cell_size, substream->stream);
+        r, substream, nslots, substream->self_max_active_count, max_cell_size,
+        substream->stream);
+
+    GPUEventRecord(kernel_stop, substream->stream);
+
+    /* ===================== D2H ===================== */
+
+    GPUEventRecord(d2h_start, substream->stream);
 
     GPUMemcpyAsync(
-	    substream->recv_self_active,
-	    substream->recv_self_active_d,
-	    (size_t)substream->self_total_active_count *
-		sizeof(struct gravity_gpu_values_recv),
-	    GPU_MEMCPY_DEVICE_TO_HOST,
-	    substream->stream);
+        substream->recv_self_active,
+        substream->recv_self_active_d,
+        (size_t)substream->self_total_active_count *
+            sizeof(struct gravity_gpu_values_recv),
+        GPU_MEMCPY_DEVICE_TO_HOST,
+        substream->stream);
+
+    GPUEventRecord(d2h_stop, substream->stream);
 
     GPUEventRecord(substream->done, substream->stream);
     GPUEventSynchronize(substream->done);
 
+    h2d_s = runner_gpu_event_elapsed_s(h2d_start, h2d_stop);
+    kernel_s = runner_gpu_event_elapsed_s(kernel_start, kernel_stop);
+    d2h_s = runner_gpu_event_elapsed_s(d2h_start, d2h_stop);
+
+    /* ===================== UNPACK ===================== */
+
+    const double unpack_t0 = runner_gpu_walltime_s();
+
     for (int j = 0; j < nslots; j++) {
       struct cell *c_unpack = substream->grav_cells_self[j];
-      const int count = substream->self_counts_h[j];
-      const int offset = substream->self_offsets_h[j];
 
       while (cell_glocktree(c_unpack)) {
         ;
       }
 
       const int active_count = substream->self_active_counts_h[j];
-	const int active_base = substream->self_active_offsets_h[j];
+      const int active_base = substream->self_active_offsets_h[j];
 
-	for (int a = 0; a < active_count; a++) {
-  		const int local_pid = substream->self_active_index_h[active_base + a];
-  		const int k = active_base + a;
+      for (int a = 0; a < active_count; a++) {
+        const int local_pid = substream->self_active_index_h[active_base + a];
+        const int k = active_base + a;
 
-	  c_unpack->grav.parts[local_pid].a_grav[0] +=
-	      substream->recv_self_active[k].values_i.x;
-	  c_unpack->grav.parts[local_pid].a_grav[1] +=
-	      substream->recv_self_active[k].values_i.y;
-	  c_unpack->grav.parts[local_pid].a_grav[2] +=
-	      substream->recv_self_active[k].values_i.z;
-	  c_unpack->grav.parts[local_pid].potential +=
-	      substream->recv_self_active[k].values_i.w;
-	}
+        c_unpack->grav.parts[local_pid].a_grav[0] +=
+            substream->recv_self_active[k].values_i.x;
+        c_unpack->grav.parts[local_pid].a_grav[1] +=
+            substream->recv_self_active[k].values_i.y;
+        c_unpack->grav.parts[local_pid].a_grav[2] +=
+            substream->recv_self_active[k].values_i.z;
+        c_unpack->grav.parts[local_pid].potential +=
+            substream->recv_self_active[k].values_i.w;
+      }
 
       cell_gunlocktree(c_unpack);
     }
+
+    unpack_s = runner_gpu_walltime_s() - unpack_t0;
+
+    const double self_pack_s = runner_gpu_self_pack_time_s;
+    runner_gpu_self_pack_time_s = 0.0;
+
+    runner_gpu_write_timing_row("self", (long long)r->e->step, r->id, r->qid, nslots, total,
+                                self_pack_s, h2d_s, kernel_s, d2h_s,
+                                unpack_s);
+
+    GPUEventDestroy(h2d_start);
+    GPUEventDestroy(h2d_stop);
+    GPUEventDestroy(kernel_start);
+    GPUEventDestroy(kernel_stop);
+    GPUEventDestroy(d2h_start);
+    GPUEventDestroy(d2h_stop);
 
     runner_gpu_complete_self_batch(r, &r->e->sched, substream);
 

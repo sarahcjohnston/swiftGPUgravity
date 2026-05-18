@@ -99,13 +99,15 @@ extern "C" void pair_pp_offload_new(
     const int *pair_active_index_d,
     float dim_0, float dim_1, float dim_2,
     struct gravity_gpu_values_send *gravity_gpu_values_send_d,
+    const float4 *send_pair_pos_mass_d,
+    const float *send_pair_h_d,
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
     int ncells,
     int max_cell_size,
     int max_active_count,
     GPUStream stream) {
 
-  (void)min_trunc; /* use_full is already packed per pair slot */
+  (void)min_trunc;
 
   const int threads = 256;
   dim3 block(threads);
@@ -113,11 +115,14 @@ extern "C" void pair_pp_offload_new(
   const int npairs = ncells / 2;
   dim3 grid(npairs, (max_active_count + threads - 1) / threads);
 
-  const size_t shmem = threads * sizeof(gravity_gpu_values_send);
+  const size_t shmem =
+      threads * sizeof(float4) +
+      threads * sizeof(float);
 
-  /* i <- j direction */
   pair_grav_pp_kernel_tiled<<<grid, block, shmem, stream>>>(
       gravity_gpu_values_send_d,
+      send_pair_pos_mass_d,
+      send_pair_h_d,
       gravity_gpu_values_recv_d,
       pair_counts_d,
       pair_offsets_d,
@@ -126,21 +131,14 @@ extern "C" void pair_pp_offload_new(
       pair_active_index_d,
       periodic,
       *r_s_inv,
-      /*symmetric=*/1,
-      /*swap=*/0,
+      0,
       dim_0, dim_1, dim_2,
-      max_cell_size,
       ncells);
 
-  GPUError err1 = GPUGetPeekAtLastError();
-  if (err1 != GPU_SUCCESS) {
-    printf("KERNEL LAUNCH ERROR (swap = 0): %s\n",
-           GPUGetErrorString(err1));
-  }
-
-  /* j <- i direction */
   pair_grav_pp_kernel_tiled<<<grid, block, shmem, stream>>>(
       gravity_gpu_values_send_d,
+      send_pair_pos_mass_d,
+      send_pair_h_d,
       gravity_gpu_values_recv_d,
       pair_counts_d,
       pair_offsets_d,
@@ -149,15 +147,7 @@ extern "C" void pair_pp_offload_new(
       pair_active_index_d,
       periodic,
       *r_s_inv,
-      /*symmetric=*/1,
-      /*swap=*/1,
+      1,
       dim_0, dim_1, dim_2,
-      max_cell_size,
       ncells);
-
-  GPUError err2 = GPUGetPeekAtLastError();
-  if (err2 != GPU_SUCCESS) {
-    printf("KERNEL LAUNCH ERROR (swap = 1): %s\n",
-           GPUGetErrorString(err2));
-  }
 }
