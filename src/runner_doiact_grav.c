@@ -2579,8 +2579,6 @@ enum runner_gpu_task_type runner_doself_recursive_grav_new(
         enum runner_gpu_task_type child_pair_type =
     	runner_dopair_recursive_grav_new(
         	r, substream, c->progeny[j], c->progeny[k], 0,
-        	substream->send_pair, substream->send_pair_d,
-        	substream->recv_pair, substream->recv_pair_d,
         	substream->grav_cells_pair, substream->grav_tasks_pair,
         	substream->grav_pair_internal_from_self,
         	t, 1, ncells, max_cell_size, substream->stream);

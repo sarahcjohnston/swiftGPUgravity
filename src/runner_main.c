@@ -317,8 +317,6 @@ void *runner_main(void *data) {
 	    t->gpu_completed = 0;
 	    gpu_task_type = runner_dopair_recursive_grav_new(
     		r, substream, ci, cj, 1,
-    		substream->send_pair, substream->send_pair_d,
-   		substream->recv_pair, substream->recv_pair_d,
     		substream->grav_cells_pair, substream->grav_tasks_pair,
     		substream->grav_pair_internal_from_self,
     		t, 0, ncells, max_cell_size, substream->stream);

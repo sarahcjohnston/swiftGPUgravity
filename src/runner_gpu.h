@@ -96,9 +96,6 @@ struct gpu_runner_substream {
   /*PAIR OPERATIONS*/
   /*! Number of pair cells currently packed in this substream's GPU batch. */
   int grav_batch_pair_count;
-
-  /*! Host and device buffers for sent pair interactions. */
-  struct gravity_gpu_values_send *send_pair, *send_pair_d;
   
   /*! Compact host and device buffers for coalesced pair source-tile loads. */
   float4 *send_pair_pos_mass;
@@ -108,7 +105,6 @@ struct gpu_runner_substream {
   float *send_pair_h_d;
 
   /*! Host and device buffers for recieved pair results. */
-  struct gravity_gpu_values_recv *recv_pair, *recv_pair_d;
   struct gravity_gpu_values_recv *recv_pair_active, *recv_pair_active_d;
 
   /*! Packed pair-batch cell and task handles. */
@@ -122,6 +118,8 @@ struct gpu_runner_substream {
   int *pair_counts_h, *pair_counts_d;
   int *pair_offsets_h, *pair_offsets_d;
   int pair_total_count;
+  
+  int *pair_cell_flags_h, *pair_cell_flags_d;
   
   /*! Active-target compaction metadata for pair work. */
   int *pair_active_counts_h, *pair_active_counts_d;
@@ -196,10 +194,6 @@ enum runner_gpu_task_type runner_doself_grav_pp_task_new(
 enum runner_gpu_task_type runner_dopair_grav_pp_new(
     struct runner *r, struct gpu_runner_substream *substream, struct cell *ci,
     struct cell *cj, const int symmetric, const int allow_mpole,
-    struct gravity_gpu_values_send *gravity_gpu_values_send_pair,
-    struct gravity_gpu_values_send *gravity_gpu_values_send_pair_d,
-    struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair,
-    struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair_d,
     struct cell **grav_cells_pair, struct task **grav_tasks_pair,
     unsigned char *grav_pair_internal_from_self,
     struct task *t, int internal_from_self,
@@ -213,10 +207,6 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
 enum runner_gpu_task_type runner_dopair_recursive_grav_new(
     struct runner *r, struct gpu_runner_substream *substream, struct cell *ci,
     struct cell *cj, const int gettimer,
-    struct gravity_gpu_values_send *gravity_gpu_values_send_pair,
-    struct gravity_gpu_values_send *gravity_gpu_values_send_pair_d,
-    struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair,
-    struct gravity_gpu_values_recv *gravity_gpu_values_recv_pair_d,
     struct cell **grav_cells_pair, struct task **grav_tasks_pair,
     unsigned char *grav_pair_internal_from_self,
     struct task *t, int internal_from_self,

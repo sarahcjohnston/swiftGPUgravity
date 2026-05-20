@@ -98,7 +98,7 @@ extern "C" void pair_pp_offload_new(
     const int *pair_active_offsets_d,
     const int *pair_active_index_d,
     float dim_0, float dim_1, float dim_2,
-    struct gravity_gpu_values_send *gravity_gpu_values_send_d,
+    const int *pair_cell_flags_d,
     const float4 *send_pair_pos_mass_d,
     const float *send_pair_h_d,
     struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
@@ -120,7 +120,7 @@ extern "C" void pair_pp_offload_new(
       threads * sizeof(float);
 
   pair_grav_pp_kernel_tiled<<<grid, block, shmem, stream>>>(
-      gravity_gpu_values_send_d,
+      pair_cell_flags_d,
       send_pair_pos_mass_d,
       send_pair_h_d,
       gravity_gpu_values_recv_d,
@@ -136,7 +136,7 @@ extern "C" void pair_pp_offload_new(
       ncells);
 
   pair_grav_pp_kernel_tiled<<<grid, block, shmem, stream>>>(
-      gravity_gpu_values_send_d,
+      pair_cell_flags_d,
       send_pair_pos_mass_d,
       send_pair_h_d,
       gravity_gpu_values_recv_d,

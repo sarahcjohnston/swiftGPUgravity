@@ -917,47 +917,52 @@ __global__ void pair_grav_pp_kernel(
  * @param ncells Number of packed cell slots in the batch.
  */
 __global__ void pair_grav_pp_kernel_tiled(
-    const gravity_gpu_values_send *send,
-    const float4 *send_pos_mass,
-    const float *send_h,
-    gravity_gpu_values_recv *recv,
-    const int *pair_counts_d,
-    const int *pair_offsets_d,
-    const int *pair_active_counts_d,
-    const int *pair_active_offsets_d,
-    const int *pair_active_index_d,
-    int periodic, float r_s_inv,
+    const int *__restrict__ pair_cell_flags_d,
+    const float4 *__restrict__ send_pos_mass,
+    const float *__restrict__ send_h,
+    gravity_gpu_values_recv *__restrict__ recv,
+    const int *__restrict__ pair_counts_d,
+    const int *__restrict__ pair_offsets_d,
+    const int *__restrict__ pair_active_counts_d,
+    const int *__restrict__ pair_active_offsets_d,
+    const int *__restrict__ pair_active_index_d,
+    int periodic,
+    float r_s_inv,
     int swap,
-    float dim_0, float dim_1, float dim_2,
+    float dim_0,
+    float dim_1,
+    float dim_2,
     int ncells) {
 
-  int pair_id = blockIdx.x;
-  int slot0 = 2 * pair_id;
-  int slot1 = slot0 + 1;
-  
+  const int pair_id = blockIdx.x;
+  const int slot0 = 2 * pair_id;
+  const int slot1 = slot0 + 1;
+
   if (slot1 >= ncells) return;
 
-  int base0 = pair_offsets_d[slot0];
-  int base1 = pair_offsets_d[slot1];
-
-  int base_i = swap ? base1 : base0;
-  int base_j = swap ? base0 : base1;
-
-  int count_i = swap ? pair_counts_d[slot1] : pair_counts_d[slot0];
-  int count_j = swap ? pair_counts_d[slot0] : pair_counts_d[slot1];
-
-  int pid = blockIdx.y * blockDim.x + threadIdx.x;
   const int target_slot = swap ? slot1 : slot0;
+  const int source_slot = swap ? slot0 : slot1;
+
+  const int base_i = pair_offsets_d[target_slot];
+  const int base_j = pair_offsets_d[source_slot];
+
+  const int count_j = pair_counts_d[source_slot];
+
+  const int flags = pair_cell_flags_d[target_slot];
+  const int ci_active = flags & 1;
+  if (!ci_active) return;
+
+  const int use_full = flags & 2;
+
   const int active_count_i = pair_active_counts_d[target_slot];
   if (active_count_i <= 0) return;
-  int valid_pid = (pid < active_count_i);
 
-  int ci_active = send[base_i].flags0.w;
-  if (!ci_active) return;
+  const int active_slot = blockIdx.y * blockDim.x + threadIdx.x;
+  const int valid_pid = active_slot < active_count_i;
 
   const int active_base = pair_active_offsets_d[target_slot];
   const int local_pid_i =
-    valid_pid ? pair_active_index_d[active_base + pid] : 0;
+      valid_pid ? pair_active_index_d[active_base + active_slot] : 0;
 
   float xi = 0.f;
   float yi = 0.f;
@@ -965,45 +970,47 @@ __global__ void pair_grav_pp_kernel_tiled(
   float hi = 0.f;
 
   if (valid_pid) {
-    xi = send[base_i + local_pid_i].values_i.x;
-    yi = send[base_i + local_pid_i].values_i.y;
-    zi = send[base_i + local_pid_i].values_i.z;
-    hi = send[base_i + local_pid_i].values_i.w;
+    const float4 pi = send_pos_mass[base_i + local_pid_i];
+
+    xi = pi.x;
+    yi = pi.y;
+    zi = pi.z;
+    hi = send_h[base_i + local_pid_i];
   }
 
-  float ax = 0.f, ay = 0.f, az = 0.f, pot = 0.f;
+  float ax = 0.f;
+  float ay = 0.f;
+  float az = 0.f;
+  float pot = 0.f;
 
-  int use_full = send[base_i].flags1.x;
-
-  //extern __shared__ gravity_gpu_values_send sh_j[];
   extern __shared__ char smem[];
 
-	float4 *sh_pos_mass = (float4*)smem;
-	float *sh_h = (float*)&sh_pos_mass[blockDim.x];
+  float4 *sh_pos_mass = reinterpret_cast<float4 *>(smem);
+  float *sh_h = reinterpret_cast<float *>(&sh_pos_mass[blockDim.x]);
 
-	for (int j0 = 0; j0 < count_j; j0 += blockDim.x) {
+  for (int j0 = 0; j0 < count_j; j0 += blockDim.x) {
 
-	  int jload = j0 + threadIdx.x;
+    const int jload = j0 + threadIdx.x;
 
-	  if (jload < count_j) {
-	    sh_pos_mass[threadIdx.x] = send_pos_mass[base_j + jload];
-	    sh_h[threadIdx.x] = send_h[base_j + jload];
-	  }
+    if (jload < count_j) {
+      sh_pos_mass[threadIdx.x] = send_pos_mass[base_j + jload];
+      sh_h[threadIdx.x] = send_h[base_j + jload];
+    }
 
-	  __syncthreads();
+    __syncthreads();
 
-	  int tile = min(blockDim.x, count_j - j0);
+    const int tile = min(blockDim.x, count_j - j0);
 
-	  if (valid_pid) {
-	    for (int j = 0; j < tile; ++j) {
-	      float4 pj = sh_pos_mass[j];
+    if (valid_pid) {
+      for (int j = 0; j < tile; ++j) {
 
-		float xj = pj.x;
-		float yj = pj.y;
-		float zj = pj.z;
-		float mj = pj.w;
+        const float4 pj = sh_pos_mass[j];
 
-		float hj = sh_h[j];
+        const float xj = pj.x;
+        const float yj = pj.y;
+        const float zj = pj.z;
+        const float mj = pj.w;
+        const float hj = sh_h[j];
 
         float dx = xj - xi;
         float dy = yj - yi;
@@ -1015,19 +1022,21 @@ __global__ void pair_grav_pp_kernel_tiled(
           dz = nearestf1(dz, dim_2);
         }
 
-        float r2 = dx * dx + dy * dy + dz * dz;
+        const float r2 = dx * dx + dy * dy + dz * dz;
 
-        //float hj = pj.values_i.w;
-        float h = max(hi, hj);
-        float h2 = h * h;
-        float hinv = 1.f / h;
-        float hinv3 = hinv * hinv * hinv;
+        const float h = max(hi, hj);
+        const float h2 = h * h;
+        const float hinv = 1.f / h;
+        const float hinv3 = hinv * hinv * hinv;
 
-        float fij, potij;
+        float fij = 0.f;
+        float potij = 0.f;
+
         if (use_full) {
           iact_grav_pp_full(r2, h2, hinv, hinv3, mj, &fij, &potij);
         } else {
-          iact_grav_pp_truncated(r2, h2, hinv, hinv3, mj, r_s_inv, &fij, &potij);
+          iact_grav_pp_truncated(
+              r2, h2, hinv, hinv3, mj, r_s_inv, &fij, &potij);
         }
 
         ax += fij * dx;
@@ -1036,15 +1045,16 @@ __global__ void pair_grav_pp_kernel_tiled(
         pot += potij;
       }
     }
+
     __syncthreads();
   }
 
   if (valid_pid) {
-    const int out = active_base + pid;
+    const int out = active_base + active_slot;
 
-	recv[out].values_i.x = ax;
-	recv[out].values_i.y = ay;
-	recv[out].values_i.z = az;
-	recv[out].values_i.w = pot;;
+    recv[out].values_i.x = ax;
+    recv[out].values_i.y = ay;
+    recv[out].values_i.z = az;
+    recv[out].values_i.w = pot;
   }
 }
