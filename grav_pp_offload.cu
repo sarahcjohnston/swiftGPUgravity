@@ -92,11 +92,17 @@ extern "C" void pair_pp_offload_new(
     int periodic,
     double min_trunc,
     const float *r_s_inv,
+    const int *pair_use_full_d,
+    const int *pair_side_active_offsets_d,
     const int *pair_counts_d,
     const int *pair_offsets_d,
     const int *pair_active_counts_d,
     const int *pair_active_offsets_d,
     const int *pair_active_index_d,
+    const int *pair_pair_i_d,
+    const int *pair_pair_j_d,
+    int npairs,
+    int nslots,
     float dim_0, float dim_1, float dim_2,
     const int *pair_cell_flags_d,
     const float4 *send_pair_pos_mass_d,
@@ -112,7 +118,6 @@ extern "C" void pair_pp_offload_new(
   const int threads = 256;
   dim3 block(threads);
 
-  const int npairs = ncells / 2;
   dim3 grid(npairs, (max_active_count + threads - 1) / threads);
 
   const size_t shmem =
@@ -121,6 +126,8 @@ extern "C" void pair_pp_offload_new(
 
   pair_grav_pp_kernel_tiled<<<grid, block, shmem, stream>>>(
       pair_cell_flags_d,
+      pair_use_full_d,
+      pair_side_active_offsets_d,
       send_pair_pos_mass_d,
       send_pair_h_d,
       gravity_gpu_values_recv_d,
@@ -129,14 +136,20 @@ extern "C" void pair_pp_offload_new(
       pair_active_counts_d,
       pair_active_offsets_d,
       pair_active_index_d,
+      pair_pair_i_d,
+      pair_pair_j_d,
+      npairs,
+      nslots,
       periodic,
       *r_s_inv,
       0,
       dim_0, dim_1, dim_2,
-      ncells);
+      nslots);
 
   pair_grav_pp_kernel_tiled<<<grid, block, shmem, stream>>>(
       pair_cell_flags_d,
+      pair_use_full_d,
+      pair_side_active_offsets_d,
       send_pair_pos_mass_d,
       send_pair_h_d,
       gravity_gpu_values_recv_d,
@@ -145,9 +158,13 @@ extern "C" void pair_pp_offload_new(
       pair_active_counts_d,
       pair_active_offsets_d,
       pair_active_index_d,
+      pair_pair_i_d,
+      pair_pair_j_d,
+      npairs,
+      nslots,
       periodic,
       *r_s_inv,
       1,
       dim_0, dim_1, dim_2,
-      ncells);
+      nslots);
 }

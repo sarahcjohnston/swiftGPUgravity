@@ -918,6 +918,8 @@ __global__ void pair_grav_pp_kernel(
  */
 __global__ void pair_grav_pp_kernel_tiled(
     const int *__restrict__ pair_cell_flags_d,
+    const int *__restrict__ pair_use_full_d,
+    const int *__restrict__ pair_side_active_offsets_d,
     const float4 *__restrict__ send_pos_mass,
     const float *__restrict__ send_h,
     gravity_gpu_values_recv *__restrict__ recv,
@@ -926,6 +928,10 @@ __global__ void pair_grav_pp_kernel_tiled(
     const int *__restrict__ pair_active_counts_d,
     const int *__restrict__ pair_active_offsets_d,
     const int *__restrict__ pair_active_index_d,
+    const int *__restrict__ pair_pair_i_d,
+    const int *__restrict__ pair_pair_j_d,
+    int npairs,
+    int nslots,
     int periodic,
     float r_s_inv,
     int swap,
@@ -935,10 +941,13 @@ __global__ void pair_grav_pp_kernel_tiled(
     int ncells) {
 
   const int pair_id = blockIdx.x;
-  const int slot0 = 2 * pair_id;
-  const int slot1 = slot0 + 1;
+  if (pair_id >= npairs) return;
 
-  if (slot1 >= ncells) return;
+  const int slot0 = pair_pair_i_d[pair_id];
+  const int slot1 = pair_pair_j_d[pair_id];
+
+  if (slot0 < 0 || slot0 >= nslots) return;
+  if (slot1 < 0 || slot1 >= nslots) return;
 
   const int target_slot = swap ? slot1 : slot0;
   const int source_slot = swap ? slot0 : slot1;
@@ -952,8 +961,6 @@ __global__ void pair_grav_pp_kernel_tiled(
   const int ci_active = flags & 1;
   if (!ci_active) return;
 
-  const int use_full = flags & 2;
-
   const int active_count_i = pair_active_counts_d[target_slot];
   if (active_count_i <= 0) return;
 
@@ -961,6 +968,7 @@ __global__ void pair_grav_pp_kernel_tiled(
   const int valid_pid = active_slot < active_count_i;
 
   const int active_base = pair_active_offsets_d[target_slot];
+
   const int local_pid_i =
       valid_pid ? pair_active_index_d[active_base + active_slot] : 0;
 
@@ -983,10 +991,12 @@ __global__ void pair_grav_pp_kernel_tiled(
   float az = 0.f;
   float pot = 0.f;
 
+  const int use_full = pair_use_full_d[pair_id];
+
   extern __shared__ char smem[];
 
-  float4 *sh_pos_mass = reinterpret_cast<float4 *>(smem);
-  float *sh_h = reinterpret_cast<float *>(&sh_pos_mass[blockDim.x]);
+  float4 *sh_pos_mass = (float4 *)smem;
+  float *sh_h = (float *)&sh_pos_mass[blockDim.x];
 
   for (int j0 = 0; j0 < count_j; j0 += blockDim.x) {
 
@@ -1002,7 +1012,7 @@ __global__ void pair_grav_pp_kernel_tiled(
     const int tile = min(blockDim.x, count_j - j0);
 
     if (valid_pid) {
-      for (int j = 0; j < tile; ++j) {
+      for (int j = 0; j < tile; j++) {
 
         const float4 pj = sh_pos_mass[j];
 
@@ -1050,7 +1060,9 @@ __global__ void pair_grav_pp_kernel_tiled(
   }
 
   if (valid_pid) {
-    const int out = active_base + active_slot;
+    const int side = 2 * pair_id + swap;
+    const int out_base = pair_side_active_offsets_d[side];
+    const int out = out_base + active_slot;
 
     recv[out].values_i.x = ax;
     recv[out].values_i.y = ay;

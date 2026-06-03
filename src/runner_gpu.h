@@ -97,6 +97,20 @@ struct gpu_runner_substream {
   /*! Number of pair cells currently packed in this substream's GPU batch. */
   int grav_batch_pair_count;
   
+  /*NEW BIT*/
+  int pair_unique_cell_count;
+  struct cell **pair_unique_cells;
+
+  int *pair_pair_i_h, *pair_pair_i_d;
+  int *pair_pair_j_h, *pair_pair_j_d;
+  
+  int *pair_use_full_h, *pair_use_full_d;
+
+  /* size = 2 * max_pairs */
+  int *pair_side_active_offsets_h, *pair_side_active_offsets_d;
+  int pair_total_pair_active_count;
+  /*-----*/
+  
   /*! Compact host and device buffers for coalesced pair source-tile loads. */
   float4 *send_pair_pos_mass;
   float4 *send_pair_pos_mass_d;
