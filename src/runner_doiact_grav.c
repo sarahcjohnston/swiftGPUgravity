@@ -2607,16 +2607,6 @@ enum runner_gpu_task_type runner_doself_recursive_grav_new(
 
   if (gettimer) {
 
-    const enum runner_gpu_task_type self_res =
-        runner_gpu_flush_leftover_self(r);
-
-    const enum runner_gpu_task_type pair_res =
-        runner_gpu_flush_leftover_pair(r);
-
-    if (self_res == flushed_self_task || pair_res == flushed_pair_task) {
-      final_type = flushed_self_task;
-    }
-
     TIMER_TOC(timer_doself_recursive_grav);
   }
   

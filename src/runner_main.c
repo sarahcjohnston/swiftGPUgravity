@@ -157,6 +157,10 @@ void *runner_main(void *data) {
   struct runner *r = (struct runner *)data;
   struct engine *e = r->e;
   struct scheduler *sched = &e->sched;
+  
+  #if defined(WITH_CUDA) || defined(WITH_HIP)
+  runner_gpu_bind_device(r);
+  #endif
 
   const int max_cell_size = r->gpu.grav_max_cell_size;
   const int ncells = r->gpu.grav_batch_ncells;
@@ -183,27 +187,66 @@ void *runner_main(void *data) {
       /* If there's no old task, try to get a new one. */
       if (t == NULL) {
 
-        /* Get the task. */
-        TIMER_TIC
-        t = scheduler_gettask(sched, r->qid, prev);
-        TIMER_TOC(timer_gettask);
+  TIMER_TIC;
+  t = scheduler_gettask(sched, r->qid, prev);
+  TIMER_TOC(timer_gettask);
 
-        /* Did I get anything? */
-        if (t == NULL) {
+  /* scheduler_gettask() may consume prev. */
+  prev = NULL;
 
-          if (runner_gpu_flush_leftover_self(r) == flushed_self_task) {
-            prev = NULL;
-            continue;
-          }
+  if (t == NULL) {
 
-          if (runner_gpu_flush_leftover_pair(r) == flushed_pair_task) {
-  		prev = NULL;
-  		continue;
-	  }
+    if (runner_gpu_flush_leftover_self(r) == flushed_self_task) {
+      continue;
+    }
 
-          break;
-        }
-      }
+    if (runner_gpu_flush_leftover_pair(r) == flushed_pair_task) {
+      continue;
+    }
+    
+    lock_lock(&sched->queues[r->qid].lock);
+    
+    for (int l = 0; l < r->gpu.nstreams; l++) {
+  struct gpu_runner_substream *substream = &r->gpu.substreams[l];
+
+  /*message("GPU leftovers before runner exit: qid=%d stream=%d "
+          "self_batch=%d pair_batch=%d pair_unique_cells=%d "
+          "gpu_self_tasks_left=%d gpu_pair_tasks_left=%d",
+          r->qid,
+          l,
+          substream->grav_batch_self_count,
+          substream->grav_batch_pair_count,
+          substream->pair_unique_cell_count,
+          sched->queues[r->qid].gpu_self_tasks_left,
+          sched->queues[r->qid].gpu_pair_tasks_left);*/
+}
+
+  if (sched->queues[r->qid].gpu_self_tasks_left != 0 ||
+      sched->queues[r->qid].gpu_pair_tasks_left != 0) {
+    error("Runner exiting task loop with unfinished GPU tasks: "
+          "qid=%d gpu_self_tasks_left=%d gpu_pair_tasks_left=%d",
+          r->qid,
+          sched->queues[r->qid].gpu_self_tasks_left,
+          sched->queues[r->qid].gpu_pair_tasks_left);
+  }
+
+  (void)lock_unlock(&sched->queues[r->qid].lock);
+
+    break;
+  }
+
+  /*message("runner_main got task: task=%p type=%s subtype=%s "
+        "implicit=%d skip=%d wait=%d done_count=%d gpu_completed=%d qid=%d",
+        (void *)t,
+        taskID_names[t->type],
+        subtaskID_names[t->subtype],
+        t->implicit,
+        t->skip,
+        t->wait,
+        t->done_count,
+        t->gpu_completed,
+        r->qid);*/
+}
 
       /* Get the cells. */
       struct cell *ci = t->ci;
@@ -240,7 +283,6 @@ void *runner_main(void *data) {
         case task_type_self:
           if (t->subtype == task_subtype_grav) {
             struct gpu_runner_substream *substream = runner_gpu_acquire_substream(r);
-            t->gpu_completed = 0;
 	    gpu_task_type = runner_doself_recursive_grav_new(
 		    r, substream, ci, 1,
 		    substream->send_self_d,
@@ -314,7 +356,6 @@ void *runner_main(void *data) {
         case task_type_pair:
           if (t->subtype == task_subtype_grav) {
             struct gpu_runner_substream *substream = runner_gpu_acquire_substream(r);
-	    t->gpu_completed = 0;
 	    gpu_task_type = runner_dopair_recursive_grav_new(
     		r, substream, ci, cj, 1,
     		substream->grav_cells_pair, substream->grav_tasks_pair,
@@ -638,27 +679,77 @@ void *runner_main(void *data) {
 #endif
 
       /* We're done with this task, see if we get a next one. */
-      prev = t;
+      //prev = t;
 
-      switch (gpu_task_type) {
+  switch (gpu_task_type) {
         case regular_task:
           t = scheduler_done(sched, t);
           break;
 
-        case packed_task:
-          t->toc = getticks();
-          t->total_ticks += t->toc - t->tic;
-          t = NULL;
-          break;
+        case packed_task: {
+
+	  if (t->type == task_type_pair && t->subtype == task_subtype_grav) {
+	    struct gpu_runner_substream *ss = &r->gpu.substreams[0];
+
+	    /*message("runner_main packed_pair_task: task=%p "
+		    "gpu_counted=%d gpu_completed=%d done_count=%d "
+		    "pair_left=%d pair_batch=%d pair_unique_cells=%d "
+		    "pair_total_count=%d pair_total_active=%d qid=%d",
+		    (void *)t,
+		    t->gpu_counted,
+		    t->gpu_completed,
+		    t->done_count,
+		    sched->queues[r->qid].gpu_pair_tasks_left,
+		    ss->grav_batch_pair_count,
+		    ss->pair_unique_cell_count,
+		    ss->pair_total_count,
+		    ss->pair_total_active_count,
+		    r->qid);*/
+	  }
+
+	  t->toc = getticks();
+	  t->total_ticks += t->toc - t->tic;
+
+	  prev = NULL;
+	  t = NULL;
+	  break;
+	}
 
         case flushed_self_task:
-          t = NULL;
-          break;
+
+	  /*message("runner_main flushed_self_task: completing current self task=%p "
+		  "gpu_counted=%d gpu_completed=%d done_count=%d self_left=%d qid=%d",
+		  (void *)t,
+		  t->gpu_counted,
+		  t->gpu_completed,
+		  t->done_count,
+		  sched->queues[r->qid].gpu_self_tasks_left,
+		  r->qid);*/
+
+	  if (!t->gpu_completed)
+  		runner_gpu_complete_current_self_task(r, sched, t);
+
+	  prev = NULL;
+	  t = NULL;
+	  break;
 
         case flushed_pair_task:
-          runner_gpu_complete_pair_task(r, sched, t);
-          t = NULL;
-          break;
+
+	  /*message("runner_main flushed_pair_task: completing current pair task=%p "
+		  "gpu_counted=%d gpu_completed=%d done_count=%d pair_left=%d qid=%d",
+		  (void *)t,
+		  t->gpu_counted,
+		  t->gpu_completed,
+		  t->done_count,
+		  sched->queues[r->qid].gpu_pair_tasks_left,
+		  r->qid);*/
+
+	  if (!t->gpu_completed)
+	    runner_gpu_complete_pair_task(r, sched, t);
+
+	  prev = NULL;
+	  t = NULL;
+	  break;
 
         default:
           error("Unknown GPU task result (%d).", gpu_task_type);

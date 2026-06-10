@@ -298,6 +298,27 @@ struct task {
 
   /* GPU completion flag */
   int gpu_completed;
+  
+  int gpu_done_count;
+  const char *gpu_done_where;
+  int gpu_done_runner;
+  int gpu_done_qid;
+  int gpu_done_rank;
+  
+  int done_count;
+  const char *done_where;
+  int done_runner;
+  int done_qid;
+  int done_rank;
+
+  int negative_wait_from_count;
+  const char *negative_wait_from_where;
+  
+  int wait_initial;
+  int wait_rank_seen;
+  const char *wait_set_where;
+  
+  int gpu_counted;
 
 } SWIFT_STRUCT_ALIGN;
 

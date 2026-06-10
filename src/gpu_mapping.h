@@ -56,6 +56,7 @@ typedef struct cudaDeviceProp GPUDeviceProp;
 #define GPUMemsetAsync cudaMemsetAsync
 
 #define GPUSetDevice cudaSetDevice
+#define GPUGetDeviceCount cudaGetDeviceCount
 #define GPUGetDeviceProperties cudaGetDeviceProperties
 #define GPUMemGetInfo cudaMemGetInfo
 
@@ -114,6 +115,7 @@ typedef hipDeviceProp_t GPUDeviceProp;
 #define GPUMemsetAsync hipMemsetAsync
 
 #define GPUSetDevice hipSetDevice
+#define GPUGetDeviceCount hipGetDeviceCount
 #define GPUGetDeviceProperties hipGetDeviceProperties
 #define GPUMemGetInfo hipMemGetInfo
 

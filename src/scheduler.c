@@ -57,6 +57,55 @@
 #include "timers.h"
 #include "version.h"
 
+static void scheduler_mark_done_debug(struct scheduler *s,
+                                      struct task *t,
+                                      const char *where) {
+
+  if (t == NULL)
+    error("%s: scheduler_mark_done_debug got NULL task.", where);
+
+#ifdef WITH_MPI
+  int rank = -1;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+#else
+  int rank = 0;
+#endif
+
+  const int old_count = t->done_count;
+  t->done_count++;
+
+  if (old_count > 0) {
+  error("Task completed more than once. "
+        "task=%p type=%s subtype=%s implicit=%d skip=%d wait=%d "
+        "old_count=%d new_where=%s old_where=%s "
+        "old_runner=%d old_qid=%d old_rank=%d "
+        "new_rank=%d gpu_completed=%d gpu_done_count=%d gpu_done_where=%s "
+        "nr_unlock_tasks=%d",
+        (void *)t,
+        taskID_names[t->type],
+        subtaskID_names[t->subtype],
+        t->implicit,
+        t->skip,
+        t->wait,
+        old_count,
+        where,
+        t->done_where != NULL ? t->done_where : "(null)",
+        t->done_runner,
+        t->done_qid,
+        t->done_rank,
+        rank,
+        t->gpu_completed,
+        t->gpu_done_count,
+        t->gpu_done_where != NULL ? t->gpu_done_where : "(null)",
+        t->nr_unlock_tasks);
+}
+
+  t->done_where = where;
+  t->done_runner = -1;
+  t->done_qid = -1;
+  t->done_rank = rank;
+}
+
 /**
  * @brief Re-set the list of active tasks.
  *
@@ -197,6 +246,24 @@ struct task *scheduler_addtask(struct scheduler *s, enum task_types type,
   t->tic = 0;
   t->toc = 0;
   t->total_ticks = 0;
+  t->gpu_done_count = 0;
+  t->gpu_done_where = NULL;
+  t->gpu_done_runner = -1;
+  t->gpu_done_qid = -1;
+  t->gpu_done_rank = -1;
+  t->done_count = 0;
+  t->done_where = NULL;
+  t->done_runner = -1;
+  t->done_qid = -1;
+  t->done_rank = -1;
+
+  t->negative_wait_from_count = 0;
+  t->negative_wait_from_where = NULL;
+  t->wait_initial = -1;
+  t->wait_rank_seen = 0;
+  t->wait_set_where = NULL;
+  
+  t->gpu_counted = 0;
 
   if (ci != NULL) cell_set_flag(ci, cell_flag_has_tasks);
   if (cj != NULL) cell_set_flag(cj, cell_flag_has_tasks);
@@ -347,6 +414,20 @@ void scheduler_set_unlocks(struct scheduler *s, struct threadpool *tp) {
     for (int i = 0; i < t->nr_unlock_tasks; i++) {
       for (int j = i + 1; j < t->nr_unlock_tasks; j++) {
         if (t->unlock_tasks[i] == t->unlock_tasks[j])
+          if (t->unlock_tasks[i]->type == task_type_pack ||
+            t->type == task_type_pack) {
+          error("Duplicate unlock edge detected. "
+                "source task=%p type=%s subtype=%s "
+                "target task=%p type=%s subtype=%s "
+                "i=%d j=%d nr_unlock_tasks=%d",
+                (void *)t,
+                taskID_names[t->type],
+                subtaskID_names[t->subtype],
+                (void *)t->unlock_tasks[i],
+                taskID_names[t->unlock_tasks[i]->type],
+                subtaskID_names[t->unlock_tasks[i]->subtype],
+                i, j, t->nr_unlock_tasks);
+        }
           error("duplicate unlock! t->type=%s/%s unlocking type=%s/%s",
                 taskID_names[t->type], subtaskID_names[t->subtype],
                 taskID_names[t->unlock_tasks[i]->type],
@@ -367,6 +448,7 @@ void scheduler_set_unlocks(struct scheduler *s, struct threadpool *tp) {
  * @param s The #scheduler.
  */
 void scheduler_ranktasks(struct scheduler *s) {
+
   struct task *tasks = s->tasks;
   int *tid = s->tasks_ind;
   const int nr_tasks = s->nr_tasks;
@@ -375,35 +457,43 @@ void scheduler_ranktasks(struct scheduler *s) {
   for (int i = 0; i < nr_tasks; i++) {
     struct task *t = &tasks[i];
 
-    // Increment the waits of the dependances
     for (int k = 0; k < t->nr_unlock_tasks; k++) {
       t->unlock_tasks[k]->wait++;
     }
   }
 
+  /* Optional snapshot for debugging only. */
+  for (int i = 0; i < nr_tasks; i++) {
+    tasks[i].wait_initial = tasks[i].wait;
+    tasks[i].wait_rank_seen = 1;
+    tasks[i].wait_set_where = "scheduler_ranktasks:after_unlock_count";
+  }
+
   /* Load the tids of tasks with no waits. */
   int left = 0;
-  for (int k = 0; k < nr_tasks; k++)
+  for (int k = 0; k < nr_tasks; k++) {
     if (tasks[k].wait == 0) {
       tid[left] = k;
       left += 1;
     }
+  }
 
   /* Main loop. */
   for (int j = 0, rank = 0; j < nr_tasks; rank++) {
-    /* Did we get anything? */
-    if (j == left) error("Unsatisfiable task dependencies detected.");
 
-    /* Unlock the next layer of tasks. */
+    if (j == left)
+      error("Unsatisfiable task dependencies detected.");
+
     const int left_old = left;
+
     for (; j < left_old; j++) {
       struct task *t = &tasks[tid[j]];
+
       t->rank = rank;
-      /* message( "task %i of type %s has rank %i." , i ,
-          (t->type == task_type_self) ? "self" : (t->type == task_type_pair) ?
-         "pair" : "sort" , rank ); */
+
       for (int k = 0; k < t->nr_unlock_tasks; k++) {
         struct task *u = t->unlock_tasks[k];
+
         if (--u->wait == 0) {
           tid[left] = u - tasks;
           left += 1;
@@ -411,12 +501,10 @@ void scheduler_ranktasks(struct scheduler *s) {
       }
     }
 
-    /* Move back to the old left (like Sanders!). */
     j = left_old;
   }
 
 #ifdef SWIFT_DEBUG_CHECKS
-  /* Verify that the tasks were ranked correctly. */
   for (int k = 1; k < s->nr_tasks; k++)
     if (tasks[tid[k - 1]].rank > tasks[tid[k]].rank)
       error("Task ranking failed.");
@@ -462,6 +550,12 @@ void scheduler_reset(struct scheduler *s, int size) {
 
   /* Set the task pointers in the queues. */
   for (int k = 0; k < s->nr_queues; k++) s->queues[k].tasks = s->tasks;
+  
+  for (int k = 0; k < s->nr_queues; k++) {
+  s->queues[k].tasks = s->tasks;
+  s->queues[k].gpu_self_tasks_left = 0;
+  s->queues[k].gpu_pair_tasks_left = 0;
+}
 }
 
 /**
@@ -844,6 +938,26 @@ void scheduler_enqueue_mapper(void *map_data, int num_elements,
  */
 void scheduler_start(struct scheduler *s) {
 
+  for (int i = 0; i < s->active_count; i++) {
+  struct task *t = &s->tasks[s->tid_active[i]];
+
+  t->done_count = 0;
+  t->done_where = NULL;
+  t->done_runner = -1;
+  t->done_qid = -1;
+  t->done_rank = -1;
+
+  t->gpu_done_count = 0;
+  t->gpu_done_where = NULL;
+  t->gpu_done_runner = -1;
+  t->gpu_done_qid = -1;
+  t->gpu_done_rank = -1;
+
+  t->gpu_completed = 0;
+  
+  t->gpu_counted = 0;
+}
+
   for (int i = 0; i < s->nr_queues; i++) {
     s->queues[i].gpu_self_tasks_left = 0;
     s->queues[i].gpu_pair_tasks_left = 0;
@@ -1192,6 +1306,18 @@ void scheduler_enqueue(struct scheduler *s, struct task *t) {
 
     /* Increase the waiting counter. */
     atomic_inc(&s->waiting);
+    
+    if (t->implicit) {
+  error("Implicit task reached queue_insert: task=%p type=%s subtype=%s "
+        "implicit=%d skip=%d wait=%d qid=%d",
+        (void *)t,
+        taskID_names[t->type],
+        subtaskID_names[t->subtype],
+        t->implicit,
+        t->skip,
+        t->wait,
+        qid);
+}
 
     /* Insert the task into that queue. */
     queue_insert(&s->queues[qid], t);
@@ -1201,13 +1327,6 @@ void scheduler_enqueue(struct scheduler *s, struct task *t) {
     pthread_cond_signal(&s->sleep_cond);  // or broadcast
     pthread_mutex_unlock(&s->sleep_mutex);
 
-    if (t->subtype == task_subtype_grav && t->type == task_type_self) {
-      atomic_inc(&s->queues[qid].gpu_self_tasks_left);
-    }
-
-    if (t->subtype == task_subtype_grav && t->type == task_type_pair) {
-      atomic_inc(&s->queues[qid].gpu_pair_tasks_left);
-    }
   }
 }
 
@@ -1221,19 +1340,84 @@ void scheduler_enqueue(struct scheduler *s, struct task *t) {
  *         been identified.
  */
 struct task *scheduler_done(struct scheduler *s, struct task *t) {
+
+  scheduler_mark_done_debug(s, t, "scheduler_done");
+
   /* Release whatever locks this task held. */
   if (!t->implicit) task_unlock(t);
 
   /* Loop through the dependencies and add them to a queue if
      they are ready. */
   for (int k = 0; k < t->nr_unlock_tasks; k++) {
+
     struct task *t2 = t->unlock_tasks[k];
+
+    if (t2 == NULL)
+      error("scheduler_done: NULL unlock target. "
+            "completed task=%p type=%s subtype=%s unlock_index=%d/%d",
+            (void *)t,
+            taskID_names[t->type],
+            subtaskID_names[t->subtype],
+            k,
+            t->nr_unlock_tasks);
+
     if (t2->skip) continue;
 
-    const int res = atomic_dec(&t2->wait);
-    if (res < 1) {
+    /*
+     * atomic_dec() in SWIFT returns the value before decrement.
+     * Therefore:
+     *   res == 1  -> wait changed 1 -> 0, task is now ready.
+     *   res < 1   -> wait was already <= 0 before this decrement.
+     */
+    const int old_wait = atomic_dec(&t2->wait);
+    const int new_wait = old_wait - 1;
+
+    if (old_wait < 1) {
+
+      message("Negative wait diagnostic: "
+        "completed task=%p type=%s subtype=%s implicit=%d skip=%d "
+        "done_count=%d done_where=%s "
+        "gpu_completed=%d gpu_done_count=%d gpu_done_where=%s "
+        "unlock_index=%d nr_unlock_tasks=%d "
+        "target task=%p type=%s subtype=%s implicit=%d skip=%d "
+        "old_wait=%d new_wait=%d "
+        "target_wait_initial=%d target_wait_rank_seen=%d "
+        "target_wait_set_where=%s "
+        "target_done_count=%d target_done_where=%s "
+        "target_gpu_completed=%d target_gpu_done_count=%d "
+        "target_gpu_done_where=%s",
+        (void *)t,
+        taskID_names[t->type],
+        subtaskID_names[t->subtype],
+        t->implicit,
+        t->skip,
+        t->done_count,
+        t->done_where != NULL ? t->done_where : "(null)",
+        t->gpu_completed,
+        t->gpu_done_count,
+        t->gpu_done_where != NULL ? t->gpu_done_where : "(null)",
+        k,
+        t->nr_unlock_tasks,
+        (void *)t2,
+        taskID_names[t2->type],
+        subtaskID_names[t2->subtype],
+        t2->implicit,
+        t2->skip,
+        old_wait,
+        new_wait,
+        t2->wait_initial,
+        t2->wait_rank_seen,
+        t2->wait_set_where != NULL ? t2->wait_set_where : "(null)",
+        t2->done_count,
+        t2->done_where != NULL ? t2->done_where : "(null)",
+        t2->gpu_completed,
+        t2->gpu_done_count,
+        t2->gpu_done_where != NULL ? t2->gpu_done_where : "(null)");
+
       error("Negative wait!");
-    } else if (res == 1) {
+    }
+
+    if (old_wait == 1) {
       scheduler_enqueue(s, t2);
     }
   }
@@ -1242,6 +1426,7 @@ struct task *scheduler_done(struct scheduler *s, struct task *t) {
   if (!t->implicit) {
     t->toc = getticks();
     t->total_ticks += t->toc - t->tic;
+
     pthread_mutex_lock(&s->sleep_mutex);
 
     atomic_dec(&s->waiting);
@@ -1253,9 +1438,6 @@ struct task *scheduler_done(struct scheduler *s, struct task *t) {
   /* Mark the task as skip. */
   t->skip = 1;
 
-  /* Return the next best task. Note that we currently do not
-     implement anything that does this, as getting it to respect
-     priorities is too tricky and currently unnecessary. */
   return NULL;
 }
 
@@ -1382,6 +1564,7 @@ void scheduler_check_deadlock(struct scheduler *s) {
  */
 struct task *scheduler_gettask(struct scheduler *s, int qid,
                                const struct task *prev) {
+
   struct task *res = NULL;
   const int nr_queues = s->nr_queues;
   unsigned int seed = qid;
@@ -1454,16 +1637,6 @@ struct task *scheduler_gettask(struct scheduler *s, int qid,
             enum task_subtypes subtype = res->subtype;
             enum task_types type = res->type;
 
-            if (subtype == task_subtype_grav && type == task_type_self) {
-              atomic_inc(&q->gpu_self_tasks_left);
-              atomic_dec(&q_stl->gpu_self_tasks_left);
-            }
-
-            if (subtype == task_subtype_grav && type == task_type_pair) {
-              atomic_inc(&q->gpu_pair_tasks_left);
-              atomic_dec(&q_stl->gpu_pair_tasks_left);
-            }
-
             break;
           } else {
 
@@ -1473,13 +1646,23 @@ struct task *scheduler_gettask(struct scheduler *s, int qid,
         }
         if (res != NULL) break;
       }
-      /* If we failed, but have batched tasks on the GPU, Avoid sleeping, we
-       * will flush them in runner_main. */
+            /* If we failed, but have batched tasks on the GPU, avoid sleeping.
+       * Return NULL so runner_main can flush the GPU leftovers. */
       if (res == NULL) {
-        if (q->gpu_self_tasks_left > 0 || q->gpu_pair_tasks_left > 0) {
-          return NULL;
-        }
-      }
+
+  if (q->gpu_self_tasks_left < 0 || q->gpu_pair_tasks_left < 0) {
+    error("GPU task counter corrupted in scheduler_gettask: "
+          "qid=%d self_left=%d pair_left=%d waiting=%d",
+          qid,
+          q->gpu_self_tasks_left,
+          q->gpu_pair_tasks_left,
+          s->waiting);
+  }
+
+  if (q->gpu_self_tasks_left > 0 || q->gpu_pair_tasks_left > 0) {
+    return NULL;
+  }
+}
     }
 
 /* If we failed, take a short nap. */
@@ -1492,6 +1675,15 @@ struct task *scheduler_gettask(struct scheduler *s, int qid,
       pthread_mutex_lock(&s->sleep_mutex);
       res = queue_gettask(&s->queues[qid], prev, 1);
       if (res == NULL && s->waiting > 0) {
+        if (q->gpu_self_tasks_left > 0 || q->gpu_pair_tasks_left > 0) {
+          error("scheduler_gettask about to sleep with GPU work pending: "
+                "qid=%d self_left=%d pair_left=%d waiting=%d",
+                qid,
+                q->gpu_self_tasks_left,
+                q->gpu_pair_tasks_left,
+                s->waiting);
+        }
+        
         pthread_cond_wait(&s->sleep_cond, &s->sleep_mutex);
       }
       pthread_mutex_unlock(&s->sleep_mutex);

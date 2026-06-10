@@ -161,6 +161,18 @@ struct gpu_runner {
 
   /*! Next substream index to try when acquiring a pair-work substream. */
   int next_substream;
+  
+  /*! CUDA/HIP device selected by this MPI rank. */
+  int device_id;
+
+  /*! Local MPI rank within the node. */
+  int local_mpi_rank;
+
+  /*! Number of MPI ranks on this node. */
+  int local_mpi_size;
+
+  /*! Number of local MPI ranks sharing this selected GPU. */
+  int local_ranks_on_device;
 };
 
 struct gpu_runner_substream *runner_gpu_acquire_substream(struct runner *r);
@@ -264,7 +276,7 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_pair(struct runner *r);
  * @brief Complete all self tasks currently stored in the runner GPU batch.
  */
 void runner_gpu_complete_self_batch(struct runner *r, struct scheduler *sched,
-                                    struct gpu_runner_substream *substream);
+                                    struct gpu_runner_substream *substream, struct task *current_task);
 
 /**
  * @brief Complete a single pair task (decrement queue counter and mark done).
@@ -277,5 +289,11 @@ void runner_gpu_complete_pair_task(struct runner *r, struct scheduler *sched,
  */
 void runner_gpu_complete_pair_batch(struct runner *r, struct scheduler *sched,
                                     struct gpu_runner_substream *substream);
+                                    
+void runner_gpu_bind_device(struct runner *r);
+
+void runner_gpu_complete_current_self_task(struct runner *r,
+                                           struct scheduler *sched,
+                                           struct task *t);
 
 #endif /* SWIFT_RUNNER_GPU_H */

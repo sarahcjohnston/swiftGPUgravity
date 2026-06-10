@@ -36,6 +36,165 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#ifdef WITH_MPI
+#include <mpi.h>
+#endif
+
+static int runner_gpu_local_ranks_on_device_for_budget = 1;
+
+static void runner_gpu_check_queue_counters(struct runner *r,
+                                            struct scheduler *sched,
+                                            const char *where) {
+
+  const int self_left = sched->queues[r->qid].gpu_self_tasks_left;
+  const int pair_left = sched->queues[r->qid].gpu_pair_tasks_left;
+
+  if (self_left < 0 || pair_left < 0 ||
+      self_left > 1000000 || pair_left > 1000000) {
+    error("%s: GPU queue counter corrupted: qid=%d "
+          "self_left=%d pair_left=%d",
+          where,
+          r->qid,
+          self_left,
+          pair_left);
+  }
+}
+
+static void runner_gpu_count_self_task(struct runner *r,
+                                       struct scheduler *sched,
+                                       struct task *t) {
+
+  if (t == NULL)
+    error("runner_gpu_count_self_task got NULL task.");
+
+  if (t->gpu_completed) {
+    error("Packing already GPU-completed self task: task=%p type=%s subtype=%s "
+          "gpu_counted=%d done_count=%d qid=%d self_left=%d",
+          (void *)t,
+          taskID_names[t->type],
+          subtaskID_names[t->subtype],
+          t->gpu_counted,
+          t->done_count,
+          r->qid,
+          sched->queues[r->qid].gpu_self_tasks_left);
+  }
+
+  if (t->gpu_counted)
+    return;
+
+  t->gpu_counted = 1;
+
+  lock_lock(&sched->queues[r->qid].lock);
+  sched->queues[r->qid].gpu_self_tasks_left++;
+  runner_gpu_check_queue_counters(r, sched, "runner_gpu_count_self_task");
+  /*message("GPU_SELF_COUNTER_INC packed: task=%p qid=%d new=%d",
+          (void *)t, r->qid,
+          sched->queues[r->qid].gpu_self_tasks_left);*/
+  (void)lock_unlock(&sched->queues[r->qid].lock);
+}
+
+static void runner_gpu_count_pair_task(struct runner *r,
+                                       struct scheduler *sched,
+                                       struct task *t) {
+
+  if (t == NULL)
+    error("runner_gpu_count_pair_task got NULL task.");
+
+  if (t->gpu_completed) {
+    error("Packing already GPU-completed pair task: task=%p type=%s subtype=%s "
+          "gpu_counted=%d done_count=%d qid=%d",
+          (void *)t,
+          taskID_names[t->type],
+          subtaskID_names[t->subtype],
+          t->gpu_counted,
+          t->done_count,
+          r->qid);
+  }
+
+  if (t->gpu_counted)
+    return;
+
+  t->gpu_counted = 1;
+
+  lock_lock(&sched->queues[r->qid].lock);
+  sched->queues[r->qid].gpu_pair_tasks_left++;
+  runner_gpu_check_queue_counters(r, sched, "runner_gpu_count_pair_task");
+  /*message("GPU_PAIR_COUNTER_INC packed: task=%p qid=%d new=%d",
+          (void *)t, r->qid,
+          sched->queues[r->qid].gpu_pair_tasks_left);*/
+  (void)lock_unlock(&sched->queues[r->qid].lock);
+}
+
+
+void runner_gpu_bind_device(struct runner *r) {
+
+#if defined(WITH_CUDA) || defined(WITH_HIP)
+  const int device_id = r->gpu.device_id;
+
+  if (device_id < 0)
+    error("runner_gpu_bind_device: invalid GPU device_id=%d", device_id);
+
+  const GPUError err = GPUSetDevice(device_id);
+
+  if (err != GPU_SUCCESS)
+    error("runner_gpu_bind_device: GPUSetDevice(%d) failed: %s",
+          device_id, GPUGetErrorString(err));
+#else
+  (void)r;
+#endif
+}
+
+static void runner_gpu_mark_done_debug(
+    struct runner *r,
+    struct task *t,
+    const char *where) {
+
+  if (t == NULL)
+    error("%s: NULL task passed to GPU completion marker.", where);
+
+#ifdef WITH_MPI
+  int rank = -1;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+#else
+  int rank = 0;
+#endif
+
+  const int old_count = t->gpu_done_count;
+
+  t->gpu_done_count++;
+
+  if (old_count > 0) {
+    error("GPU task completed more than once. "
+          "task=%p type=%s subtype=%s old_count=%d new_where=%s "
+          "old_where=%s old_runner=%d old_qid=%d old_rank=%d "
+          "new_runner=%d new_qid=%d new_rank=%d gpu_completed=%d",
+          (void *)t,
+          taskID_names[t->type],
+          subtaskID_names[t->subtype],
+          old_count,
+          where,
+          t->gpu_done_where != NULL ? t->gpu_done_where : "(null)",
+          t->gpu_done_runner,
+          t->gpu_done_qid,
+          t->gpu_done_rank,
+          r->id,
+          r->qid,
+          rank,
+          t->gpu_completed);
+  }
+
+  t->gpu_done_where = where;
+  t->gpu_done_runner = r->id;
+  t->gpu_done_qid = r->qid;
+  t->gpu_done_rank = rank;
+}
+
+static inline void runner_gpu_check_error(const char *where) {
+  const GPUError err = GPUGetLastError();
+
+  if (err != GPU_SUCCESS)
+    error("%s: %s", where, GPUGetErrorString(err));
+}
 
 /* ------------------------------------------------------------------------- */
 /* GPU timing helpers: thread-local state only, no struct layout changes.     */
@@ -271,8 +430,11 @@ static int runner_gpu_find_or_pack_pair_cell(
   const int active_base = substream->pair_total_active_count;
   substream->pair_active_offsets_h[slot] = active_base;
 
+  const int local_active_cell =
+    (c->nodeID == r->e->nodeID) && cell_is_active_gravity(c, r->e);
+
   for (int i = 0; i < gcount; i++) {
-    if (cache->active[i] > 0) {
+    if (local_active_cell && cache->active[i] > 0) {
       substream->pair_active_index_h[active_base + active_count] = i;
       active_count++;
     }
@@ -300,10 +462,72 @@ static int runner_gpu_find_or_pack_pair_cell(
 static void runner_gpu_complete_self_task(struct runner *r,
                                           struct scheduler *sched,
                                           struct task *t) {
-  lock_lock(&sched->queues[r->qid].lock);
-  sched->queues[r->qid].gpu_self_tasks_left--;
-  (void)lock_unlock(&sched->queues[r->qid].lock);
+
+  if (t == NULL)
+    error("runner_gpu_complete_self_task got NULL task.");
+
+  if (t->gpu_completed) {
+	  error("runner_gpu_complete_self_task called for already-completed task: "
+		"task=%p type=%s subtype=%s gpu_counted=%d done_count=%d "
+		"self_left=%d qid=%d",
+		(void *)t,
+		taskID_names[t->type],
+		subtaskID_names[t->subtype],
+		t->gpu_counted,
+		t->done_count,
+		sched->queues[r->qid].gpu_self_tasks_left,
+		r->qid);
+	}
+
+  t->gpu_completed = 1;
+
+  if (!t->gpu_counted) {
+	  error("Completing uncounted GPU self task: task=%p type=%s subtype=%s "
+		"gpu_completed=%d done_count=%d qid=%d",
+		(void *)t,
+		taskID_names[t->type],
+		subtaskID_names[t->subtype],
+		t->gpu_completed,
+		t->done_count,
+		r->qid);
+	}
+
+	lock_lock(&sched->queues[r->qid].lock);
+	
+	const int before = sched->queues[r->qid].gpu_self_tasks_left;
+
+	if (sched->queues[r->qid].gpu_self_tasks_left <= 0)
+	  error("gpu_self_tasks_left underflow: task=%p type=%s subtype=%s qid=%d",
+		(void *)t,
+		taskID_names[t->type],
+		subtaskID_names[t->subtype],
+		r->qid);
+
+	sched->queues[r->qid].gpu_self_tasks_left--;
+	runner_gpu_check_queue_counters(r, sched, "runner_gpu_complete_self_task");
+	
+	/*message("GPU_SELF_COUNTER_DEC complete: task=%p qid=%d old=%d new=%d "
+        "gpu_completed=%d done_count=%d",
+        (void *)t,
+        r->qid,
+        before,
+        before - 1,
+        t->gpu_completed,
+        t->done_count);*/
+
+	(void)lock_unlock(&sched->queues[r->qid].lock);
+
+	t->gpu_counted = 0;
+
+  runner_gpu_mark_done_debug(r, t, "runner_gpu_complete_self_task");
+
   scheduler_done(sched, t);
+}
+
+void runner_gpu_complete_current_self_task(struct runner *r,
+                                           struct scheduler *sched,
+                                           struct task *t) {
+  runner_gpu_complete_self_task(r, sched, t);
 }
 
 /**
@@ -315,9 +539,68 @@ static void runner_gpu_complete_self_task(struct runner *r,
  */
 void runner_gpu_complete_pair_task(struct runner *r, struct scheduler *sched,
                                    struct task *t) {
+
+  if (t == NULL)
+    error("runner_gpu_complete_pair_task got NULL task.");
+
+  if (t->gpu_completed) {
+    error("runner_gpu_complete_pair_task called for already-completed task: "
+          "task=%p type=%s subtype=%s gpu_counted=%d done_count=%d "
+          "pair_left=%d qid=%d",
+          (void *)t,
+          taskID_names[t->type],
+          subtaskID_names[t->subtype],
+          t->gpu_counted,
+          t->done_count,
+          sched->queues[r->qid].gpu_pair_tasks_left,
+          r->qid);
+  }
+
+  t->gpu_completed = 1;
+
+  if (!t->gpu_counted) {
+    error("Completing uncounted GPU pair task: task=%p type=%s subtype=%s "
+          "gpu_completed=%d done_count=%d qid=%d pair_left=%d",
+          (void *)t,
+          taskID_names[t->type],
+          subtaskID_names[t->subtype],
+          t->gpu_completed,
+          t->done_count,
+          r->qid,
+          sched->queues[r->qid].gpu_pair_tasks_left);
+  }
+
   lock_lock(&sched->queues[r->qid].lock);
+
+  const int before = sched->queues[r->qid].gpu_pair_tasks_left;
+
+  if (before <= 0)
+    error("gpu_pair_tasks_left underflow before completing task=%p "
+          "type=%s subtype=%s qid=%d pair_left=%d",
+          (void *)t,
+          taskID_names[t->type],
+          subtaskID_names[t->subtype],
+          r->qid,
+          before);
+
   sched->queues[r->qid].gpu_pair_tasks_left--;
+  runner_gpu_check_queue_counters(r, sched, "runner_gpu_complete_pair_task");
+
+  /*message("GPU_PAIR_COUNTER_DEC complete: task=%p qid=%d old=%d new=%d "
+          "gpu_completed=%d done_count=%d",
+          (void *)t,
+          r->qid,
+          before,
+          before - 1,
+          t->gpu_completed,
+          t->done_count);*/
+
   (void)lock_unlock(&sched->queues[r->qid].lock);
+
+  t->gpu_counted = 0;
+
+  runner_gpu_mark_done_debug(r, t, "runner_gpu_complete_pair_task");
+
   scheduler_done(sched, t);
 }
 
@@ -328,19 +611,39 @@ void runner_gpu_complete_pair_task(struct runner *r, struct scheduler *sched,
  * @param sched The scheduler tracking the tasks.
  */
 void runner_gpu_complete_self_batch(struct runner *r, struct scheduler *sched,
-                                    struct gpu_runner_substream *substream) {
-  const int count = substream->grav_batch_self_count;
-  struct task *prev_task = NULL;
+                                    struct gpu_runner_substream *substream,
+                                    struct task *current_task) {
 
+  const int count = substream->grav_batch_self_count;
+
+  /* Complete each top-level self task at most once. Recursive self walks can
+   * pack many leaf cells for the same scheduler task, so duplicate task
+   * pointers in grav_tasks_self[] are normal. */
   for (int i = 0; i < count; i++) {
+
     struct task *task = substream->grav_tasks_self[i];
 
-    if (task != prev_task && !task->gpu_completed) {
-	  runner_gpu_complete_self_task(r, sched, task);
-	  task->gpu_completed = 1;
-	  prev_task = task;
-	}
+    if (task == NULL)
+      continue;
 
+    /* The currently-walking task is completed by runner_main when
+     * flushed_self_task is returned. */
+    if (task == current_task)
+      continue;
+
+    /* Duplicate slot for a task already completed earlier in this batch. */
+    if (task->gpu_completed)
+      continue;
+
+    /* Only counted top-level GPU tasks own a queue counter. */
+    if (!task->gpu_counted)
+      continue;
+
+    runner_gpu_complete_self_task(r, sched, task);
+  }
+
+  /* Clear self batch cell/task entries. */
+  for (int i = 0; i < count; i++) {
     substream->grav_cells_self[i] = NULL;
     substream->grav_tasks_self[i] = NULL;
   }
@@ -352,11 +655,19 @@ void runner_gpu_complete_self_batch(struct runner *r, struct scheduler *sched,
     substream->self_counts_h[i] = 0;
     substream->self_offsets_h[i] = 0;
     substream->self_active_counts_h[i] = 0;
+    substream->self_active_offsets_h[i] = 0;
     substream->self_rmax_h[i] = 0.f;
   }
+
+  for (int a = 0; a < substream->self_total_active_count; a++)
+    substream->self_active_index_h[a] = 0;
+
   substream->self_total_count = 0;
   substream->self_max_active_count = 0;
   substream->self_total_active_count = 0;
+
+  runner_gpu_check_queue_counters(r, sched,
+                                  "runner_gpu_complete_self_batch:end");
 }
 
 /**
@@ -368,16 +679,13 @@ void runner_gpu_complete_self_batch(struct runner *r, struct scheduler *sched,
 void runner_gpu_complete_pair_batch(struct runner *r, struct scheduler *sched,
                                     struct gpu_runner_substream *substream) {
   const int count = substream->grav_batch_pair_count;
-  struct task *prev_task = NULL;
 
   for (int pair_id = 0; pair_id < count; pair_id++) {
     struct task *task = substream->grav_tasks_pair[pair_id];
     const int internal = substream->grav_pair_internal_from_self[pair_id];
 
-    if (!internal && task != prev_task) {
+    if (!internal && task != NULL)
       runner_gpu_complete_pair_task(r, sched, task);
-      prev_task = task;
-    }
 
     substream->grav_cells_pair[2 * pair_id] = NULL;
     substream->grav_cells_pair[2 * pair_id + 1] = NULL;
@@ -389,19 +697,18 @@ void runner_gpu_complete_pair_batch(struct runner *r, struct scheduler *sched,
   substream->busy = 0;
 
   for (int i = 0; i < count; i++) {
-  substream->pair_counts_h[i] = 0;
-  substream->pair_offsets_h[i] = 0;
+    substream->pair_counts_h[i] = 0;
+    substream->pair_offsets_h[i] = 0;
+    substream->pair_active_counts_h[i] = 0;
+    substream->pair_active_offsets_h[i] = 0;
+    substream->pair_cell_flags_h[i] = 0;
+  }
 
-  substream->pair_active_counts_h[i] = 0;
-  substream->pair_active_offsets_h[i] = 0;
-  substream->pair_cell_flags_h[i] = 0;
-}
-
-substream->pair_total_count = 0;
-substream->pair_unique_cell_count = 0;
-substream->pair_total_active_count = 0;
-substream->pair_max_active_count = 0;
-substream->pair_total_pair_active_count = 0;
+  substream->pair_total_count = 0;
+  substream->pair_unique_cell_count = 0;
+  substream->pair_total_active_count = 0;
+  substream->pair_max_active_count = 0;
+  substream->pair_total_pair_active_count = 0;
 }
 
 
@@ -538,6 +845,23 @@ static void runner_dopair_grav_pp_pack(
   while (cell_glocktree(b)) {
     ;
   }
+  
+  const int pair_capacity = r->gpu.grav_batch_ncells / 2;
+	const int cell_capacity = r->gpu.grav_batch_ncells;
+
+	if (substream->grav_batch_pair_count < 0 ||
+	    substream->grav_batch_pair_count >= pair_capacity) {
+	  error("Pair batch overflow before pack: pair_count=%d pair_capacity=%d",
+		substream->grav_batch_pair_count,
+		pair_capacity);
+	}
+
+	if (substream->pair_unique_cell_count < 0 ||
+	    substream->pair_unique_cell_count + 2 > cell_capacity) {
+	  error("Pair unique-cell overflow before pack: unique=%d cell_capacity=%d",
+		substream->pair_unique_cell_count,
+		cell_capacity);
+	}
 
   const int slot_i =
     runner_gpu_find_or_pack_pair_cell(r, substream, ci, ci_cache, max_cell_size);
@@ -546,6 +870,9 @@ static void runner_dopair_grav_pp_pack(
     runner_gpu_find_or_pack_pair_cell(r, substream, cj, cj_cache, max_cell_size);
 
   const int pair_id = substream->grav_batch_pair_count;
+  
+  if (pair_id < 0 || pair_id >= pair_capacity)
+  	error("Bad pair_id=%d pair_capacity=%d", pair_id, pair_capacity);
 
   substream->pair_pair_i_h[pair_id] = slot_i;
   substream->pair_pair_j_h[pair_id] = slot_j;
@@ -555,6 +882,9 @@ static void runner_dopair_grav_pp_pack(
   grav_tasks_pair[pair_id] = t;
   grav_pair_internal_from_self[pair_id] =
       (unsigned char)internal_from_self;
+      
+  if (!internal_from_self)
+  	runner_gpu_count_pair_task(r, &r->e->sched, t);
 
   int use_full = 1;
 
@@ -576,10 +906,10 @@ static void runner_dopair_grav_pp_pack(
   substream->pair_use_full_h[pair_id] = use_full;
 
   substream->pair_cell_flags_h[slot_i] =
-    cell_is_active_gravity(ci, e) ? 1 : 0;
+    (ci->nodeID == e->nodeID && cell_is_active_gravity(ci, e)) ? 1 : 0;
 
   substream->pair_cell_flags_h[slot_j] =
-    cell_is_active_gravity(cj, e) ? 1 : 0;
+    (cj->nodeID == e->nodeID && cell_is_active_gravity(cj, e)) ? 1 : 0;
     
   const int side_i = 2 * pair_id;
   const int side_j = side_i + 1;
@@ -589,6 +919,10 @@ static void runner_dopair_grav_pp_pack(
 
   substream->pair_total_pair_active_count +=
     substream->pair_active_counts_h[slot_i];
+    
+  if (2 * pair_id + 1 >= 2 * pair_capacity)
+	  error("Bad pair side offset index: pair_id=%d pair_capacity=%d",
+		pair_id, pair_capacity);
 
   substream->pair_side_active_offsets_h[side_j] =
     substream->pair_total_pair_active_count;
@@ -607,58 +941,113 @@ static void runner_dopair_grav_pp_pack(
   runner_gpu_pair_pack_time_s += runner_gpu_walltime_s() - pack_time_start;
 }
 
+static inline void runner_gpu_unpack_pair_side(
+    struct runner *r,
+    struct gpu_runner_substream *substream,
+    struct cell *c,
+    int slot,
+    int recv_base) {
+
+  const struct engine *e = r->e;
+
+  if (c == NULL)
+    error("GPU pair unpack received NULL cell.");
+
+  /* MPI safety: never write to a foreign cell. */
+  if (c->nodeID != e->nodeID)
+    return;
+
+  if (!cell_is_active_gravity(c, e))
+    return;
+
+  const int active_count = substream->pair_active_counts_h[slot];
+  const int active_base = substream->pair_active_offsets_h[slot];
+
+  if (active_count == 0)
+    return;
+
+  while (cell_glocktree(c)) {
+    ;
+  }
+
+  for (int a = 0; a < active_count; a++) {
+    const int local_pid =
+        substream->pair_active_index_h[active_base + a];
+
+    const int k = recv_base + a;
+
+#ifdef SWIFT_DEBUG_CHECKS
+    if (local_pid < 0 || local_pid >= c->grav.count)
+      error("GPU pair unpack local_pid=%d out of range [0,%d).",
+            local_pid, c->grav.count);
+#endif
+
+    c->grav.parts[local_pid].a_grav[0] +=
+        substream->recv_pair_active[k].values_i.x;
+    c->grav.parts[local_pid].a_grav[1] +=
+        substream->recv_pair_active[k].values_i.y;
+    c->grav.parts[local_pid].a_grav[2] +=
+        substream->recv_pair_active[k].values_i.z;
+    c->grav.parts[local_pid].potential +=
+        substream->recv_pair_active[k].values_i.w;
+  }
+
+  cell_gunlocktree(c);
+}
+
 /**
  * @brief Flush a full pair-gravity GPU batch: H2D copy, kernel launch, D2H
- *        copy, stream synchronisation, and result unpacking to particles.
+ *        copy, stream synchronisation, result unpacking, scheduler completion,
+ *        and metadata reset.
  *
- * After unpacking, any tasks from *previous* top-level calls that were packed
- * into this batch are completed via scheduler_done().  The task pointed to
- * by @p current_task is assumed to still be in progress and is skipped.
- * The batch counter and metadata arrays are reset to zero so the buffer can
- * be reused immediately.
- *
- * @param r The #runner.
- * @param gravity_gpu_values_send_pair Host send buffer.
- * @param gravity_gpu_values_send_pair_d Device send buffer.
- * @param gravity_gpu_values_recv_pair Host receive buffer.
- * @param gravity_gpu_values_recv_pair_d Device receive buffer.
- * @param grav_cells_pair Array of cell pointers for this batch.
- * @param grav_tasks_pair Array of task pointers for this batch.
- * @param current_task The top-level task currently being walked (not
- * completed).
- * @param ncells The batch capacity (number of cell slots).
- * @param max_cell_size The maximum number of particles per packed cell.
- * @param stream The GPU stream to use.
+ * current_task is skipped because it may still be in the recursive walk.
+ * If this flush happened while walking current_task, runner_dopair_grav_pp_new()
+ * must return flushed_pair_task so runner_main() completes current_task.
+ * If this is a leftover flush, current_task should be NULL and all non-internal
+ * tasks in the batch are completed here.
  */
 static void runner_dopair_grav_pp_flush(
-    struct runner *r, struct gpu_runner_substream *substream,
-    struct cell **grav_cells_pair, struct task **grav_tasks_pair,
-    struct task *current_task, int ncells, int max_cell_size,
-    GPUStream stream){
+    struct runner *r,
+    struct gpu_runner_substream *substream,
+    struct cell **grav_cells_pair,
+    struct task **grav_tasks_pair,
+    struct task *current_task,
+    int ncells,
+    int max_cell_size,
+    GPUStream stream) {
+
+  runner_gpu_bind_device(r);
 
   const int npairs = substream->grav_batch_pair_count;
   const int nslots = substream->pair_unique_cell_count;
   const int ncells_flush = nslots;
-  if (ncells_flush == 0) return;
+
+  if (npairs == 0 || ncells_flush == 0)
+    return;
+
+  if (npairs < 0 || npairs > ncells / 2)
+    error("Bad pair flush npairs=%d capacity=%d", npairs, ncells / 2);
+
+  if (nslots < 0 || nslots > ncells)
+    error("Bad pair flush nslots=%d ncells=%d", nslots, ncells);
+
+  if (substream->pair_total_count < 0)
+    error("Bad pair_total_count=%d", substream->pair_total_count);
+
+  if (substream->pair_total_active_count < 0)
+    error("Bad pair_total_active_count=%d",
+          substream->pair_total_active_count);
+
+  if (substream->pair_total_pair_active_count < 0)
+    error("Bad pair_total_pair_active_count=%d",
+          substream->pair_total_pair_active_count);
 
   double h2d_s = 0.0;
   double kernel_s = 0.0;
   double d2h_s = 0.0;
   double unpack_s = 0.0;
 
-  /*GPUEvent h2d_start, h2d_stop;
-  GPUEvent kernel_start, kernel_stop;
-  GPUEvent d2h_start, d2h_stop;
-
-  GPUEventCreate(&h2d_start);
-  GPUEventCreate(&h2d_stop);
-  GPUEventCreate(&kernel_start);
-  GPUEventCreate(&kernel_stop);
-  GPUEventCreate(&d2h_start);
-  GPUEventCreate(&d2h_stop);*/
-
-  /* Retrieve kernel parameters from the first pair in the batch. */
-    const struct engine *e = r->e;
+  const struct engine *e = r->e;
   const int periodic = e->mesh->periodic;
   const float r_s_inv = e->mesh->r_s_inv;
   const double min_trunc = e->mesh->r_cut_min;
@@ -666,164 +1055,194 @@ static void runner_dopair_grav_pp_flush(
   const float dim_0 = (float)e->mesh->dim[0];
   const float dim_1 = (float)e->mesh->dim[1];
   const float dim_2 = (float)e->mesh->dim[2];
-  
-  const int pair_capacity = r->gpu.grav_batch_ncells * r->gpu.grav_max_cell_size;
 
-  /* ---- H2D copy ---- */
+  const double pack_s = runner_gpu_pair_pack_time_s;
+  runner_gpu_pair_pack_time_s = 0.0;
+
+  /*message("PAIR FLUSH begin: qid=%d npairs=%d nslots=%d "
+          "pair_total_count=%d pair_total_active=%d "
+          "pair_total_pair_active=%d pair_left=%d current_task=%p",
+          r->qid,
+          npairs,
+          nslots,
+          substream->pair_total_count,
+          substream->pair_total_active_count,
+          substream->pair_total_pair_active_count,
+          r->e->sched.queues[r->qid].gpu_pair_tasks_left,
+          (void *)current_task);*/
+
+  /* ---- H2D copies ---- */
   {
+    const double h2d_t0 = runner_gpu_walltime_s();
+
     TIMER_TIC;
 
-    const int nslots = substream->pair_unique_cell_count;
-    const int total = substream->pair_total_count;
-    
-    if (nslots < 0 || nslots > r->gpu.grav_batch_ncells)
-    error("Bad nslots in pair flush: %d (capacity %d)",
-          nslots, r->gpu.grav_batch_ncells);
-
-  if (total < 0 || total > pair_capacity)
-    error("Bad pair_total_count in pair flush: %d (capacity %d)",
-          total, pair_capacity);
-
-    //GPUEventRecord(h2d_start, stream);
-
-	GPUMemcpyAsync(
-	    substream->pair_counts_d,
-	    substream->pair_counts_h,
-	    nslots * sizeof(int),
-	    GPU_MEMCPY_HOST_TO_DEVICE, stream);
-
-	GPUMemcpyAsync(
-	    substream->pair_offsets_d,
-	    substream->pair_offsets_h,
-	    nslots * sizeof(int),
-	    GPU_MEMCPY_HOST_TO_DEVICE, stream);
-
-	GPUMemcpyAsync(
-	    substream->pair_active_counts_d,
-	    substream->pair_active_counts_h,
-	    nslots * sizeof(int),
-	    GPU_MEMCPY_HOST_TO_DEVICE, stream);
-
-	GPUMemcpyAsync(
-    		substream->pair_active_offsets_d,
-    		substream->pair_active_offsets_h,
-    		nslots * sizeof(int),
-    		GPU_MEMCPY_HOST_TO_DEVICE, stream);
-
-	GPUMemcpyAsync(
-    		substream->pair_active_index_d,
-    		substream->pair_active_index_h,
-    		(size_t)substream->pair_total_active_count * sizeof(int),
-    		GPU_MEMCPY_HOST_TO_DEVICE, stream);
-
-	GPUMemcpyAsync(
-	    substream->pair_cell_flags_d,
-	    substream->pair_cell_flags_h,
-	    nslots * sizeof(int),
-	    GPU_MEMCPY_HOST_TO_DEVICE, stream);
-	    
-	GPUMemcpyAsync(
-	    substream->send_pair_pos_mass_d,
-	    substream->send_pair_pos_mass,
-	    total * sizeof(float4),
-	    GPU_MEMCPY_HOST_TO_DEVICE, stream);
-
-	GPUMemcpyAsync(
-	    substream->send_pair_h_d,
-	    substream->send_pair_h,
-	    total * sizeof(float),
-	    GPU_MEMCPY_HOST_TO_DEVICE, stream);
-	    
-	GPUMemcpyAsync(substream->pair_pair_i_d, substream->pair_pair_i_h,
-               npairs * sizeof(int), GPU_MEMCPY_HOST_TO_DEVICE, stream);
-
-	GPUMemcpyAsync(substream->pair_pair_j_d, substream->pair_pair_j_h,
-               npairs * sizeof(int), GPU_MEMCPY_HOST_TO_DEVICE, stream);
-               
-        GPUMemcpyAsync(
-	    substream->pair_use_full_d,
-	    substream->pair_use_full_h,
-	    npairs * sizeof(int),
-	    GPU_MEMCPY_HOST_TO_DEVICE,
-	    stream);
-
-	GPUMemcpyAsync(
-	    substream->pair_side_active_offsets_d,
-	    substream->pair_side_active_offsets_h,
-	    2 * npairs * sizeof(int),
-	    GPU_MEMCPY_HOST_TO_DEVICE,
-	    stream);
-
-    //GPUEventRecord(h2d_stop, stream);
-	    
-	/*GPUMemcpyAsync(
-    		substream->send_pair_compact_d,
-    		substream->send_pair_compact,
-    		total * sizeof(struct gravity_gpu_values_compact),
-    		GPU_MEMCPY_HOST_TO_DEVICE, stream);*/
-	    
-	/*GPUMemsetAsync(
-	    substream->recv_pair_active_d,
-	    0,
-	    (size_t)substream->pair_total_active_count *
-		sizeof(struct gravity_gpu_values_recv),
-	    stream);*/
-
-    GPUError err2 = GPUGetLastError();
-    if (err2 != GPU_SUCCESS)
-      printf("Error (flush H2D): %s\n", GPUGetErrorString(err2));
-
-    /* ---- Kernel launch ---- */
-    //GPUEventRecord(kernel_start, stream);
-
-    pair_pp_offload_new(
-    periodic, min_trunc, &r_s_inv,
-    substream->pair_use_full_d,
-    substream->pair_side_active_offsets_d,
-    substream->pair_counts_d,
-    substream->pair_offsets_d,
-    substream->pair_active_counts_d,
-    substream->pair_active_offsets_d,
-    substream->pair_active_index_d,
-    substream->pair_pair_i_d,
-    substream->pair_pair_j_d,
-    npairs,
-    nslots,
-    dim_0, dim_1, dim_2,
-    substream->pair_cell_flags_d,
-    substream->send_pair_pos_mass_d,
-    substream->send_pair_h_d,
-    substream->recv_pair_active_d,
-    ncells_flush, max_cell_size,
-    substream->pair_max_active_count, stream);
-
-    //GPUEventRecord(kernel_stop, stream);
-
-    /* ---- D2H copy ---- */
-    //GPUEventRecord(d2h_start, stream);
+    GPUMemcpyAsync(
+        substream->send_pair_pos_mass_d,
+        substream->send_pair_pos_mass,
+        (size_t)substream->pair_total_count * sizeof(float4),
+        GPU_MEMCPY_HOST_TO_DEVICE,
+        stream);
 
     GPUMemcpyAsync(
-	    substream->recv_pair_active,
-	    substream->recv_pair_active_d,
-	    (size_t)substream->pair_total_pair_active_count *
-		sizeof(struct gravity_gpu_values_recv),
-	    GPU_MEMCPY_DEVICE_TO_HOST,
-	    stream);
+        substream->send_pair_h_d,
+        substream->send_pair_h,
+        (size_t)substream->pair_total_count * sizeof(float),
+        GPU_MEMCPY_HOST_TO_DEVICE,
+        stream);
 
-    //GPUEventRecord(d2h_stop, stream);
-    GPUEventRecord(substream->done, substream->stream);
-    GPUEventSynchronize(substream->done);
+    GPUMemcpyAsync(
+        substream->pair_counts_d,
+        substream->pair_counts_h,
+        (size_t)nslots * sizeof(int),
+        GPU_MEMCPY_HOST_TO_DEVICE,
+        stream);
 
-    /*h2d_s = runner_gpu_event_elapsed_s(h2d_start, h2d_stop);
-    kernel_s = runner_gpu_event_elapsed_s(kernel_start, kernel_stop);
-    d2h_s = runner_gpu_event_elapsed_s(d2h_start, d2h_stop);*/
+    GPUMemcpyAsync(
+        substream->pair_offsets_d,
+        substream->pair_offsets_h,
+        (size_t)nslots * sizeof(int),
+        GPU_MEMCPY_HOST_TO_DEVICE,
+        stream);
+
+    GPUMemcpyAsync(
+        substream->pair_active_counts_d,
+        substream->pair_active_counts_h,
+        (size_t)nslots * sizeof(int),
+        GPU_MEMCPY_HOST_TO_DEVICE,
+        stream);
+
+    GPUMemcpyAsync(
+        substream->pair_active_offsets_d,
+        substream->pair_active_offsets_h,
+        (size_t)nslots * sizeof(int),
+        GPU_MEMCPY_HOST_TO_DEVICE,
+        stream);
+
+    GPUMemcpyAsync(
+        substream->pair_active_index_d,
+        substream->pair_active_index_h,
+        (size_t)substream->pair_total_active_count * sizeof(int),
+        GPU_MEMCPY_HOST_TO_DEVICE,
+        stream);
+
+    GPUMemcpyAsync(
+        substream->pair_pair_i_d,
+        substream->pair_pair_i_h,
+        (size_t)npairs * sizeof(int),
+        GPU_MEMCPY_HOST_TO_DEVICE,
+        stream);
+
+    GPUMemcpyAsync(
+        substream->pair_pair_j_d,
+        substream->pair_pair_j_h,
+        (size_t)npairs * sizeof(int),
+        GPU_MEMCPY_HOST_TO_DEVICE,
+        stream);
+
+    GPUMemcpyAsync(
+        substream->pair_use_full_d,
+        substream->pair_use_full_h,
+        (size_t)npairs * sizeof(int),
+        GPU_MEMCPY_HOST_TO_DEVICE,
+        stream);
+
+    GPUMemcpyAsync(
+        substream->pair_side_active_offsets_d,
+        substream->pair_side_active_offsets_h,
+        (size_t)(2 * npairs) * sizeof(int),
+        GPU_MEMCPY_HOST_TO_DEVICE,
+        stream);
+
+    GPUMemcpyAsync(
+        substream->pair_cell_flags_d,
+        substream->pair_cell_flags_h,
+        (size_t)nslots * sizeof(int),
+        GPU_MEMCPY_HOST_TO_DEVICE,
+        stream);
 
     TIMER_TOC(timer_doself_grav_pp);
+
+    h2d_s = runner_gpu_walltime_s() - h2d_t0;
   }
 
-  GPUError err3 = GPUGetLastError();
-  if (err3 != GPU_SUCCESS)
-    printf("Error (flush kernel): %s\n", GPUGetErrorString(err3));
+  runner_gpu_check_error("runner_dopair_grav_pp_flush H2D");
+
+  /* ---- Kernel launch ---- */
+  {
+    const double kernel_t0 = runner_gpu_walltime_s();
+
+    TIMER_TIC;
+
+    pair_pp_offload_new(
+        periodic,
+        min_trunc,
+        &r_s_inv,
+        substream->pair_use_full_d,
+        substream->pair_side_active_offsets_d,
+        substream->pair_counts_d,
+        substream->pair_offsets_d,
+        substream->pair_active_counts_d,
+        substream->pair_active_offsets_d,
+        substream->pair_active_index_d,
+        substream->pair_pair_i_d,
+        substream->pair_pair_j_d,
+        npairs,
+        nslots,
+        dim_0,
+        dim_1,
+        dim_2,
+        substream->pair_cell_flags_d,
+        substream->send_pair_pos_mass_d,
+        substream->send_pair_h_d,
+        substream->recv_pair_active_d,
+        ncells_flush,
+        max_cell_size,
+        substream->pair_max_active_count,
+        stream);
+
+    TIMER_TOC(timer_doself_grav_pp);
+
+    kernel_s = runner_gpu_walltime_s() - kernel_t0;
+  }
+
+  runner_gpu_check_error("runner_dopair_grav_pp_flush kernel");
+
+  /* ---- D2H copy ---- */
+  {
+    const double d2h_t0 = runner_gpu_walltime_s();
+
+    TIMER_TIC;
+
+    const size_t recv_pair_active_capacity =
+        (size_t)(2 * (r->gpu.grav_batch_ncells / 2)) *
+        (size_t)r->gpu.grav_max_cell_size;
+
+    if ((size_t)substream->pair_total_pair_active_count >
+        recv_pair_active_capacity) {
+      error("GPU pair recv overflow: pair_total_pair_active_count=%d "
+            "capacity=%zu",
+            substream->pair_total_pair_active_count,
+            recv_pair_active_capacity);
+    }
+
+    GPUMemcpyAsync(
+        substream->recv_pair_active,
+        substream->recv_pair_active_d,
+        (size_t)substream->pair_total_pair_active_count *
+            sizeof(struct gravity_gpu_values_recv),
+        GPU_MEMCPY_DEVICE_TO_HOST,
+        stream);
+
+    GPUEventRecord(substream->done, stream);
+    GPUEventSynchronize(substream->done);
+
+    TIMER_TOC(timer_doself_grav_pp);
+
+    d2h_s = runner_gpu_walltime_s() - d2h_t0;
+  }
+
+  runner_gpu_check_error("runner_dopair_grav_pp_flush D2H");
 
   /* ---- Unpack results back to particles ---- */
   {
@@ -831,149 +1250,167 @@ static void runner_dopair_grav_pp_flush(
 
     TIMER_TIC;
 
-    const int npairs = substream->grav_batch_pair_count;
-	const int nslots = substream->pair_unique_cell_count;
+    for (int pair_id = 0; pair_id < npairs; pair_id++) {
 
-	for (int pair_id = 0; pair_id < npairs; pair_id++) {
+      const int slot_i = substream->pair_pair_i_h[pair_id];
+      const int slot_j = substream->pair_pair_j_h[pair_id];
 
-  struct cell *ci_pair = grav_cells_pair[2 * pair_id];
-  struct cell *cj_pair = grav_cells_pair[2 * pair_id + 1];
+      if (slot_i < 0 || slot_i >= nslots)
+        error("Bad pair slot_i=%d nslots=%d pair_id=%d",
+              slot_i,
+              nslots,
+              pair_id);
 
-  if (ci_pair == NULL || cj_pair == NULL)
-    error("PAIR UNPACK: NULL cell pair_id=%d npairs=%d qid=%d",
-          pair_id, npairs, r->qid);
+      if (slot_j < 0 || slot_j >= nslots)
+        error("Bad pair slot_j=%d nslots=%d pair_id=%d",
+              slot_j,
+              nslots,
+              pair_id);
 
-  const int slot_i = substream->pair_pair_i_h[pair_id];
-  const int slot_j = substream->pair_pair_j_h[pair_id];
+      const int recv_i = substream->pair_side_active_offsets_h[2 * pair_id];
+      const int recv_j =
+          substream->pair_side_active_offsets_h[2 * pair_id + 1];
 
-  const int side_i = 2 * pair_id;
-  const int side_j = side_i + 1;
+      if (recv_i < 0 ||
+          recv_i + substream->pair_active_counts_h[slot_i] >
+              substream->pair_total_pair_active_count) {
+        error("Bad pair recv_i=%d active_i=%d total_pair_active=%d "
+              "pair_id=%d",
+              recv_i,
+              substream->pair_active_counts_h[slot_i],
+              substream->pair_total_pair_active_count,
+              pair_id);
+      }
 
-  const int recv_base_i = substream->pair_side_active_offsets_h[side_i];
-  const int recv_base_j = substream->pair_side_active_offsets_h[side_j];
+      if (recv_j < 0 ||
+          recv_j + substream->pair_active_counts_h[slot_j] >
+              substream->pair_total_pair_active_count) {
+        error("Bad pair recv_j=%d active_j=%d total_pair_active=%d "
+              "pair_id=%d",
+              recv_j,
+              substream->pair_active_counts_h[slot_j],
+              substream->pair_total_pair_active_count,
+              pair_id);
+      }
 
-  const int active_count_i = substream->pair_active_counts_h[slot_i];
-  const int active_base_i = substream->pair_active_offsets_h[slot_i];
+      runner_gpu_unpack_pair_side(
+          r,
+          substream,
+          grav_cells_pair[2 * pair_id],
+          slot_i,
+          recv_i);
 
-  while (cell_glocktree(ci_pair)) {
-    ;
-  }
-
-  for (int a = 0; a < active_count_i; a++) {
-    const int local_pid =
-        substream->pair_active_index_h[active_base_i + a];
-
-    const int k = recv_base_i + a;
-
-    ci_pair->grav.parts[local_pid].a_grav[0] +=
-        substream->recv_pair_active[k].values_i.x;
-    ci_pair->grav.parts[local_pid].a_grav[1] +=
-        substream->recv_pair_active[k].values_i.y;
-    ci_pair->grav.parts[local_pid].a_grav[2] +=
-        substream->recv_pair_active[k].values_i.z;
-    ci_pair->grav.parts[local_pid].potential +=
-        substream->recv_pair_active[k].values_i.w;
-  }
-
-  cell_gunlocktree(ci_pair);
-
-  const int active_count_j = substream->pair_active_counts_h[slot_j];
-  const int active_base_j = substream->pair_active_offsets_h[slot_j];
-
-  while (cell_glocktree(cj_pair)) {
-    ;
-  }
-
-  for (int a = 0; a < active_count_j; a++) {
-    const int local_pid =
-        substream->pair_active_index_h[active_base_j + a];
-
-    const int k = recv_base_j + a;
-
-    cj_pair->grav.parts[local_pid].a_grav[0] +=
-        substream->recv_pair_active[k].values_i.x;
-    cj_pair->grav.parts[local_pid].a_grav[1] +=
-        substream->recv_pair_active[k].values_i.y;
-    cj_pair->grav.parts[local_pid].a_grav[2] +=
-        substream->recv_pair_active[k].values_i.z;
-    cj_pair->grav.parts[local_pid].potential +=
-        substream->recv_pair_active[k].values_i.w;
-  }
-
-  cell_gunlocktree(cj_pair);
-}
+      runner_gpu_unpack_pair_side(
+          r,
+          substream,
+          grav_cells_pair[2 * pair_id + 1],
+          slot_j,
+          recv_j);
+    }
 
     TIMER_TOC(timer_doself_grav_pp);
 
     unpack_s = runner_gpu_walltime_s() - unpack_t0;
   }
 
-  const double pair_pack_s = runner_gpu_pair_pack_time_s;
-  runner_gpu_pair_pack_time_s = 0.0;
-  /*runner_gpu_write_timing_row("pair", (long long)r->e->step, r->id, r->qid, ncells_flush,
-                              substream->pair_total_count, pair_pack_s,
-                              h2d_s, kernel_s, d2h_s, unpack_s);*/
-
-  /*GPUEventDestroy(h2d_start);
-  GPUEventDestroy(h2d_stop);
-  GPUEventDestroy(kernel_start);
-  GPUEventDestroy(kernel_stop);
-  GPUEventDestroy(d2h_start);
-  GPUEventDestroy(d2h_stop);*/
-
-  /* Complete any tasks from previous top-level calls that were packed
-     into this batch, but skip current_task (still being walked). */
+  /* ---- Complete scheduler tasks before clearing task pointers ---- */
+  {
     struct scheduler *sched = &r->e->sched;
-  struct task *prev_task = NULL;
 
-  for (int pair_id = 0; pair_id < npairs; pair_id++) {
-    struct task *batch_task = grav_tasks_pair[pair_id];
-    const int internal = substream->grav_pair_internal_from_self[pair_id];
+    int printed_current_skip = 0;
 
-    if (batch_task == NULL)
-      error("Unexpected NULL task in pair GPU batch at slot %d", pair_id);
+	for (int pair_id = 0; pair_id < npairs; pair_id++) {
 
-    if (!internal &&
-        batch_task != prev_task &&
-        batch_task != current_task &&
-        !batch_task->gpu_completed) {
+	  struct task *batch_task = grav_tasks_pair[pair_id];
+	  const int internal = substream->grav_pair_internal_from_self[pair_id];
 
-      if (batch_task->type == task_type_self) {
-        runner_gpu_complete_self_task(r, sched, batch_task);
-      } else if (batch_task->type == task_type_pair) {
-        runner_gpu_complete_pair_task(r, sched, batch_task);
-      } else {
-        error("Unexpected task type in pair GPU batch: %d", batch_task->type);
-      }
+	  if (batch_task == NULL)
+	    error("NULL task in GPU pair batch: pair_id=%d npairs=%d",
+		  pair_id, npairs);
 
-      batch_task->gpu_completed = 1;
-      prev_task = batch_task;
+	  if (!internal && batch_task == current_task) {
+	    if (!printed_current_skip) {
+	      /*message("PAIR FLUSH skipping current_task: task=%p "
+		      "gpu_counted=%d gpu_completed=%d done_count=%d "
+		      "pair_left=%d npairs=%d",
+		      (void *)batch_task,
+		      batch_task->gpu_counted,
+		      batch_task->gpu_completed,
+		      batch_task->done_count,
+		      sched->queues[r->qid].gpu_pair_tasks_left,
+		      npairs);*/
+	      printed_current_skip = 1;
+	    }
+	    continue;
+	  }
+
+	  if (!internal && !batch_task->gpu_completed && batch_task->gpu_counted)
+	    runner_gpu_complete_pair_task(r, sched, batch_task);
+	
     }
+  }
 
-     grav_cells_pair[2 * pair_id] = NULL;
-     grav_cells_pair[2 * pair_id + 1] = NULL;
-     grav_tasks_pair[pair_id] = NULL;
-     substream->grav_pair_internal_from_self[pair_id] = 0;
+  /* ---- Timing output ---- */
+  runner_gpu_write_timing_row(
+      "pair",
+      (long long)e->ti_current,
+      r->id,
+      0,
+      npairs,
+      substream->pair_total_count,
+      pack_s,
+      h2d_s,
+      kernel_s,
+      d2h_s,
+      unpack_s);
+
+  /* ---- Reset pair entries: arrays indexed by pair_id ---- */
+  for (int pair_id = 0; pair_id < npairs; pair_id++) {
+    grav_cells_pair[2 * pair_id] = NULL;
+    grav_cells_pair[2 * pair_id + 1] = NULL;
+    grav_tasks_pair[pair_id] = NULL;
+
+    substream->grav_pair_internal_from_self[pair_id] = 0;
+    substream->pair_pair_i_h[pair_id] = 0;
+    substream->pair_pair_j_h[pair_id] = 0;
+    substream->pair_use_full_h[pair_id] = 0;
+
+    substream->pair_side_active_offsets_h[2 * pair_id] = 0;
+    substream->pair_side_active_offsets_h[2 * pair_id + 1] = 0;
+  }
+
+  /* ---- Reset unique-cell entries: arrays indexed by unique cell slot ---- */
+  for (int slot = 0; slot < nslots; slot++) {
+    substream->pair_counts_h[slot] = 0;
+    substream->pair_offsets_h[slot] = 0;
+    substream->pair_active_counts_h[slot] = 0;
+    substream->pair_active_offsets_h[slot] = 0;
+    substream->pair_cell_flags_h[slot] = 0;
+    substream->pair_unique_cells[slot] = NULL;
+  }
+
+  /* ---- Reset active particle index buffer only for the span used ---- */
+  for (int a = 0; a < substream->pair_total_active_count; a++) {
+    substream->pair_active_index_h[a] = 0;
   }
 
   substream->grav_batch_pair_count = 0;
   substream->busy = 0;
 
-  for (int j = 0; j < ncells_flush; j++) {
-    substream->pair_counts_h[j] = 0;
-    substream->pair_offsets_h[j] = 0;
-    substream->pair_active_counts_h[j] = 0;
-    substream->pair_active_offsets_h[j] = 0;
-    substream->pair_cell_flags_h[j] = 0;
-    substream->pair_unique_cells[j] = 0;
-    substream->pair_pair_i_h[j] = 0;
-    substream->pair_pair_j_h[j] = 0;
-  }
   substream->pair_total_count = 0;
   substream->pair_unique_cell_count = 0;
-  substream->pair_max_active_count = 0;
   substream->pair_total_active_count = 0;
+  substream->pair_max_active_count = 0;
   substream->pair_total_pair_active_count = 0;
+
+  runner_gpu_check_queue_counters(
+      r,
+      &r->e->sched,
+      "runner_dopair_grav_pp_flush:end");
+
+  /*message("PAIR FLUSH end: qid=%d pair_left=%d",
+          r->qid,
+          r->e->sched.queues[r->qid].gpu_pair_tasks_left);*/
 }
 
 /**
@@ -998,14 +1435,20 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
     int ncells, int max_cell_size, GPUStream stream) {
 
   const int pair_capacity = ncells / 2;
+  enum runner_gpu_task_type result = packed_task;
 
-	if (substream->grav_batch_pair_count + 1 > pair_capacity ||
-	    substream->pair_unique_cell_count + 2 > ncells) {
-	  runner_dopair_grav_pp_flush(
-	      r, substream,
-	      grav_cells_pair, grav_tasks_pair,
-	      t, ncells, max_cell_size, stream);
-	}
+  /* If the existing batch cannot accept this pair, flush it first.
+     This flush skips current_task=t, so runner_main must complete t. */
+  if (substream->grav_batch_pair_count + 1 > pair_capacity ||
+      substream->pair_unique_cell_count + 2 > ncells) {
+
+    runner_dopair_grav_pp_flush(
+        r, substream,
+        grav_cells_pair, grav_tasks_pair,
+        t, ncells, max_cell_size, stream);
+
+    result = flushed_pair_task;
+  }
 
   runner_dopair_grav_pp_pack(
       r, substream, ci, cj, symmetric, allow_mpole,
@@ -1014,16 +1457,20 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
       t, internal_from_self,
       max_cell_size, stream);
 
-	  if (substream->grav_batch_pair_count >= pair_capacity ||
-	    substream->pair_unique_cell_count >= ncells) {
-	  runner_dopair_grav_pp_flush(
-	      r, substream,
-	      grav_cells_pair, grav_tasks_pair,
-	      t, ncells, max_cell_size, stream);
-	  return flushed_pair_task;
-	}
+  /* If packing this pair filled the batch, flush it too.
+     Again, current_task=t is skipped in the flush, so return flushed_pair_task. */
+  if (substream->grav_batch_pair_count >= pair_capacity ||
+      substream->pair_unique_cell_count >= ncells) {
 
-  return packed_task;
+    runner_dopair_grav_pp_flush(
+        r, substream,
+        grav_cells_pair, grav_tasks_pair,
+        t, ncells, max_cell_size, stream);
+
+    return flushed_pair_task;
+  }
+
+  return result;
 }
 
 static void runner_doself_grav_pp_flush(
@@ -1067,6 +1514,11 @@ static void runner_doself_grav_pp_flush(
     struct task *t,
     int ncells,
     int max_cell_size) {
+    
+    runner_gpu_bind_device(r);
+
+  if (ci->nodeID != r->e->nodeID)
+    error("GPU self task attempted to pack a foreign cell.");
 
   const double pack_time_start = runner_gpu_walltime_s();
 
@@ -1157,6 +1609,9 @@ static void runner_doself_grav_pp_flush(
 
   substream->grav_cells_self[slot] = ci;
   substream->grav_tasks_self[slot] = t;
+  
+  runner_gpu_count_self_task(r, &r->e->sched, t);
+  
   substream->grav_batch_self_count++;
   substream->self_rmax_h[slot] = 2.f * ci->grav.multipole->r_max;
 
@@ -1303,6 +1758,15 @@ static void runner_doself_grav_pp_flush(
 	const int active_base = substream->self_active_offsets_h[j];
 
 	for (int a = 0; a < active_count; a++) {
+	  if (c_unpack == NULL)
+  		error("GPU self unpack received NULL cell.");
+
+	  if (c_unpack->nodeID != r->e->nodeID)
+  		error("GPU self unpack attempted to write a foreign cell.");
+
+	  if (!cell_is_active_gravity(c_unpack, r->e))
+  		continue;
+  
 	  const int local_pid = substream->self_active_index_h[active_base + a];
 	  const int k = active_base + a;
 
@@ -1336,7 +1800,7 @@ static void runner_doself_grav_pp_flush(
 
     /* ===================== COMPLETE TASKS ===================== */
 
-    runner_gpu_complete_self_batch(r, &r->e->sched, substream);
+    runner_gpu_complete_self_batch(r, &r->e->sched, substream, t);
 
     return flushed_self_task;
   }
@@ -1632,7 +2096,9 @@ static int runner_gpu_choose_batch_ncells(const struct engine *e,
       (size_t)nstreams * bytes_per_cell_per_substream;
 
   /* Replace with the actual number of runners that allocate GPU buffers */
-  const int nr_gpu_runners = e->nr_threads > 0 ? e->nr_threads : 1;
+  const int nr_threads = e->nr_threads > 0 ? e->nr_threads : 1;
+  const int nr_gpu_runners =
+    nr_threads * runner_gpu_local_ranks_on_device_for_budget;
 
   const size_t metadata = 64ULL * 1024ULL * 1024ULL; /* 64 MB */
 
@@ -1678,7 +2144,9 @@ static int runner_gpu_choose_nstreams(const struct engine *e,
   const double usable_fraction = 0.70;
   const size_t usable_bytes = (size_t)(free_bytes * usable_fraction);
 
-  const int nr_gpu_runners = e->nr_threads > 0 ? e->nr_threads : 1;
+  const int nr_threads = e->nr_threads > 0 ? e->nr_threads : 1;
+  const int nr_gpu_runners =
+    nr_threads * runner_gpu_local_ranks_on_device_for_budget;
   const size_t metadata = 64ULL * 1024ULL * 1024ULL; /* 64 MB */
 
   size_t budget = 0;
@@ -1705,6 +2173,89 @@ static int runner_gpu_choose_nstreams(const struct engine *e,
   return max_safe_nstreams;
 }
 
+static int runner_gpu_select_device(struct runner *r) {
+
+  struct engine *e = r->e;
+  struct gpu_runner *gpu = &r->gpu;
+
+  int ngpu = 0;
+  GPUGetDeviceCount(&ngpu);
+
+  if (ngpu <= 0)
+    error("No CUDA/HIP GPU visible to this MPI rank.");
+
+  int local_rank = 0;
+  int local_size = 1;
+
+#ifdef WITH_MPI
+  MPI_Comm local_comm;
+  MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0,
+                      MPI_INFO_NULL, &local_comm);
+
+  MPI_Comm_rank(local_comm, &local_rank);
+  MPI_Comm_size(local_comm, &local_size);
+
+  MPI_Comm_free(&local_comm);
+#endif
+
+  const int user_device = parser_get_opt_param_int(
+      e->parameter_file, "GPU:device_id", -1);
+
+  int device_id = 0;
+
+  if (user_device >= 0) {
+    if (user_device >= ngpu)
+      error("GPU:device_id=%d requested but only %d GPU(s) visible.",
+            user_device, ngpu);
+
+    device_id = user_device;
+
+  } else {
+    device_id = local_rank % ngpu;
+  }
+
+  int local_ranks_on_device = 1;
+
+#ifdef WITH_MPI
+  /*
+   * Count ranks on this node that will map to the same GPU.
+   * This is used only for conservative memory budgeting.
+   */
+  MPI_Comm local_comm2;
+  MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0,
+                      MPI_INFO_NULL, &local_comm2);
+
+  const int my_device_id = device_id;
+  int *all_devices = malloc((size_t)local_size * sizeof(int));
+
+  if (all_devices == NULL)
+    error("Failed to allocate local GPU mapping array.");
+
+  MPI_Allgather(&my_device_id, 1, MPI_INT,
+                all_devices, 1, MPI_INT, local_comm2);
+
+  local_ranks_on_device = 0;
+
+  for (int i = 0; i < local_size; i++) {
+    if (all_devices[i] == my_device_id)
+      local_ranks_on_device++;
+  }
+
+  free(all_devices);
+  MPI_Comm_free(&local_comm2);
+#endif
+
+  gpu->device_id = device_id;
+  gpu->local_mpi_rank = local_rank;
+  gpu->local_mpi_size = local_size;
+  gpu->local_ranks_on_device = local_ranks_on_device;
+
+  GPUSetDevice(device_id);
+  runner_gpu_check_error("GPUSetDevice");
+
+  return device_id;
+}
+
 /**
  * @brief Initialise the GPU-specific state attached to a runner.
  *
@@ -1714,11 +2265,47 @@ void runner_gpu_init(struct runner *r) {
 
   struct gpu_runner *gpu = &r->gpu;
   struct engine *e = r->e;
+  
+  #ifdef WITH_MPI
+  MPI_Comm local_comm;
+  int local_rank = 0, local_size = 1;
 
-  GPUSetDevice(0);
+  MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0,
+                    MPI_INFO_NULL, &local_comm);
+  MPI_Comm_rank(local_comm, &local_rank);
+  MPI_Comm_size(local_comm, &local_size);
+  MPI_Comm_free(&local_comm);
+  #else
+  int local_rank = 0;
+  #endif
+
+  int ngpu = 0;
+  GPUGetDeviceCount(&ngpu);
+
+  if (ngpu <= 0)
+    error("No GPU visible to MPI rank");
+
+  const int gpu_id = local_rank % ngpu;
+  GPUSetDevice(gpu_id);
+
+  const int device_id = runner_gpu_select_device(r);
+  
+  runner_gpu_local_ranks_on_device_for_budget =
+    gpu->local_ranks_on_device > 0 ? gpu->local_ranks_on_device : 1;
 
   GPUDeviceProp prop;
-  GPUGetDeviceProperties(&prop, 0);
+  GPUGetDeviceProperties(&prop, device_id);
+  runner_gpu_check_error("GPUGetDeviceProperties");
+
+  if (e->verbose && r->id == 0) {
+    message("MPI rank %d local_rank=%d using GPU device %d "
+          "(%d visible GPU(s), %d local rank(s) sharing this device)",
+          e->nodeID,
+          gpu->local_mpi_rank,
+          gpu->device_id,
+          gpu->local_mpi_size,
+          gpu->local_ranks_on_device);
+  }
 
   const int max_cell_size = space_subsize_self_grav + 100;
 
@@ -2017,27 +2604,50 @@ void runner_gpu_init(struct runner *r) {
 struct gpu_runner_substream *
 runner_gpu_acquire_substream(struct runner *r) {
 
+  runner_gpu_bind_device(r);
+
   struct gpu_runner *gpu = &r->gpu;
 
   for (int i = 0; i < gpu->nstreams; i++) {
-    int idx = (gpu->next_substream + i) % gpu->nstreams;
+    const int idx = (gpu->next_substream + i) % gpu->nstreams;
     struct gpu_runner_substream *substream = &gpu->substreams[idx];
 
-    if (!substream->busy ||
-        GPUEventQuery(substream->done) == GPU_SUCCESS) {
-
+    if (!substream->busy) {
       substream->busy = 1;
       gpu->next_substream = (idx + 1) % gpu->nstreams;
       return substream;
     }
+
+    const GPUError qerr = GPUEventQuery(substream->done);
+
+    if (qerr == GPU_SUCCESS) {
+      substream->busy = 1;
+      gpu->next_substream = (idx + 1) % gpu->nstreams;
+      return substream;
+    }
+
+#if defined(WITH_CUDA)
+    if (qerr != cudaErrorNotReady)
+      error("runner_gpu_acquire_substream: GPUEventQuery failed: %s",
+            GPUGetErrorString(qerr));
+#elif defined(WITH_HIP)
+    if (qerr != hipErrorNotReady)
+      error("runner_gpu_acquire_substream: GPUEventQuery failed: %s",
+            GPUGetErrorString(qerr));
+#endif
   }
 
-  /* fallback: wait */
-  struct gpu_runner_substream *substream = &gpu->substreams[gpu->next_substream];
-  GPUEventSynchronize(substream->done);
-  substream->busy = 1;
+  struct gpu_runner_substream *substream =
+      &gpu->substreams[gpu->next_substream];
 
+  const GPUError serr = GPUEventSynchronize(substream->done);
+  if (serr != GPU_SUCCESS)
+    error("runner_gpu_acquire_substream: GPUEventSynchronize failed: %s",
+          GPUGetErrorString(serr));
+
+  substream->busy = 1;
   gpu->next_substream = (gpu->next_substream + 1) % gpu->nstreams;
+
   return substream;
 }
 
@@ -2068,6 +2678,8 @@ static inline void runner_gpu_flush_all_pair_substreams(struct runner *r) {
  * @param r The runner whose GPU state to clean.
  */
 void runner_gpu_clean(struct runner *r) {
+
+  runner_gpu_bind_device(r);
 
   struct gpu_runner *gpu = &r->gpu;
 
@@ -2186,6 +2798,8 @@ void runner_gpu_clean(struct runner *r) {
  */
 enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
 
+  runner_gpu_bind_device(r);
+
   enum runner_gpu_task_type result = regular_task;
 
   for (int l = 0; l < r->gpu.nstreams; l++) {
@@ -2292,6 +2906,15 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
 
     for (int j = 0; j < nslots; j++) {
       struct cell *c_unpack = substream->grav_cells_self[j];
+      
+      if (c_unpack == NULL)
+        error("GPU self unpack received NULL cell.");
+
+      if (c_unpack->nodeID != r->e->nodeID)
+        error("GPU self unpack attempted to write a foreign cell.");
+
+      if (!cell_is_active_gravity(c_unpack, r->e))
+        continue;
 
       while (cell_glocktree(c_unpack)) {
         ;
@@ -2333,7 +2956,7 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
     GPUEventDestroy(d2h_start);
     GPUEventDestroy(d2h_stop);*/
 
-    runner_gpu_complete_self_batch(r, &r->e->sched, substream);
+    runner_gpu_complete_self_batch(r, &r->e->sched, substream, NULL);
 
     result = flushed_self_task;
   }
@@ -2349,23 +2972,45 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
  */
 enum runner_gpu_task_type runner_gpu_flush_leftover_pair(struct runner *r) {
 
+  runner_gpu_bind_device(r);
+
   enum runner_gpu_task_type result = regular_task;
 
-  for (int l = 0; l < r->gpu.nstreams; l++) {
-    struct gpu_runner_substream *substream = &r->gpu.substreams[l];
+  /*message("runner_gpu_flush_leftover_pair entry: qid=%d "
+        "pair_left=%d",
+        r->qid,
+        r->e->sched.queues[r->qid].gpu_pair_tasks_left);*/
 
-    if (substream->grav_batch_pair_count == 0) continue;
+for (int l = 0; l < r->gpu.nstreams; l++) {
+  struct gpu_runner_substream *ss = &r->gpu.substreams[l];
+
+  /*message("runner_gpu_flush_leftover_pair stream=%d before: "
+          "pair_batch=%d pair_unique_cells=%d pair_total_count=%d "
+          "pair_total_active=%d pair_total_pair_active=%d",
+          l,
+          ss->grav_batch_pair_count,
+          ss->pair_unique_cell_count,
+          ss->pair_total_count,
+          ss->pair_total_active_count,
+          ss->pair_total_pair_active_count);*/
+
+    if (ss->grav_batch_pair_count == 0) continue;
 
     runner_dopair_grav_pp_flush(
-        r, substream,
-        substream->grav_cells_pair,
-        substream->grav_tasks_pair,
+        r, ss,
+        ss->grav_cells_pair,
+        ss->grav_tasks_pair,
         NULL,
         r->gpu.grav_batch_ncells,
         r->gpu.grav_max_cell_size,
-        substream->stream);
+        ss->stream);
 
     result = flushed_pair_task;
+    
+    /*message("runner_gpu_flush_leftover_pair exit: qid=%d "
+        "pair_left=%d",
+        r->qid,
+        r->e->sched.queues[r->qid].gpu_pair_tasks_left);*/
   }
 
   return result;
