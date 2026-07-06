@@ -220,11 +220,11 @@ static double runner_gpu_event_elapsed_s(GPUEvent start, GPUEvent stop) {
 
   GPUEventSynchronize(stop);
 
-#if defined(HAVE_HIP) || defined(SWIFT_HIP)
+/*#if defined(HAVE_HIP) || defined(SWIFT_HIP)
   hipEventElapsedTime(&ms, start, stop);
 #else
   cudaEventElapsedTime(&ms, start, stop);
-#endif
+#endif*/
 
   return 1.0e-3 * (double)ms;
 }
@@ -2085,7 +2085,7 @@ static int runner_gpu_choose_batch_ncells(const struct engine *e,
   const size_t usable_bytes = (size_t)(free_bytes * usable_fraction);
   
   const int nstreams = parser_get_opt_param_int(
-      e->parameter_file, "GPU:nstreams", 2); //try changing this to 1 and see if it works better?
+      e->parameter_file, "GPU:nstreams", 1); //try changing this to 1 and see if it works better?
 
   const size_t bytes_per_cell_per_substream =
       (size_t)max_cell_size *
