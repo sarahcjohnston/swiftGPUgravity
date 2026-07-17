@@ -68,7 +68,8 @@ struct gpu_runner_substream {
   int grav_batch_self_count;
   
   /*! Host and device buffers for sent self interactions. */
-  struct gravity_gpu_values_send *send_self, *send_self_d;
+  float4 *send_self_pos_mass, *send_self_pos_mass_d;
+  float *send_self_h, *send_self_h_d;
 
   /*! Host and device buffers for recieved self results. */
   struct gravity_gpu_values_recv *recv_self, *recv_self_d;
@@ -89,6 +90,9 @@ struct gpu_runner_substream {
   int *self_active_index_h, *self_active_index_d;
   int self_total_active_count;
   int self_max_active_count;
+  
+  int *self_cell_flags_h, *self_cell_flags_d;
+  int *self_use_full_h, *self_use_full_d;
   
   /*! rmax values */
   float *self_rmax_h, *self_rmax_d;
@@ -244,13 +248,9 @@ enum runner_gpu_task_type runner_doself_recursive_grav_new(
     struct gpu_runner_substream *substream,
     struct cell *c,
     const int gettimer,
-    struct gravity_gpu_values_send *gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
     struct cell **grav_cells_self,
     struct task **grav_tasks_self,
     struct task *t,
-    const int *counts_d,
-    const int *offsets_d,
     int ncells,
     int max_cell_size,
     GPUStream stream);

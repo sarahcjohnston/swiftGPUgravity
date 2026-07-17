@@ -319,6 +319,22 @@ if test "$enable_timers" = "yes"; then
    AC_DEFINE([SWIFT_USE_TIMERS],1,[Enable individual timers])
 fi
 
+AC_ARG_ENABLE([gpu-timing],
+  [AS_HELP_STRING([--enable-gpu-timing],
+    [Output detailed GPU packing, transfer, kernel, and unpacking timings @<:@yes/no@:>@]
+  )],
+  [enable_gpu_timing="$enableval"],
+  [enable_gpu_timing="no"]
+)
+
+if test "$enable_gpu_timing" = "yes"; then
+  AC_DEFINE(
+    [SWIFT_GPU_TIMING],
+    [1],
+    [Enable detailed GPU timing output]
+  )
+fi
+
 AC_ARG_ENABLE([likwid],
    [AS_HELP_STRING([--enable-likwid],
       [Enable LIKWID performance monitoring])],

@@ -2530,14 +2530,13 @@ void runner_dopair_recursive_grav(struct runner *r, struct cell *ci,
  * @param gettimer Are we timing this ?
  */
 enum runner_gpu_task_type runner_doself_recursive_grav_new(
-    struct runner *r, struct gpu_runner_substream *substream,
-    struct cell *c, const int gettimer,
-    struct gravity_gpu_values_send *gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
-    struct cell **grav_cells_self, struct task **grav_tasks_self,
+    struct runner *r,
+    struct gpu_runner_substream *substream,
+    struct cell *c,
+    const int gettimer,
+    struct cell **grav_cells_self,
+    struct task **grav_tasks_self,
     struct task *t,
-    const int *counts_d,
-    const int *offsets_d,
     int ncells,
     int max_cell_size,
     GPUStream stream) {
@@ -2566,10 +2565,16 @@ enum runner_gpu_task_type runner_doself_recursive_grav_new(
 
       enum runner_gpu_task_type child_self_type =
           runner_doself_recursive_grav_new(
-              r, substream, c->progeny[j], 0,
-              gravity_gpu_values_send_d, gravity_gpu_values_recv_d,
-              grav_cells_self, grav_tasks_self, t,
-              counts_d, offsets_d, ncells, max_cell_size, stream);
+		    r,
+		    substream,
+		    c->progeny[j],
+		    0,
+		    grav_cells_self,
+		    grav_tasks_self,
+		    t,
+		    ncells,
+		    max_cell_size,
+		    stream);
 
       if (child_self_type > task_type) task_type = child_self_type;
 

@@ -989,66 +989,75 @@ void engine_config(int restart, int fof, struct engine* e,
     error("Failed to allocate threads array.");
 
   for (int k = 0; k < e->nr_threads; k++) {
-    e->runners[k].id = k;
-    e->runners[k].e = e;
-    runner_gpu_init(&e->runners[k]);
 
-    /* Try to pin the runner to a given core */
-    if (with_aff &&
-        (e->policy & engine_policy_setaffinity) == engine_policy_setaffinity) {
+  e->runners[k].id = k;
+  e->runners[k].e = e;
+
+  /* Set the runner's CPU and queue IDs before any GPU or thread init. */
+  if (with_aff &&
+      (e->policy & engine_policy_setaffinity) == engine_policy_setaffinity) {
 #if defined(HAVE_SETAFFINITY)
+    int coreid = k % nr_affinity_cores;
 
-      /* Set a reasonable queue ID. */
-      int coreid = k % nr_affinity_cores;
-      e->runners[k].cpuid = cpuid[coreid];
+    e->runners[k].cpuid = cpuid[coreid];
 
-      if (nr_queues < e->nr_threads)
-        e->runners[k].qid = cpuid[coreid] * nr_queues / nr_affinity_cores;
-      else
-        e->runners[k].qid = k;
-
-      /* Set the cpu mask to zero | e->id. */
-      CPU_ZERO(&cpuset);
-      CPU_SET(cpuid[coreid], &cpuset);
-
-      /* Apply this mask to the runner's pthread. */
-      if (pthread_setaffinity_np(e->runners[k].thread, sizeof(cpu_set_t),
-                                 &cpuset) != 0)
-        error("Failed to set thread affinity.");
-
+    if (nr_queues < e->nr_threads)
+      e->runners[k].qid = cpuid[coreid] * nr_queues / nr_affinity_cores;
+    else
+      e->runners[k].qid = k;
 #else
-      error("SWIFT was not compiled with affinity enabled.");
+    error("SWIFT was not compiled with affinity enabled.");
 #endif
-    } else {
-      e->runners[k].cpuid = k;
-      e->runners[k].qid = k * nr_queues / e->nr_threads;
-    }
-
-    /* Allocate particle caches. */
-    e->runners[k].ci_gravity_cache.count = 0;
-    e->runners[k].cj_gravity_cache.count = 0;
-    gravity_cache_init(&e->runners[k].ci_gravity_cache, space_splitsize);
-    gravity_cache_init(&e->runners[k].cj_gravity_cache, space_splitsize);
-#ifdef WITH_VECTORIZATION
-    e->runners[k].ci_cache.count = 0;
-    e->runners[k].cj_cache.count = 0;
-    cache_init(&e->runners[k].ci_cache, CACHE_SIZE);
-    cache_init(&e->runners[k].cj_cache, CACHE_SIZE);
-#endif
-
-    if (verbose) {
-      if (with_aff)
-        message("runner %i on cpuid=%i with qid=%i.", e->runners[k].id,
-                e->runners[k].cpuid, e->runners[k].qid);
-      else
-        message("runner %i using qid=%i no cpuid.", e->runners[k].id,
-                e->runners[k].qid);
-    }
-
-    if (pthread_create(&e->runners[k].thread, NULL, &runner_main,
-                       &e->runners[k]) != 0)
-      error("Failed to create runner thread.");
+  } else {
+    e->runners[k].cpuid = k;
+    e->runners[k].qid = k * nr_queues / e->nr_threads;
   }
+
+  /* GPU runner setup. Keep this before pthread_create if your GPU code
+     expects buffers/streams to exist before runner_main starts. */
+  runner_gpu_init(&e->runners[k]);
+
+  /* Allocate particle caches. */
+  e->runners[k].ci_gravity_cache.count = 0;
+  e->runners[k].cj_gravity_cache.count = 0;
+  gravity_cache_init(&e->runners[k].ci_gravity_cache, space_splitsize);
+  gravity_cache_init(&e->runners[k].cj_gravity_cache, space_splitsize);
+
+#ifdef WITH_VECTORIZATION
+  e->runners[k].ci_cache.count = 0;
+  e->runners[k].cj_cache.count = 0;
+  cache_init(&e->runners[k].ci_cache, CACHE_SIZE);
+  cache_init(&e->runners[k].cj_cache, CACHE_SIZE);
+#endif
+
+  if (verbose) {
+    if (with_aff)
+      message("runner %i on cpuid=%i with qid=%i.",
+              e->runners[k].id, e->runners[k].cpuid, e->runners[k].qid);
+    else
+      message("runner %i using qid=%i no cpuid.",
+              e->runners[k].id, e->runners[k].qid);
+  }
+
+  /* Create the pthread first. */
+  if (pthread_create(&e->runners[k].thread, NULL, &runner_main,
+                     &e->runners[k]) != 0)
+    error("Failed to create runner thread.");
+
+  /* Now apply affinity to the valid pthread. */
+  if (with_aff &&
+      (e->policy & engine_policy_setaffinity) == engine_policy_setaffinity) {
+#if defined(HAVE_SETAFFINITY)
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(e->runners[k].cpuid, &cpuset);
+
+    if (pthread_setaffinity_np(e->runners[k].thread,
+                               sizeof(cpu_set_t), &cpuset) != 0)
+      error("Failed to set thread affinity.");
+#endif
+  }
+}
 
 #ifdef WITH_CSDS
   if ((e->policy & engine_policy_csds) && !restart) {

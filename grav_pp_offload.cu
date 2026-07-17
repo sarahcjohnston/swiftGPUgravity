@@ -31,29 +31,46 @@
  */
 extern "C" void self_pp_offload_new(
     int periodic,
-    const float *rmax_d,
-    double min_trunc,
     const float *r_s_inv,
+    const int *self_cell_flags_d,
+    const int *self_use_full_d,
     const int *counts_d,
     const int *offsets_d,
     const int *active_counts_d,
     const int *active_offsets_d,
     const int *active_index_d,
-    struct gravity_gpu_values_send *send_d,
+    const float4 *send_self_pos_mass_d,
+    const float *send_self_h_d,
     struct gravity_gpu_values_recv *recv_d,
     int ncells,
     int max_cell_size,
     int max_active_count,
     GPUStream stream) {
 
-  int threads = 256;
+  (void)periodic;
+  (void)max_cell_size;
+
+  const int threads = 256;
   dim3 block(threads);
   dim3 grid(ncells, (max_active_count + threads - 1) / threads);
-  size_t shmem = threads * sizeof(gravity_gpu_values_send);
+
+  const size_t shmem =
+      threads * sizeof(float4) +
+      threads * sizeof(float);
 
   self_grav_pp_kernel_tiled<<<grid, block, shmem, stream>>>(
-      send_d, recv_d, counts_d, offsets_d, active_counts_d, active_offsets_d, active_index_d,
-      rmax_d, *r_s_inv, periodic, (float)min_trunc, ncells, max_cell_size);
+      self_cell_flags_d,
+      self_use_full_d,
+      send_self_pos_mass_d,
+      send_self_h_d,
+      recv_d,
+      counts_d,
+      offsets_d,
+      active_counts_d,
+      active_offsets_d,
+      active_index_d,
+      *r_s_inv,
+      ncells);
 
   GPUError err = GPUGetLastError();
   if (err != GPU_SUCCESS)

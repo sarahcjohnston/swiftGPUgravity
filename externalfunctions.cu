@@ -687,19 +687,18 @@ __global__ void doself_grav_pp_truncated_new_refactor_tiled(
 *
 **/
 __global__ void self_grav_pp_kernel_tiled(
-    const struct gravity_gpu_values_send *__restrict__ gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv *__restrict__ gravity_gpu_values_recv_d,
+    const int *__restrict__ self_cell_flags_d,
+    const int *__restrict__ self_use_full_d,
+    const float4 *__restrict__ send_pos_mass,
+    const float *__restrict__ send_h,
+    gravity_gpu_values_recv *__restrict__ recv,
     const int *__restrict__ counts_d,
     const int *__restrict__ offsets_d,
     const int *__restrict__ active_counts_d,
     const int *__restrict__ active_offsets_d,
     const int *__restrict__ active_index_d,
-    const float *__restrict__ rmax_d,
     float r_s_inv,
-    const int periodic,
-    float min_trunc,
-    int ncells,
-    int max_cell_size) {
+    int ncells) {
 
   const int cell = blockIdx.x;
   if (cell >= ncells) return;
@@ -707,82 +706,102 @@ __global__ void self_grav_pp_kernel_tiled(
   const int counts = counts_d[cell];
   if (counts <= 0) return;
 
+  const int flags = self_cell_flags_d[cell];
+  const int ci_active = flags & 1;
+  if (!ci_active) return;
+
   const int active_count = active_counts_d[cell];
   if (active_count <= 0) return;
 
   const int cell_offset = offsets_d[cell];
 
-  const float factor =
-      gravity_gpu_values_send_d[cell_offset].flags0.w ? 1.f : 0.f;
-  if (factor == 0.f) return;
-
-  const int use_full = (!periodic) || (rmax_d[cell] <= min_trunc);
+  const int use_full = self_use_full_d[cell];
 
   const int active_slot = blockIdx.y * blockDim.x + threadIdx.x;
-  const int valid_target = (active_slot < active_count);
+  const int valid_target = active_slot < active_count;
 
   const int active_base = active_offsets_d[cell];
-  int local_pid = 0;
+
+  const int local_pid =
+      valid_target ? active_index_d[active_base + active_slot] : 0;
+
+  float xi = 0.f;
+  float yi = 0.f;
+  float zi = 0.f;
+  float hi = 0.f;
+
   if (valid_target) {
-    local_pid = active_index_d[active_base + active_slot];
+    const float4 pi = send_pos_mass[cell_offset + local_pid];
+
+    xi = pi.x;
+    yi = pi.y;
+    zi = pi.z;
+    hi = send_h[cell_offset + local_pid];
   }
 
-  float xi = 0.f, yi = 0.f, zi = 0.f, hi = 0.f;
+  float ax = 0.f;
+  float ay = 0.f;
+  float az = 0.f;
+  float pot = 0.f;
 
-  if (valid_target) {
-    const gravity_gpu_values_send pi =
-        gravity_gpu_values_send_d[cell_offset + local_pid];
-    xi = pi.values_i.x;
-    yi = pi.values_i.y;
-    zi = pi.values_i.z;
-    hi = pi.values_i.w;
-  }
+  extern __shared__ char smem[];
 
-  float a_x = 0.f, a_y = 0.f, a_z = 0.f, pot = 0.f;
+  float4 *sh_pos_mass = (float4 *)smem;
+  float *sh_h = (float *)&sh_pos_mass[blockDim.x];
 
-  extern __shared__ gravity_gpu_values_send send[];
+  for (int j0 = 0; j0 < counts; j0 += blockDim.x) {
 
-  for (int i0 = 0; i0 < counts; i0 += blockDim.x) {
-    const int i = i0 + threadIdx.x;
-    if (i < counts) {
-      send[threadIdx.x] = gravity_gpu_values_send_d[cell_offset + i];
+    const int jload = j0 + threadIdx.x;
+
+    if (jload < counts) {
+      sh_pos_mass[threadIdx.x] = send_pos_mass[cell_offset + jload];
+      sh_h[threadIdx.x] = send_h[cell_offset + jload];
     }
+
     __syncthreads();
 
-    const int tile = min(blockDim.x, counts - i0);
+    const int tile = min(blockDim.x, counts - j0);
 
     if (valid_target) {
       for (int j = 0; j < tile; j++) {
-        const int src_local_pid = i0 + j;
+
+        const int src_local_pid = j0 + j;
 
         if (local_pid == src_local_pid) continue;
 
-        const gravity_gpu_values_send pj = send[j];
-        const float mass_j = pj.mass.y;
+        const float4 pj = sh_pos_mass[j];
 
-        const float dx = pj.values_j.x - xi;
-        const float dy = pj.values_j.y - yi;
-        const float dz = pj.values_j.z - zi;
+        const float xj = pj.x;
+        const float yj = pj.y;
+        const float zj = pj.z;
+        const float mj = pj.w;
+        const float hj = sh_h[j];
+
+        const float dx = xj - xi;
+        const float dy = yj - yi;
+        const float dz = zj - zi;
 
         const float r2 = dx * dx + dy * dy + dz * dz;
-        const float h = max(hi, pj.values_j.w);
-        const float h2 = h * h;
-        const float h_inv = 1.f / h;
-        const float h_inv_3 = h_inv * h_inv * h_inv;
 
-        float f_ij, pot_ij;
+        const float h = max(hi, hj);
+        const float h2 = h * h;
+        const float hinv = 1.f / h;
+        const float hinv3 = hinv * hinv * hinv;
+
+        float fij = 0.f;
+        float potij = 0.f;
 
         if (use_full) {
-          iact_grav_pp_full(r2, h2, h_inv, h_inv_3, mass_j, &f_ij, &pot_ij);
+          iact_grav_pp_full(r2, h2, hinv, hinv3, mj, &fij, &potij);
         } else {
           iact_grav_pp_truncated(
-              r2, h2, h_inv, h_inv_3, mass_j, r_s_inv, &f_ij, &pot_ij);
+              r2, h2, hinv, hinv3, mj, r_s_inv, &fij, &potij);
         }
 
-        a_x += f_ij * dx;
-        a_y += f_ij * dy;
-        a_z += f_ij * dz;
-        pot += pot_ij;
+        ax += fij * dx;
+        ay += fij * dy;
+        az += fij * dz;
+        pot += potij;
       }
     }
 
@@ -790,13 +809,16 @@ __global__ void self_grav_pp_kernel_tiled(
   }
 
   if (valid_target) {
-	  const int out = active_base + active_slot;
-	  gravity_gpu_values_recv_d[out].values_i.x = a_x * factor;
-	  gravity_gpu_values_recv_d[out].values_i.y = a_y * factor;
-	  gravity_gpu_values_recv_d[out].values_i.z = a_z * factor;
-	  gravity_gpu_values_recv_d[out].values_i.w = pot * factor;
- }
+    const int out = active_base + active_slot;
+
+    recv[out].values_i.x = ax;
+    recv[out].values_i.y = ay;
+    recv[out].values_i.z = az;
+    recv[out].values_i.w = pot;
+  }
 }
+
+
 /**
  * @brief Compute direct pair-cell P-P gravity interactions for one side of each packed pair.
  *

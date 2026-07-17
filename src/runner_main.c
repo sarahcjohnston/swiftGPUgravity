@@ -284,14 +284,13 @@ void *runner_main(void *data) {
           if (t->subtype == task_subtype_grav) {
             struct gpu_runner_substream *substream = runner_gpu_acquire_substream(r);
 	    gpu_task_type = runner_doself_recursive_grav_new(
-		    r, substream, ci, 1,
-		    substream->send_self_d,
-		    substream->recv_self_d,
+		    r,
+		    substream,
+		    ci,
+		    1,
 		    substream->grav_cells_self,
 		    substream->grav_tasks_self,
 		    t,
-		    substream->self_counts_d,
-		    substream->self_offsets_d,
 		    ncells,
 		    max_cell_size,
 		    substream->stream);
