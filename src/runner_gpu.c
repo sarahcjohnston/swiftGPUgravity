@@ -201,6 +201,80 @@ static inline void runner_gpu_check_error(const char *where) {
 /* This avoids changing runner_gpu.h and avoids shared locks in runner threads.*/
 /* ------------------------------------------------------------------------- */
 
+#ifdef SWIFT_DEBUG_TASKS
+
+static double runner_gpu_event_offset_s(
+    const GPUEvent start,
+    const GPUEvent stop) {
+
+  float elapsed_ms = 0.0f;
+
+  const GPUError err =
+      GPUEventElapsedTime(&elapsed_ms, start, stop);
+
+  if (err != GPU_SUCCESS) {
+    error("GPUEventElapsedTime failed: %s",
+          GPUGetErrorString(err));
+  }
+
+  return 1.0e-3 * (double)elapsed_ms;
+}
+
+
+static void runner_gpu_write_timeline_row(
+    const char *kind,
+    const long long step,
+    const int runner_id,
+    const int substream_id,
+    const ticks anchor_tic,
+    const ticks sync_toc,
+    const double h2d_end_s,
+    const double kernel_start_s,
+    const double kernel_end_s,
+    const double d2h_start_s,
+    const double d2h_end_s) {
+
+  const char *path = getenv("SWIFT_GPU_TIMELINE_FILE");
+
+  if (path == NULL || path[0] == '\0')
+    path = "gpu_timeline.csv";
+
+  FILE *fp = fopen(path, "a");
+
+  if (fp == NULL)
+    return;
+
+  fseek(fp, 0, SEEK_END);
+
+  if (ftell(fp) == 0) {
+    fprintf(
+        fp,
+        "kind,step,runner,substream,anchor_tic,sync_toc,"
+        "h2d_end_s,kernel_start_s,kernel_end_s,"
+        "d2h_start_s,d2h_end_s\n");
+  }
+
+  fprintf(
+      fp,
+      "%s,%lld,%d,%d,%llu,%llu,"
+      "%.9e,%.9e,%.9e,%.9e,%.9e\n",
+      kind,
+      step,
+      runner_id,
+      substream_id,
+      (unsigned long long)anchor_tic,
+      (unsigned long long)sync_toc,
+      h2d_end_s,
+      kernel_start_s,
+      kernel_end_s,
+      d2h_start_s,
+      d2h_end_s);
+
+  fclose(fp);
+}
+
+#endif /* SWIFT_DEBUG_TASKS */
+
 #ifdef SWIFT_GPU_TIMING 
 static __thread double runner_gpu_self_pack_time_s = 0.0;
 static __thread double runner_gpu_pair_pack_time_s = 0.0;
@@ -307,7 +381,7 @@ static void runner_gpu_write_timing_row(
   const char *path = getenv("SWIFT_GPU_TIMING_FILE");
 
   if (path == NULL || path[0] == '\0')
-    path = "gpu_timing.csv";
+    path = "gpu_timing_ga008.csv";
 
   FILE *fp = fopen(path, "a");
 
@@ -1097,6 +1171,32 @@ static void runner_dopair_grav_pp_flush(
 
   if (npairs == 0 || ncells_flush == 0)
     return;
+    
+  #ifdef SWIFT_DEBUG_TASKS
+
+  /* Host-clock anchors used to align the GPU timeline with the
+   * normal SWIFT task timeline. */
+  ticks gpu_anchor_tic = 0;
+  ticks gpu_sync_toc = 0;
+
+  /* Each runner owns its own array of GPU substreams. */
+  const int gpu_substream_id =
+      (int)(substream - r->gpu.substreams);
+
+#endif
+    
+  #ifdef SWIFT_DEBUG_TASKS
+  /*
+   * Record that an actual pair GPU batch flush occurred while this
+   * scheduler task was being processed.
+   *
+   * current_task is NULL for leftover/end-of-queue flushes, so those
+   * are deliberately not attributed to a scheduler task.
+   */
+  if (current_task != NULL) {
+    current_task->gpu_debug_pair_flushes++;
+  }
+#endif
 
   if (npairs < 0 || npairs > ncells / 2)
     error("Bad pair flush npairs=%d capacity=%d", npairs, ncells / 2);
@@ -1131,27 +1231,32 @@ static void runner_dopair_grav_pp_flush(
   const float dim_1 = (float)e->mesh->dim[1];
   const float dim_2 = (float)e->mesh->dim[2];
 
-  #ifdef SWIFT_GPU_TIMING 
-  const double pack_s = runner_gpu_pair_pack_time_s;
-  runner_gpu_pair_pack_time_s = 0.0;
+  #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
 
-  GPUEvent h2d_start, h2d_stop;
-  GPUEvent kernel_start, kernel_stop;
-  GPUEvent d2h_start, d2h_stop;
+GPUEvent h2d_start, h2d_stop;
+GPUEvent kernel_start, kernel_stop;
+GPUEvent d2h_start, d2h_stop;
 
-  GPUEventCreate(&h2d_start);
-  GPUEventCreate(&h2d_stop);
-  GPUEventCreate(&kernel_start);
-  GPUEventCreate(&kernel_stop);
-  GPUEventCreate(&d2h_start);
-  GPUEventCreate(&d2h_stop);
-  #endif
+GPUEventCreate(&h2d_start);
+GPUEventCreate(&h2d_stop);
+
+GPUEventCreate(&kernel_start);
+GPUEventCreate(&kernel_stop);
+
+GPUEventCreate(&d2h_start);
+GPUEventCreate(&d2h_stop);
+
+#endif
 
   /* ---- H2D copies ---- */
   {
-  #ifdef SWIFT_GPU_TIMING
-    GPUEventRecord(h2d_start, stream);
-  #endif
+  #ifdef SWIFT_DEBUG_TASKS
+  gpu_anchor_tic = getticks();
+#endif
+
+#if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
+GPUEventRecord(h2d_start, stream);
+#endif
 
     GPUMemcpyAsync(
         substream->send_pair_pos_mass_d,
@@ -1237,7 +1342,7 @@ static void runner_dopair_grav_pp_flush(
         GPU_MEMCPY_HOST_TO_DEVICE,
         stream);
         
-    #ifdef SWIFT_GPU_TIMING
+    #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
     GPUEventRecord(h2d_stop, stream);
     #endif
   }
@@ -1246,7 +1351,7 @@ static void runner_dopair_grav_pp_flush(
 
   /* ---- Kernel launch ---- */
   {
-    #ifdef SWIFT_GPU_TIMING 
+    #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
     GPUEventRecord(kernel_start, stream);
     #endif
 
@@ -1277,7 +1382,7 @@ static void runner_dopair_grav_pp_flush(
         substream->pair_max_active_count,
         stream);
     
-    #ifdef SWIFT_GPU_TIMING 
+    #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
     GPUEventRecord(kernel_stop, stream);
     #endif
   }
@@ -1286,7 +1391,7 @@ static void runner_dopair_grav_pp_flush(
 
   /* ---- D2H copy ---- */
   {
-    #ifdef SWIFT_GPU_TIMING 
+    #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
     GPUEventRecord(d2h_start, stream);
     #endif
 
@@ -1310,11 +1415,51 @@ static void runner_dopair_grav_pp_flush(
         GPU_MEMCPY_DEVICE_TO_HOST,
         stream);
         
-    #ifdef SWIFT_GPU_TIMING 
+    #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
     GPUEventRecord(d2h_stop, stream);
     #endif 
     GPUEventRecord(substream->done, stream);
     GPUEventSynchronize(substream->done);
+    
+    #ifdef SWIFT_DEBUG_TASKS
+  gpu_sync_toc = getticks();
+#endif
+    
+    #ifdef SWIFT_DEBUG_TASKS
+
+const double gpu_h2d_end_s =
+    runner_gpu_event_offset_s(h2d_start, h2d_stop);
+
+const double gpu_kernel_start_s =
+    runner_gpu_event_offset_s(h2d_start, kernel_start);
+
+const double gpu_kernel_end_s =
+    runner_gpu_event_offset_s(h2d_start, kernel_stop);
+
+const double gpu_d2h_start_s =
+    runner_gpu_event_offset_s(h2d_start, d2h_start);
+
+const double gpu_d2h_end_s =
+    runner_gpu_event_offset_s(h2d_start, d2h_stop);
+
+runner_gpu_write_timeline_row(
+    "pair",
+    (long long)e->step,
+    r->id,
+    gpu_substream_id,
+    gpu_anchor_tic,
+    gpu_sync_toc,
+    gpu_h2d_end_s,
+    gpu_kernel_start_s,
+    gpu_kernel_end_s,
+    gpu_d2h_start_s,
+    gpu_d2h_end_s);
+
+#endif
+    
+    #ifdef SWIFT_DEBUG_TASKS
+const ticks gpu_sync_toc = getticks();
+#endif
     
     #ifdef SWIFT_GPU_TIMING 
     h2d_s = runner_gpu_event_elapsed_s(h2d_start, h2d_stop);
@@ -1456,7 +1601,9 @@ static void runner_dopair_grav_pp_flush(
     kernel_s,
     d2h_s,
     unpack_s);
+  #endif
       
+  #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
   GPUEventDestroy(h2d_start);
   GPUEventDestroy(h2d_stop);
   GPUEventDestroy(kernel_start);
@@ -1746,29 +1893,51 @@ static void runner_doself_grav_pp_flush(
 
     const int nslots = substream->grav_batch_self_count;
     const int total = substream->self_total_count;
+    
+    #ifdef SWIFT_DEBUG_TASKS
 
-    #ifdef SWIFT_GPU_TIMING 
-    double h2d_s = 0.0;
-    double kernel_s = 0.0;
-    double d2h_s = 0.0;
-    double unpack_s = 0.0;
+  ticks gpu_anchor_tic = 0;
+  ticks gpu_sync_toc = 0;
 
-    GPUEvent h2d_start, h2d_stop;
-    GPUEvent kernel_start, kernel_stop;
-    GPUEvent d2h_start, d2h_stop;
+  const int gpu_substream_id =
+      (int)(substream - r->gpu.substreams);
 
-    GPUEventCreate(&h2d_start);
-    GPUEventCreate(&h2d_stop);
-    GPUEventCreate(&kernel_start);
-    GPUEventCreate(&kernel_stop);
-    GPUEventCreate(&d2h_start);
-    GPUEventCreate(&d2h_stop);
-    #endif 
+#endif
+
+    #ifdef SWIFT_GPU_TIMING
+
+  double h2d_s = 0.0;
+  double kernel_s = 0.0;
+  double d2h_s = 0.0;
+  double unpack_s = 0.0;
+
+#endif
+
+#if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
+
+  GPUEvent h2d_start, h2d_stop;
+  GPUEvent kernel_start, kernel_stop;
+  GPUEvent d2h_start, d2h_stop;
+
+  GPUEventCreate(&h2d_start);
+  GPUEventCreate(&h2d_stop);
+
+  GPUEventCreate(&kernel_start);
+  GPUEventCreate(&kernel_stop);
+
+  GPUEventCreate(&d2h_start);
+  GPUEventCreate(&d2h_stop);
+
+#endif 
 
     /* copy packed metadata */
-    #ifdef SWIFT_GPU_TIMING 
-    GPUEventRecord(h2d_start, substream->stream);
-    #endif
+    #ifdef SWIFT_DEBUG_TASKS
+  gpu_anchor_tic = getticks();
+#endif
+
+#if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
+  GPUEventRecord(h2d_start, substream->stream);
+#endif
     GPUMemcpyAsync(
         substream->self_counts_d,
         substream->self_counts_h,
@@ -1833,7 +2002,7 @@ static void runner_doself_grav_pp_flush(
 	    GPU_MEMCPY_HOST_TO_DEVICE,
 	    substream->stream);
 
-    #ifdef SWIFT_GPU_TIMING 
+    #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
     GPUEventRecord(h2d_stop, substream->stream);
     #endif 
 
@@ -1845,19 +2014,19 @@ static void runner_doself_grav_pp_flush(
 	    substream->stream);*/
 
     /* kernel */
-    #ifdef SWIFT_GPU_TIMING 
+    #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
     GPUEventRecord(kernel_start, substream->stream);
     #endif 
 
     runner_doself_grav_pp_flush(
     r, substream, nslots, substream->self_max_active_count, max_cell_size, substream->stream);
 
-    #ifdef SWIFT_GPU_TIMING 
+    #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
     GPUEventRecord(kernel_stop, substream->stream);
     #endif
 
     /* D2H: only live data */
-    #ifdef SWIFT_GPU_TIMING 
+    #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS) 
     GPUEventRecord(d2h_start, substream->stream);
     #endif
 
@@ -1869,17 +2038,53 @@ static void runner_doself_grav_pp_flush(
 	    GPU_MEMCPY_DEVICE_TO_HOST,
 	    substream->stream);
 
-    #ifdef SWIFT_GPU_TIMING 
+    #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS) 
     GPUEventRecord(d2h_stop, substream->stream);
     #endif
     GPUEventRecord(substream->done, substream->stream);
     GPUEventSynchronize(substream->done);
+    
+    #ifdef SWIFT_DEBUG_TASKS
+  gpu_sync_toc = getticks();
+#endif
 
     #ifdef SWIFT_GPU_TIMING 
     h2d_s = runner_gpu_event_elapsed_s(h2d_start, h2d_stop);
     kernel_s = runner_gpu_event_elapsed_s(kernel_start, kernel_stop);
     d2h_s = runner_gpu_event_elapsed_s(d2h_start, d2h_stop);
     #endif
+    
+    #ifdef SWIFT_DEBUG_TASKS
+
+  const double gpu_h2d_end_s =
+      runner_gpu_event_offset_s(h2d_start, h2d_stop);
+
+  const double gpu_kernel_start_s =
+      runner_gpu_event_offset_s(h2d_start, kernel_start);
+
+  const double gpu_kernel_end_s =
+      runner_gpu_event_offset_s(h2d_start, kernel_stop);
+
+  const double gpu_d2h_start_s =
+      runner_gpu_event_offset_s(h2d_start, d2h_start);
+
+  const double gpu_d2h_end_s =
+      runner_gpu_event_offset_s(h2d_start, d2h_stop);
+
+  runner_gpu_write_timeline_row(
+      "self",
+      (long long)r->e->step,
+      r->id,
+      gpu_substream_id,
+      gpu_anchor_tic,
+      gpu_sync_toc,
+      gpu_h2d_end_s,
+      gpu_kernel_start_s,
+      gpu_kernel_end_s,
+      gpu_d2h_start_s,
+      gpu_d2h_end_s);
+
+#endif
 
     /* ===================== UNPACK ===================== */
 
@@ -1950,14 +2155,20 @@ static void runner_doself_grav_pp_flush(
 	    kernel_s,
 	    d2h_s,
 	    unpack_s);
-
-    GPUEventDestroy(h2d_start);
-    GPUEventDestroy(h2d_stop);
-    GPUEventDestroy(kernel_start);
-    GPUEventDestroy(kernel_stop);
-    GPUEventDestroy(d2h_start);
-    GPUEventDestroy(d2h_stop);
     #endif
+    
+    #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
+
+  GPUEventDestroy(h2d_start);
+  GPUEventDestroy(h2d_stop);
+
+  GPUEventDestroy(kernel_start);
+  GPUEventDestroy(kernel_stop);
+
+  GPUEventDestroy(d2h_start);
+  GPUEventDestroy(d2h_stop);
+
+#endif
 
     /* ===================== COMPLETE TASKS ===================== */
 
@@ -3012,30 +3223,52 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
     const int max_cell_size = r->gpu.grav_max_cell_size;
 
     if (nslots == 0) continue;
+    
+    #ifdef SWIFT_DEBUG_TASKS
 
-    #ifdef SWIFT_GPU_TIMING 
-    double h2d_s = 0.0;
-    double kernel_s = 0.0;
-    double d2h_s = 0.0;
-    double unpack_s = 0.0;
+  ticks gpu_anchor_tic = 0;
+  ticks gpu_sync_toc = 0;
 
-    GPUEvent h2d_start, h2d_stop;
-    GPUEvent kernel_start, kernel_stop;
-    GPUEvent d2h_start, d2h_stop;
+  /* Here l already is the substream index. */
+  const int gpu_substream_id = l;
 
-    GPUEventCreate(&h2d_start);
-    GPUEventCreate(&h2d_stop);
-    GPUEventCreate(&kernel_start);
-    GPUEventCreate(&kernel_stop);
-    GPUEventCreate(&d2h_start);
-    GPUEventCreate(&d2h_stop);
-    #endif
+#endif
+
+    #ifdef SWIFT_GPU_TIMING
+
+  double h2d_s = 0.0;
+  double kernel_s = 0.0;
+  double d2h_s = 0.0;
+  double unpack_s = 0.0;
+
+#endif
+
+#if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
+
+  GPUEvent h2d_start, h2d_stop;
+  GPUEvent kernel_start, kernel_stop;
+  GPUEvent d2h_start, d2h_stop;
+
+  GPUEventCreate(&h2d_start);
+  GPUEventCreate(&h2d_stop);
+
+  GPUEventCreate(&kernel_start);
+  GPUEventCreate(&kernel_stop);
+
+  GPUEventCreate(&d2h_start);
+  GPUEventCreate(&d2h_stop);
+
+#endif
 
     /* ===================== H2D ===================== */
 
-    #ifdef SWIFT_GPU_TIMING 
-    GPUEventRecord(h2d_start, substream->stream);
-    #endif
+    #ifdef SWIFT_DEBUG_TASKS
+  gpu_anchor_tic = getticks();
+#endif
+
+#if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
+  GPUEventRecord(h2d_start, substream->stream);
+#endif
 
     GPUMemcpyAsync(substream->self_counts_d, substream->self_counts_h,
                    nslots * sizeof(int),
@@ -3094,13 +3327,13 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
             sizeof(struct gravity_gpu_values_recv),
         substream->stream);
 
-    #ifdef SWIFT_GPU_TIMING 
+    #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS) 
     GPUEventRecord(h2d_stop, substream->stream);
     #endif
 
     /* ===================== KERNEL ===================== */
 
-    #ifdef SWIFT_GPU_TIMING 
+    #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS) 
     GPUEventRecord(kernel_start, substream->stream);
     #endif 
 
@@ -3108,13 +3341,13 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
         r, substream, nslots, substream->self_max_active_count, max_cell_size,
         substream->stream);
 
-    #ifdef SWIFT_GPU_TIMING 
+    #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
     GPUEventRecord(kernel_stop, substream->stream);
     #endif 
 
     /* ===================== D2H ===================== */
 
-    #ifdef SWIFT_GPU_TIMING 
+    #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS) 
     GPUEventRecord(d2h_start, substream->stream);
     #endif 
 
@@ -3126,18 +3359,54 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
         GPU_MEMCPY_DEVICE_TO_HOST,
         substream->stream);
 
-    #ifdef SWIFT_GPU_TIMING 
+    #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS) 
     GPUEventRecord(d2h_stop, substream->stream);
     #endif
 
     GPUEventRecord(substream->done, substream->stream);
     GPUEventSynchronize(substream->done);
+    
+    #ifdef SWIFT_DEBUG_TASKS
+  gpu_sync_toc = getticks();
+#endif
 
     #ifdef SWIFT_GPU_TIMING 
     h2d_s = runner_gpu_event_elapsed_s(h2d_start, h2d_stop);
     kernel_s = runner_gpu_event_elapsed_s(kernel_start, kernel_stop);
     d2h_s = runner_gpu_event_elapsed_s(d2h_start, d2h_stop);
     #endif
+    
+    #ifdef SWIFT_DEBUG_TASKS
+
+  const double gpu_h2d_end_s =
+      runner_gpu_event_offset_s(h2d_start, h2d_stop);
+
+  const double gpu_kernel_start_s =
+      runner_gpu_event_offset_s(h2d_start, kernel_start);
+
+  const double gpu_kernel_end_s =
+      runner_gpu_event_offset_s(h2d_start, kernel_stop);
+
+  const double gpu_d2h_start_s =
+      runner_gpu_event_offset_s(h2d_start, d2h_start);
+
+  const double gpu_d2h_end_s =
+      runner_gpu_event_offset_s(h2d_start, d2h_stop);
+
+  runner_gpu_write_timeline_row(
+      "self",
+      (long long)r->e->step,
+      r->id,
+      gpu_substream_id,
+      gpu_anchor_tic,
+      gpu_sync_toc,
+      gpu_h2d_end_s,
+      gpu_kernel_start_s,
+      gpu_kernel_end_s,
+      gpu_d2h_start_s,
+      gpu_d2h_end_s);
+
+#endif
 
     /* ===================== UNPACK ===================== */
 
@@ -3205,14 +3474,20 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
 	    kernel_s,
 	    d2h_s,
 	    unpack_s);
-
-    GPUEventDestroy(h2d_start);
-    GPUEventDestroy(h2d_stop);
-    GPUEventDestroy(kernel_start);
-    GPUEventDestroy(kernel_stop);
-    GPUEventDestroy(d2h_start);
-    GPUEventDestroy(d2h_stop);
     #endif 
+    
+    #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
+
+  GPUEventDestroy(h2d_start);
+  GPUEventDestroy(h2d_stop);
+
+  GPUEventDestroy(kernel_start);
+  GPUEventDestroy(kernel_stop);
+
+  GPUEventDestroy(d2h_start);
+  GPUEventDestroy(d2h_stop);
+
+#endif
 
     runner_gpu_complete_self_batch(r, &r->e->sched, substream, NULL);
 

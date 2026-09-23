@@ -147,6 +147,12 @@
 #include "likwid_wrapper.h"
 #endif
 
+#ifdef SWIFT_DEBUG_TASKS
+int debug_gpu_packed = 0;
+int debug_gpu_flushed_pair = 0;
+int debug_gpu_flushed_self = 0;
+#endif
+
 /**
  * @brief The #runner main thread routine.
  *
@@ -660,7 +666,19 @@ void *runner_main(void *data) {
           error("Unknown/invalid task type (%d).", t->type);
       }
 
-      r->active_time += (getticks() - task_beg);
+      const ticks task_end = getticks();
+
+      r->active_time += task_end - task_beg;
+
+	/*
+	 * A deferred GPU task is no longer occupying this CPU runner after this
+	 * point. Close its CPU-side task interval now so task traces remain
+	 * non-overlapping.
+	 */
+	if (gpu_task_type != regular_task) {
+	  t->toc = task_end;
+	  t->total_ticks += t->toc - t->tic;
+	}
 
 /* Mark that we have run this task on these cells */
 #ifdef SWIFT_DEBUG_CHECKS
@@ -686,28 +704,25 @@ void *runner_main(void *data) {
           break;
 
         case packed_task: {
+          #ifdef SWIFT_DEBUG_TASKS
+  		debug_gpu_packed++;
+	  #endif
 
 	  if (t->type == task_type_pair && t->subtype == task_subtype_grav) {
 	    struct gpu_runner_substream *ss = &r->gpu.substreams[0];
-
-	    /*message("runner_main packed_pair_task: task=%p "
-		    "gpu_counted=%d gpu_completed=%d done_count=%d "
-		    "pair_left=%d pair_batch=%d pair_unique_cells=%d "
-		    "pair_total_count=%d pair_total_active=%d qid=%d",
-		    (void *)t,
-		    t->gpu_counted,
-		    t->gpu_completed,
-		    t->done_count,
-		    sched->queues[r->qid].gpu_pair_tasks_left,
-		    ss->grav_batch_pair_count,
-		    ss->pair_unique_cell_count,
-		    ss->pair_total_count,
-		    ss->pair_total_active_count,
-		    r->qid);*/
 	  }
-
-	  t->toc = getticks();
-	  t->total_ticks += t->toc - t->tic;
+	  
+	  #ifdef SWIFT_DEBUG_TASKS
+	  /*
+	   * This task has now finished occupying the CPU runner.
+	   * The task itself remains outstanding until its GPU batch completes.
+	   */
+	  if ((t->type == task_type_self || t->type == task_type_pair) &&
+	      t->subtype == task_subtype_grav) {
+	    t->gpu_host_toc = getticks();
+	    t->gpu_debug_result = gpu_debug_packed;
+	  }
+	  #endif
 
 	  prev = NULL;
 	  t = NULL;
@@ -716,14 +731,10 @@ void *runner_main(void *data) {
 
         case flushed_self_task:
 
-	  /*message("runner_main flushed_self_task: completing current self task=%p "
-		  "gpu_counted=%d gpu_completed=%d done_count=%d self_left=%d qid=%d",
-		  (void *)t,
-		  t->gpu_counted,
-		  t->gpu_completed,
-		  t->done_count,
-		  sched->queues[r->qid].gpu_self_tasks_left,
-		  r->qid);*/
+	  #ifdef SWIFT_DEBUG_TASKS
+		debug_gpu_flushed_self++;
+		t->gpu_debug_result = gpu_debug_flushed_self;
+	  #endif
 
 	  if (!t->gpu_completed)
   		runner_gpu_complete_current_self_task(r, sched, t);
@@ -733,6 +744,10 @@ void *runner_main(void *data) {
 	  break;
 
         case flushed_pair_task:
+        #ifdef SWIFT_DEBUG_TASKS
+  		debug_gpu_flushed_pair++;
+  		t->gpu_debug_result = gpu_debug_flushed_pair;
+	#endif
 
 	  /*message("runner_main flushed_pair_task: completing current pair task=%p "
 		  "gpu_counted=%d gpu_completed=%d done_count=%d pair_left=%d qid=%d",
@@ -753,6 +768,14 @@ void *runner_main(void *data) {
         default:
           error("Unknown GPU task result (%d).", gpu_task_type);
       }
+      
+    #ifdef SWIFT_DEBUG_TASKS
+	/*message("GPU task-debug runner=%d packed=%d flushed_self=%d flushed_pair=%d",
+		r->id,
+		debug_gpu_packed,
+		debug_gpu_flushed_self,
+		debug_gpu_flushed_pair);*/
+	#endif
 
     } /* main loop. */
   }

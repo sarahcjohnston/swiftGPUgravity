@@ -242,6 +242,9 @@ struct task *scheduler_addtask(struct scheduler *s, enum task_types type,
   t->nr_unlock_tasks = 0;
 #ifdef SWIFT_DEBUG_TASKS
   t->rid = -1;
+  t->gpu_host_toc = 0;
+  t->gpu_debug_result = gpu_debug_none;
+  t->gpu_debug_pair_flushes = 0;
 #endif
   t->tic = 0;
   t->toc = 0;
@@ -956,6 +959,12 @@ void scheduler_start(struct scheduler *s) {
   t->gpu_completed = 0;
   
   t->gpu_counted = 0;
+  
+#ifdef SWIFT_DEBUG_TASKS
+  t->gpu_host_toc = 0;
+  t->gpu_debug_result = gpu_debug_none;
+  t->gpu_debug_pair_flushes = 0;
+#endif
 }
 
   for (int i = 0; i < s->nr_queues; i++) {
@@ -1424,15 +1433,33 @@ struct task *scheduler_done(struct scheduler *s, struct task *t) {
 
   /* Task definitely done, signal any sleeping runners. */
   if (!t->implicit) {
+
+  /*
+   * Ordinary synchronous tasks are timed when scheduler_done() is called.
+   *
+   * GPU tasks have already had their CPU-side interval closed in
+   * runner_main(). Their scheduler completion occurs later and must not
+   * overwrite toc or add the submit-to-GPU-completion latency.
+   */
+  if (!t->gpu_completed) {
     t->toc = getticks();
     t->total_ticks += t->toc - t->tic;
+  }
 
-    pthread_mutex_lock(&s->sleep_mutex);
+#ifdef SWIFT_DEBUG_CHECKS
+  else if (t->toc == 0) {
+    error(
+        "GPU task completed without CPU-side timing being closed: "
+        "task=%p type=%s subtype=%s",
+        (void *)t, taskID_names[t->type],
+        subtaskID_names[t->subtype]);
+  }
+#endif
 
-    atomic_dec(&s->waiting);
-
-    pthread_cond_broadcast(&s->sleep_cond);
-    pthread_mutex_unlock(&s->sleep_mutex);
+  pthread_mutex_lock(&s->sleep_mutex);
+  atomic_dec(&s->waiting);
+  pthread_cond_broadcast(&s->sleep_cond);
+  pthread_mutex_unlock(&s->sleep_mutex);
   }
 
   /* Mark the task as skip. */
@@ -1440,6 +1467,8 @@ struct task *scheduler_done(struct scheduler *s, struct task *t) {
 
   return NULL;
 }
+
+
 
 /**
  * @brief Resolve a single dependency by hand.

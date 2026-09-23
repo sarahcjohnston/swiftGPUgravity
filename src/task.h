@@ -229,6 +229,23 @@ extern const char *task_category_names[];
 extern MPI_Comm subtaskMPI_comms[task_subtype_count];
 #endif
 
+#ifdef SWIFT_DEBUG_TASKS
+
+/**
+ * @brief Result of handling a GPU gravity task by a runner.
+ *
+ * Used only by the task-debugging machinery to distinguish tasks that
+ * were packed from tasks that triggered a GPU batch flush.
+ */
+enum gpu_debug_task_result {
+  gpu_debug_none = 0,
+  gpu_debug_packed = 1,
+  gpu_debug_flushed_self = 2,
+  gpu_debug_flushed_pair = 3
+};
+
+#endif
+
 /**
  * @brief A task to be run by the #scheduler.
  */
@@ -283,6 +300,13 @@ struct task {
 
   /*! Information about the direction of the pair task */
   short int sid;
+  
+   /*! End of the CPU-side work for an asynchronously offloaded GPU task. */
+  ticks gpu_host_toc;
+   enum gpu_debug_task_result gpu_debug_result;
+   
+   /*! Number of GPU pair batch flushes triggered while processing this task. */
+  int gpu_debug_pair_flushes;
 #endif
 
   /*! Start and end time of this task */

@@ -60,9 +60,7 @@ typedef struct cudaDeviceProp GPUDeviceProp;
 #define GPUGetDeviceProperties cudaGetDeviceProperties
 #define GPUMemGetInfo cudaMemGetInfo
 
-#ifdef SWIFT_GPU_TIMING 
 #define GPUEventElapsedTime cudaEventElapsedTime
-#endif 
 
 /**
  * @brief Allocate pinned host memory for GPU transfers.
@@ -123,9 +121,7 @@ typedef hipDeviceProp_t GPUDeviceProp;
 #define GPUGetDeviceProperties hipGetDeviceProperties
 #define GPUMemGetInfo hipMemGetInfo
 
-#ifdef SWIFT_GPU_TIMING 
 #define GPUEventElapsedTime hipEventElapsedTime
-#endif
 
 /**
  * @brief Allocate pinned host memory for GPU transfers.

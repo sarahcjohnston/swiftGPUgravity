@@ -2612,7 +2612,7 @@ enum runner_gpu_task_type runner_doself_recursive_grav_new(
 
   if (gettimer) {
 
-    TIMER_TOC(timer_doself_recursive_grav);
+    TIMER_TOC(timer_doself_grav_pp);
   }
   
   #ifdef SWIFT_DEBUG_CHECKS
