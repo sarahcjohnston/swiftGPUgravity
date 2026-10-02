@@ -28,20 +28,11 @@
 #include "multipole.h"
 #include "timers.h"
 
-/* GPU headers */
-#ifdef WITH_GPU
-#include "gpu_mapping.h"
-#endif
-
 /* Avoid cyclic inclusions. */
 struct runner;
 struct cell;
 struct task;
 struct scheduler;
-#ifdef WITH_GPU
-struct gravity_gpu_values_send;
-struct gravity_gpu_values_recv;
-#endif
 
 /**
  * @brief Clear the gravity unskip flags of this cell.
@@ -84,23 +75,6 @@ void runner_do_grav_long_range(struct runner *r, struct cell *ci, int timer);
 
 /* Internal CPU function. */
 void runner_doself_grav_pp(struct runner *r, struct cell *c);
-
-/* GPU-only interface. */
-#ifdef WITH_GPU
-
-enum runner_gpu_task_type runner_doself_recursive_grav_gpu(
-    struct runner *r,
-    struct gpu_runner_substream *substream,
-    struct cell *c,
-    const int gettimer,
-    struct cell **grav_cells_self,
-    struct task **grav_tasks_self,
-    struct task *t,
-    int ncells,
-    int max_cell_size,
-    GPUStream stream);
-
-#endif /* WITH_GPU */
 
 /**
  * @brief Computes the interaction of the field tensor in a cell with the

@@ -57,57 +57,6 @@
 #include "timers.h"
 #include "version.h"
 
-static void scheduler_mark_done_debug(struct scheduler *s,
-                                      struct task *t,
-                                      const char *where) {
-
-  if (t == NULL)
-    error("%s: scheduler_mark_done_debug got NULL task.", where);
-
-#ifdef WITH_MPI
-  int rank = -1;
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-#else
-  int rank = 0;
-#endif
-
-#ifdef WITH_GPU
-  const int old_count = t->done_count;
-  t->done_count++;
-
-  if (old_count > 0) {
-  error("Task completed more than once. "
-        "task=%p type=%s subtype=%s implicit=%d skip=%d wait=%d "
-        "old_count=%d new_where=%s old_where=%s "
-        "old_runner=%d old_qid=%d old_rank=%d "
-        "new_rank=%d gpu_completed=%d gpu_done_count=%d gpu_done_where=%s "
-        "nr_unlock_tasks=%d",
-        (void *)t,
-        taskID_names[t->type],
-        subtaskID_names[t->subtype],
-        t->implicit,
-        t->skip,
-        t->wait,
-        old_count,
-        where,
-        t->done_where != NULL ? t->done_where : "(null)",
-        t->done_runner,
-        t->done_qid,
-        t->done_rank,
-        rank,
-        t->gpu_completed,
-        t->gpu_done_count,
-        t->gpu_done_where != NULL ? t->gpu_done_where : "(null)",
-        t->nr_unlock_tasks);
-}
-
-  t->done_where = where;
-  t->done_runner = -1;
-  t->done_qid = -1;
-  t->done_rank = rank;
-#endif
-}
-
 /**
  * @brief Re-set the list of active tasks.
  *
@@ -252,23 +201,6 @@ struct task *scheduler_addtask(struct scheduler *s, enum task_types type,
   t->toc = 0;
   t->total_ticks = 0;
 #ifdef WITH_GPU
-  t->gpu_done_count = 0;
-  t->gpu_done_where = NULL;
-  t->gpu_done_runner = -1;
-  t->gpu_done_qid = -1;
-  t->gpu_done_rank = -1;
-  t->done_count = 0;
-  t->done_where = NULL;
-  t->done_runner = -1;
-  t->done_qid = -1;
-  t->done_rank = -1;
-
-  t->negative_wait_from_count = 0;
-  t->negative_wait_from_where = NULL;
-  t->wait_initial = -1;
-  t->wait_rank_seen = 0;
-  t->wait_set_where = NULL;
-  
   t->gpu_counted = 0;
 #endif
 
@@ -470,15 +402,6 @@ void scheduler_ranktasks(struct scheduler *s) {
     }
   }
 
-#ifdef WITH_GPU
-  /* Optional snapshot for debugging only. */
-  for (int i = 0; i < nr_tasks; i++) {
-    tasks[i].wait_initial = tasks[i].wait;
-    tasks[i].wait_rank_seen = 1;
-    tasks[i].wait_set_where = "scheduler_ranktasks:after_unlock_count";
-  }
-#endif
-
   /* Load the tids of tasks with no waits. */
   int left = 0;
   for (int k = 0; k < nr_tasks; k++) {
@@ -563,14 +486,12 @@ void scheduler_reset(struct scheduler *s, int size) {
   s->active_count = 0;
   s->total_ticks = 0;
 
-  /* Set the task pointers in the queues. */
-  for (int k = 0; k < s->nr_queues; k++) s->queues[k].tasks = s->tasks;
-  
+  /* Set the task pointers in the queues. */  
   for (int k = 0; k < s->nr_queues; k++) {
-  s->queues[k].tasks = s->tasks;
+    s->queues[k].tasks = s->tasks;
 #ifdef WITH_GPU
-  s->queues[k].gpu_self_tasks_left = 0;
-  s->queues[k].gpu_pair_tasks_left = 0;
+    s->queues[k].gpu_self_tasks_left = 0;
+    s->queues[k].gpu_pair_tasks_left = 0;
 #endif
 }
 }
@@ -959,20 +880,7 @@ void scheduler_start(struct scheduler *s) {
   struct task *t = &s->tasks[s->tid_active[i]];
 
 #ifdef WITH_GPU
-  t->done_count = 0;
-  t->done_where = NULL;
-  t->done_runner = -1;
-  t->done_qid = -1;
-  t->done_rank = -1;
-
-  t->gpu_done_count = 0;
-  t->gpu_done_where = NULL;
-  t->gpu_done_runner = -1;
-  t->gpu_done_qid = -1;
-  t->gpu_done_rank = -1;
-
   t->gpu_completed = 0;
-  
   t->gpu_counted = 0;
   
 #ifdef SWIFT_DEBUG_TASKS
@@ -1370,8 +1278,8 @@ void scheduler_enqueue(struct scheduler *s, struct task *t) {
     queue_insert(&s->queues[qid], t);
 
     /* Wake up one (or all) sleepers. */
-    pthread_mutex_lock(&s->sleep_mutex);  // MYCOMMENT
-    pthread_cond_signal(&s->sleep_cond);  // or broadcast
+    pthread_mutex_lock(&s->sleep_mutex);
+    pthread_cond_signal(&s->sleep_cond);
     pthread_mutex_unlock(&s->sleep_mutex);
 
   }
@@ -1387,8 +1295,6 @@ void scheduler_enqueue(struct scheduler *s, struct task *t) {
  *         been identified.
  */
 struct task *scheduler_done(struct scheduler *s, struct task *t) {
-
-  scheduler_mark_done_debug(s, t, "scheduler_done");
 
   /* Release whatever locks this task held. */
   if (!t->implicit) task_unlock(t);
@@ -1660,11 +1566,6 @@ struct task *scheduler_gettask(struct scheduler *s, int qid,
 
           /* Lucky? i.e. did we actually get a task? */
           if (res != NULL) {
-
-            /* For GPU tasks: Move counter from the robbed to the robber */
-            enum task_subtypes subtype = res->subtype;
-            enum task_types type = res->type;
-
             break;
           } else {
 

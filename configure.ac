@@ -834,7 +834,7 @@ GPU_DLINK_OBJECT=""
 
 CUDA_ROOT=""
 CUDA_CPPFLAGS="-I/usr/local/cuda/include"
-CUDA_LDFLAGS="-L/cosma/local/Nvidia-hpc-sdk/2025_253/Linux_x86_64/25.3/cuda/lib64 -L/usr/local/cuda/lib64"
+CUDA_LDFLAGS="-L/usr/local/cuda/lib64"
 CUDA_LIBS="-lcudadevrt -lcudart -lcuda -lstdc++"
 CUDA_FLAGS="-arch=native -fmad=false"
 

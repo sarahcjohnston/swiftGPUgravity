@@ -215,10 +215,6 @@ void *runner_main(void *data) {
     }
     
     lock_lock(&sched->queues[r->qid].lock);
-    
-    for (int l = 0; l < r->gpu.nstreams; l++) {
-  struct gpu_runner_substream *substream = &r->gpu.substreams[l];
-}
 
   if (sched->queues[r->qid].gpu_self_tasks_left != 0 ||
       sched->queues[r->qid].gpu_pair_tasks_left != 0) {

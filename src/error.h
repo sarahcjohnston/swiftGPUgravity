@@ -177,9 +177,6 @@ extern int engine_rank;
   })
 #endif
 
-#ifdef assert
-#undef assert
-#endif
 /**
  * @brief Assertion macro compatible with MPI
  *

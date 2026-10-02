@@ -87,12 +87,11 @@ static void runner_gpu_count_self_task(struct runner *r,
 
   if (t->gpu_completed) {
     error("Packing already GPU-completed self task: task=%p type=%s subtype=%s "
-          "gpu_counted=%d done_count=%d qid=%d self_left=%d",
+          "gpu_counted=%d qid=%d self_left=%d",
           (void *)t,
           taskID_names[t->type],
           subtaskID_names[t->subtype],
           t->gpu_counted,
-          t->done_count,
           r->qid,
           sched->queues[r->qid].gpu_self_tasks_left);
   }
@@ -121,17 +120,6 @@ static void runner_gpu_count_pair_task(struct runner *r,
 
   if (t == NULL)
     error("runner_gpu_count_pair_task got NULL task.");
-
-  if (t->gpu_completed) {
-    error("Packing already GPU-completed pair task: task=%p type=%s subtype=%s "
-          "gpu_counted=%d done_count=%d qid=%d",
-          (void *)t,
-          taskID_names[t->type],
-          subtaskID_names[t->subtype],
-          t->gpu_counted,
-          t->done_count,
-          r->qid);
-  }
 
   if (t->gpu_counted)
     return;
@@ -193,34 +181,6 @@ static void runner_gpu_mark_done_debug(
   int rank = 0;
 #endif
 
-  const int old_count = t->gpu_done_count;
-
-  t->gpu_done_count++;
-
-  if (old_count > 0) {
-    error("GPU task completed more than once. "
-          "task=%p type=%s subtype=%s old_count=%d new_where=%s "
-          "old_where=%s old_runner=%d old_qid=%d old_rank=%d "
-          "new_runner=%d new_qid=%d new_rank=%d gpu_completed=%d",
-          (void *)t,
-          taskID_names[t->type],
-          subtaskID_names[t->subtype],
-          old_count,
-          where,
-          t->gpu_done_where != NULL ? t->gpu_done_where : "(null)",
-          t->gpu_done_runner,
-          t->gpu_done_qid,
-          t->gpu_done_rank,
-          r->id,
-          r->qid,
-          rank,
-          t->gpu_completed);
-  }
-
-  t->gpu_done_where = where;
-  t->gpu_done_runner = r->id;
-  t->gpu_done_qid = r->qid;
-  t->gpu_done_rank = rank;
 }
 
 /**
@@ -813,13 +773,12 @@ static void runner_gpu_complete_self_task(struct runner *r,
 
   if (t->gpu_completed) {
 	  error("runner_gpu_complete_self_task called for already-completed task: "
-		"task=%p type=%s subtype=%s gpu_counted=%d done_count=%d "
+		"task=%p type=%s subtype=%s gpu_counted=%d"
 		"self_left=%d qid=%d",
 		(void *)t,
 		taskID_names[t->type],
 		subtaskID_names[t->subtype],
 		t->gpu_counted,
-		t->done_count,
 		sched->queues[r->qid].gpu_self_tasks_left,
 		r->qid);
 	}
@@ -828,12 +787,11 @@ static void runner_gpu_complete_self_task(struct runner *r,
 
   if (!t->gpu_counted) {
 	  error("Completing uncounted GPU self task: task=%p type=%s subtype=%s "
-		"gpu_completed=%d done_count=%d qid=%d",
+		"gpu_completed=%d qid=%d",
 		(void *)t,
 		taskID_names[t->type],
 		subtaskID_names[t->subtype],
 		t->gpu_completed,
-		t->done_count,
 		r->qid);
 	}
 
@@ -886,13 +844,12 @@ void runner_gpu_complete_pair_task(struct runner *r, struct scheduler *sched,
 
   if (t->gpu_completed) {
     error("runner_gpu_complete_pair_task called for already-completed task: "
-          "task=%p type=%s subtype=%s gpu_counted=%d done_count=%d "
+          "task=%p type=%s subtype=%s gpu_counted=%d "
           "pair_left=%d qid=%d",
           (void *)t,
           taskID_names[t->type],
           subtaskID_names[t->subtype],
           t->gpu_counted,
-          t->done_count,
           sched->queues[r->qid].gpu_pair_tasks_left,
           r->qid);
   }
@@ -901,12 +858,11 @@ void runner_gpu_complete_pair_task(struct runner *r, struct scheduler *sched,
 
   if (!t->gpu_counted) {
     error("Completing uncounted GPU pair task: task=%p type=%s subtype=%s "
-          "gpu_completed=%d done_count=%d qid=%d pair_left=%d",
+          "gpu_completed=%d qid=%d pair_left=%d",
           (void *)t,
           taskID_names[t->type],
           subtaskID_names[t->subtype],
           t->gpu_completed,
-          t->done_count,
           r->qid,
           sched->queues[r->qid].gpu_pair_tasks_left);
   }
@@ -3775,4 +3731,109 @@ for (int l = 0; l < r->gpu.nstreams; l++) {
   }
 
   return result;
+}
+
+/**
+ * @brief Computes the interaction of all the particles in a cell.
+ *
+ * This function will try to recurse as far down the tree as possible and only
+ * default to direct summation if there is no better option.
+ *
+ * @param r The #runner.
+ * @param c The first #cell.
+ * @param gettimer Are we timing this ?
+ */
+enum runner_gpu_task_type runner_doself_recursive_grav_gpu(
+    struct runner *r,
+    struct gpu_runner_substream *substream,
+    struct cell *c,
+    const int gettimer,
+    struct cell **grav_cells_self,
+    struct task **grav_tasks_self,
+    struct task *t,
+    int ncells,
+    int max_cell_size,
+    GPUStream stream) {
+
+  const struct engine *e = r->e;
+
+  runner_clear_grav_flags(c, e);
+
+#ifdef SWIFT_DEBUG_CHECKS
+  if (c->grav.count == 0) error("Doing self gravity on an empty cell !");
+#endif
+
+  TIMER_TIC;
+
+  if (!cell_is_active_gravity(c, e)) {
+    if (gettimer) TIMER_TOC(timer_dosub_self_grav);
+    return regular_task;
+  }
+
+  enum runner_gpu_task_type task_type = regular_task;
+
+  if (c->split) {
+
+    for (int j = 0; j < 8; j++) {
+      if (c->progeny[j] == NULL) continue;
+
+      enum runner_gpu_task_type child_self_type =
+          runner_doself_recursive_grav_gpu(
+		    r,
+		    substream,
+		    c->progeny[j],
+		    0,
+		    grav_cells_self,
+		    grav_tasks_self,
+		    t,
+		    ncells,
+		    max_cell_size,
+		    stream);
+
+      if (child_self_type > task_type) task_type = child_self_type;
+
+      for (int k = j + 1; k < 8; k++) {
+        if (c->progeny[k] == NULL) continue;
+
+        enum runner_gpu_task_type child_pair_type =
+    	runner_dopair_recursive_grav_gpu(
+        	r, substream, c->progeny[j], c->progeny[k], 0,
+        	substream->grav_cells_pair, substream->grav_tasks_pair,
+        	substream->grav_pair_internal_from_self,
+        	t, 1, ncells, max_cell_size, substream->stream);
+
+        if (child_pair_type > task_type) task_type = child_pair_type;
+      }
+    }
+
+  } else {
+
+    /* Leaf self cell: pack it */
+    task_type = runner_doself_grav_pp_task_gpu(
+        r, substream, c, t, ncells, max_cell_size);
+  }
+
+    enum runner_gpu_task_type final_type = regular_task;
+
+  if (task_type == packed_task) {
+    final_type = packed_task;
+  } else if (task_type == flushed_self_task ||
+             task_type == flushed_pair_task) {
+    final_type = flushed_self_task;
+  } else {
+    final_type = regular_task;
+  }
+
+  if (gettimer) {
+
+    TIMER_TOC(timer_doself_grav_pp);
+  }
+  
+  #ifdef SWIFT_DEBUG_CHECKS
+  if (gettimer && substream->grav_batch_self_count != 0)
+    error("Top-level self task returned with leftover packed self work.");
+  #endif
+
+  if (gettimer) TIMER_TOC(timer_dosub_self_grav);
+  return final_type;
 }

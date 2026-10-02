@@ -76,10 +76,11 @@ struct queue {
   volatile unsigned int first_incoming, last_incoming, count_incoming;
   
 #ifdef WITH_GPU
+  /*! Number of self-gravity scheduler tasks awaiting GPU completion. */
   int gpu_self_tasks_left;
+
+  /*! Number of pair-gravity scheduler tasks awaiting GPU completion. */
   int gpu_pair_tasks_left;
-  
-  int pack_count_pair;
 #endif
 
 } __attribute__((aligned(queue_struct_align)));
