@@ -185,20 +185,18 @@ void scheduler_addunlock(struct scheduler *s, struct task *ta,
   atomic_inc(&s->completed_unlock_writes);
 }
 
-
 /**
- * @brief Split a gravity task if too large.
- *
- * @param t The #task
- * @param s The #scheduler we are working in.
+ * @brief Describe the level at which the task are done.
+ * WARNING: the order is supposed to be sorted from the root
+ * to the leaf.
  */
-
-/**
- * @brief Split a FOF task if too large.
- *
- * @param t The #task
- * @param s The #scheduler we are working in.
- */
+enum task_dependency_level {
+  task_dependency_level_top = 0,
+  task_dependency_level_super,
+  task_dependency_level_super_hydro,
+  task_dependency_level_super_grav,
+  task_dependency_level_none,
+};
 
 /**
  * @brief Add a #task to the #scheduler.
@@ -460,6 +458,7 @@ void scheduler_ranktasks(struct scheduler *s) {
   for (int i = 0; i < nr_tasks; i++) {
     struct task *t = &tasks[i];
 
+    // Increment the waits of the dependances
     for (int k = 0; k < t->nr_unlock_tasks; k++) {
       t->unlock_tasks[k]->wait++;
     }
@@ -483,16 +482,19 @@ void scheduler_ranktasks(struct scheduler *s) {
 
   /* Main loop. */
   for (int j = 0, rank = 0; j < nr_tasks; rank++) {
-
-    if (j == left)
-      error("Unsatisfiable task dependencies detected.");
-
+    /* Did we get anything? */
+    if (j == left) error("Unsatisfiable task dependencies detected.");
+ 
+    /* Unlock the next layer of tasks. */
     const int left_old = left;
 
     for (; j < left_old; j++) {
       struct task *t = &tasks[tid[j]];
 
       t->rank = rank;
+       /* message( "task %i of type %s has rank %i." , i ,
+          (t->type == task_type_self) ? "self" : (t->type == task_type_pair) ?
+         "pair" : "sort" , rank ); */
 
       for (int k = 0; k < t->nr_unlock_tasks; k++) {
         struct task *u = t->unlock_tasks[k];
@@ -504,10 +506,12 @@ void scheduler_ranktasks(struct scheduler *s) {
       }
     }
 
+    /* Move back to the old left (like Sanders!). */
     j = left_old;
   }
 
 #ifdef SWIFT_DEBUG_CHECKS
+  /* Verify that the tasks were ranked correctly. */
   for (int k = 1; k < s->nr_tasks; k++)
     if (tasks[tid[k - 1]].rank > tasks[tid[k]].rank)
       error("Task ranking failed.");
@@ -1092,17 +1096,23 @@ void scheduler_enqueue(struct scheduler *s, struct task *t) {
 
           count = size = t->ci->mpi.pcell_size * sizeof(struct pcell_step);
           buff = t->buff = malloc(count);
+          if (buff == NULL)
+            error("Failed to allocate an MPI communication buffer.");
 
         } else if (t->subtype == task_subtype_part_swallow) {
 
           count = size =
               t->ci->hydro.count * sizeof(struct black_holes_part_data);
           buff = t->buff = malloc(count);
+          if (buff == NULL)
+            error("Failed to allocate an MPI communication buffer.");
 
         } else if (t->subtype == task_subtype_bpart_merger) {
           count = size =
               sizeof(struct black_holes_bpart_data) * t->ci->black_holes.count;
           buff = t->buff = malloc(count);
+          if (buff == NULL)
+            error("Failed to allocate an MPI communication buffer.");
 
         } else if (t->subtype == task_subtype_xv ||
                    t->subtype == task_subtype_rho ||
@@ -1159,11 +1169,15 @@ void scheduler_enqueue(struct scheduler *s, struct task *t) {
 
           count = size = t->ci->mpi.pcell_size * sizeof(struct pcell_sf_stars);
           buff = t->buff = malloc(count);
+          if (buff == NULL)
+            error("Failed to allocate an MPI communication buffer.");
 
         } else if (t->subtype == task_subtype_grav_counts) {
 
           count = size = t->ci->mpi.pcell_size * sizeof(struct pcell_sf_grav);
           buff = t->buff = malloc(count);
+          if (buff == NULL)
+            error("Failed to allocate an MPI communication buffer.");
 
         } else {
           error("Unknown communication sub-type");
@@ -1198,6 +1212,8 @@ void scheduler_enqueue(struct scheduler *s, struct task *t) {
 
           size = count = t->ci->mpi.pcell_size * sizeof(struct pcell_step);
           buff = t->buff = malloc(size);
+          if (buff == NULL)
+            error("Failed to allocate an MPI communication buffer.");
           cell_pack_end_step(t->ci, (struct pcell_step *)buff);
 
         } else if (t->subtype == task_subtype_part_swallow) {
@@ -1205,6 +1221,8 @@ void scheduler_enqueue(struct scheduler *s, struct task *t) {
           size = count =
               t->ci->hydro.count * sizeof(struct black_holes_part_data);
           buff = t->buff = malloc(size);
+          if (buff == NULL)
+            error("Failed to allocate an MPI communication buffer.");
           cell_pack_part_swallow(t->ci, (struct black_holes_part_data *)buff);
 
         } else if (t->subtype == task_subtype_bpart_merger) {
@@ -1212,6 +1230,8 @@ void scheduler_enqueue(struct scheduler *s, struct task *t) {
           size = count =
               sizeof(struct black_holes_bpart_data) * t->ci->black_holes.count;
           buff = t->buff = malloc(size);
+          if (buff == NULL)
+            error("Failed to allocate an MPI communication buffer.");
           cell_pack_bpart_swallow(t->ci,
                                   (struct black_holes_bpart_data *)t->buff);
 
@@ -1267,12 +1287,16 @@ void scheduler_enqueue(struct scheduler *s, struct task *t) {
 
           size = count = t->ci->mpi.pcell_size * sizeof(struct pcell_sf_stars);
           buff = t->buff = malloc(size);
+          if (buff == NULL)
+            error("Failed to allocate an MPI communication buffer.");
           cell_pack_sf_counts(t->ci, (struct pcell_sf_stars *)t->buff);
 
         } else if (t->subtype == task_subtype_grav_counts) {
 
           size = count = t->ci->mpi.pcell_size * sizeof(struct pcell_sf_grav);
           buff = t->buff = malloc(size);
+          if (buff == NULL)
+            error("Failed to allocate an MPI communication buffer.");
           cell_pack_grav_counts(t->ci, (struct pcell_sf_grav *)t->buff);
 
         } else {
@@ -1358,7 +1382,6 @@ struct task *scheduler_done(struct scheduler *s, struct task *t) {
   /* Loop through the dependencies and add them to a queue if
      they are ready. */
   for (int k = 0; k < t->nr_unlock_tasks; k++) {
-
     struct task *t2 = t->unlock_tasks[k];
 
     if (t2 == NULL)
@@ -1378,55 +1401,10 @@ struct task *scheduler_done(struct scheduler *s, struct task *t) {
      *   res == 1  -> wait changed 1 -> 0, task is now ready.
      *   res < 1   -> wait was already <= 0 before this decrement.
      */
-    const int old_wait = atomic_dec(&t2->wait);
-    const int new_wait = old_wait - 1;
-
-    if (old_wait < 1) {
-
-      message("Negative wait diagnostic: "
-        "completed task=%p type=%s subtype=%s implicit=%d skip=%d "
-        "done_count=%d done_where=%s "
-        "gpu_completed=%d gpu_done_count=%d gpu_done_where=%s "
-        "unlock_index=%d nr_unlock_tasks=%d "
-        "target task=%p type=%s subtype=%s implicit=%d skip=%d "
-        "old_wait=%d new_wait=%d "
-        "target_wait_initial=%d target_wait_rank_seen=%d "
-        "target_wait_set_where=%s "
-        "target_done_count=%d target_done_where=%s "
-        "target_gpu_completed=%d target_gpu_done_count=%d "
-        "target_gpu_done_where=%s",
-        (void *)t,
-        taskID_names[t->type],
-        subtaskID_names[t->subtype],
-        t->implicit,
-        t->skip,
-        t->done_count,
-        t->done_where != NULL ? t->done_where : "(null)",
-        t->gpu_completed,
-        t->gpu_done_count,
-        t->gpu_done_where != NULL ? t->gpu_done_where : "(null)",
-        k,
-        t->nr_unlock_tasks,
-        (void *)t2,
-        taskID_names[t2->type],
-        subtaskID_names[t2->subtype],
-        t2->implicit,
-        t2->skip,
-        old_wait,
-        new_wait,
-        t2->wait_initial,
-        t2->wait_rank_seen,
-        t2->wait_set_where != NULL ? t2->wait_set_where : "(null)",
-        t2->done_count,
-        t2->done_where != NULL ? t2->done_where : "(null)",
-        t2->gpu_completed,
-        t2->gpu_done_count,
-        t2->gpu_done_where != NULL ? t2->gpu_done_where : "(null)");
-
+    const int res = atomic_dec(&t2->wait);
+    if (res < 1) {
       error("Negative wait!");
-    }
-
-    if (old_wait == 1) {
+    } else if (res == 1) {
       scheduler_enqueue(s, t2);
     }
   }
@@ -1465,6 +1443,9 @@ struct task *scheduler_done(struct scheduler *s, struct task *t) {
   /* Mark the task as skip. */
   t->skip = 1;
 
+  /* Return the next best task. Note that we currently do not
+     implement anything that does this, as getting it to respect
+     priorities is too tricky and currently unnecessary. */
   return NULL;
 }
 
@@ -1549,13 +1530,13 @@ void scheduler_check_deadlock(struct scheduler *s) {
   ticks last = s->last_successful_task_fetch;
 
   if (last == 0LL) {
-    /* Ensure that the first check each engine_launch doesn't fail. There is
-     * no guarantee how long it will take from the point where
+    /* Ensure that the first check each engine_launch doesn't fail. There is no
+     * guarantee how long it will take from the point where
      * last_successful_task_fetch was reset to get to this point. A poorly
-     * chosen scheduler->deadlock_waiting_time_ms may abort a big run in
-     * places where there is no deadlock. Better safe than sorry, so at
-     * start-up, the last successful task fetch time is marked as 0. So we
-     * just exit without checking the time. */
+     * chosen scheduler->deadlock_waiting_time_ms may abort a big run in places
+     * where there is no deadlock. Better safe than sorry, so at start-up, the
+     * last successful task fetch time is marked as 0. So we just exit without
+     * checking the time. */
     while (atomic_cas(&s->last_successful_task_fetch, last, now) != last) {
       now = getticks();
       last = s->last_successful_task_fetch;
@@ -1572,8 +1553,7 @@ void scheduler_check_deadlock(struct scheduler *s) {
 
   if (idle_time > s->deadlock_waiting_time_ms) {
     message(
-        "Detected what looks like a deadlock after %g ms of no new task "
-        "being "
+        "Detected what looks like a deadlock after %g ms of no new task being "
         "fetched from queues. Dumping diagnostic data.",
         idle_time);
     engine_dump_diagnostic_data(s->e);

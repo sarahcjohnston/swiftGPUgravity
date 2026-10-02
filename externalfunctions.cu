@@ -373,7 +373,6 @@ __global__ void doself_grav_pp_truncated_new_refactor(struct gravity_gpu_values_
 	
 	int cell_space = cell*max_cell_size;
 	int counts = gravity_gpu_values_send_d[cell_space].flags0.z;
-	//printf("counts: %i \n", counts);
 	
 	float factor = gravity_gpu_values_send_d[cell_space].flags0.w*(periodic ? 1.f : 0.f)*abs(max_r_decision-1);
 	if (factor == 0)
@@ -859,11 +858,11 @@ __global__ void pair_grav_pp_kernel(
   int pid = blockIdx.y * blockDim.x + threadIdx.x;
   if (pid >= count_i) return;
 
-  // Only update if this target cell is active (matches CPU)
+  /* Only update if this target cell is active (matches CPU) */
   int ci_active = send[base_i].flags0.w;
   if (!ci_active) return;
 
-  // active particle gating
+  /* active particle gating */
   int act = (send[base_i + pid].flags0.x > 0);
   if (!act) return;
 

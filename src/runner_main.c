@@ -214,17 +214,6 @@ void *runner_main(void *data) {
     
     for (int l = 0; l < r->gpu.nstreams; l++) {
   struct gpu_runner_substream *substream = &r->gpu.substreams[l];
-
-  /*message("GPU leftovers before runner exit: qid=%d stream=%d "
-          "self_batch=%d pair_batch=%d pair_unique_cells=%d "
-          "gpu_self_tasks_left=%d gpu_pair_tasks_left=%d",
-          r->qid,
-          l,
-          substream->grav_batch_self_count,
-          substream->grav_batch_pair_count,
-          substream->pair_unique_cell_count,
-          sched->queues[r->qid].gpu_self_tasks_left,
-          sched->queues[r->qid].gpu_pair_tasks_left);*/
 }
 
   if (sched->queues[r->qid].gpu_self_tasks_left != 0 ||
@@ -240,18 +229,6 @@ void *runner_main(void *data) {
 
     break;
   }
-
-  /*message("runner_main got task: task=%p type=%s subtype=%s "
-        "implicit=%d skip=%d wait=%d done_count=%d gpu_completed=%d qid=%d",
-        (void *)t,
-        taskID_names[t->type],
-        subtaskID_names[t->subtype],
-        t->implicit,
-        t->skip,
-        t->wait,
-        t->done_count,
-        t->gpu_completed,
-        r->qid);*/
 }
 
       /* Get the cells. */
@@ -707,10 +684,6 @@ void *runner_main(void *data) {
           #ifdef SWIFT_DEBUG_TASKS
   		debug_gpu_packed++;
 	  #endif
-
-	  if (t->type == task_type_pair && t->subtype == task_subtype_grav) {
-	    struct gpu_runner_substream *ss = &r->gpu.substreams[0];
-	  }
 	  
 	  #ifdef SWIFT_DEBUG_TASKS
 	  /*
@@ -749,15 +722,6 @@ void *runner_main(void *data) {
   		t->gpu_debug_result = gpu_debug_flushed_pair;
 	#endif
 
-	  /*message("runner_main flushed_pair_task: completing current pair task=%p "
-		  "gpu_counted=%d gpu_completed=%d done_count=%d pair_left=%d qid=%d",
-		  (void *)t,
-		  t->gpu_counted,
-		  t->gpu_completed,
-		  t->done_count,
-		  sched->queues[r->qid].gpu_pair_tasks_left,
-		  r->qid);*/
-
 	  if (!t->gpu_completed)
 	    runner_gpu_complete_pair_task(r, sched, t);
 
@@ -769,13 +733,6 @@ void *runner_main(void *data) {
           error("Unknown GPU task result (%d).", gpu_task_type);
       }
       
-    #ifdef SWIFT_DEBUG_TASKS
-	/*message("GPU task-debug runner=%d packed=%d flushed_self=%d flushed_pair=%d",
-		r->id,
-		debug_gpu_packed,
-		debug_gpu_flushed_self,
-		debug_gpu_flushed_pair);*/
-	#endif
 
     } /* main loop. */
   }

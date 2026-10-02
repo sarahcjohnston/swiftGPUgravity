@@ -42,6 +42,17 @@
 
 static int runner_gpu_local_ranks_on_device_for_budget = 1;
 
+/* ------------------------------------------------------------------------- */
+/* GPU debugging helpers: functions relating to the debugging checks for GPU */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * @brief Check the counters of the GPU queues to ensure no counting errors
+ *
+ * @param r The #runner
+ * @param sched The scheduler
+ * @param where	The string for the function that causes the error
+ */
 static void runner_gpu_check_queue_counters(struct runner *r,
                                             struct scheduler *sched,
                                             const char *where) {
@@ -60,6 +71,13 @@ static void runner_gpu_check_queue_counters(struct runner *r,
   }
 }
 
+/**
+ * @brief Record debugging info when a GPU task is completed
+ *
+ * @param r The #runner
+ * @param sched The scheduler
+ * @param t The #task
+ */
 static void runner_gpu_count_self_task(struct runner *r,
                                        struct scheduler *sched,
                                        struct task *t) {
@@ -87,12 +105,16 @@ static void runner_gpu_count_self_task(struct runner *r,
   lock_lock(&sched->queues[r->qid].lock);
   sched->queues[r->qid].gpu_self_tasks_left++;
   runner_gpu_check_queue_counters(r, sched, "runner_gpu_count_self_task");
-  /*message("GPU_SELF_COUNTER_INC packed: task=%p qid=%d new=%d",
-          (void *)t, r->qid,
-          sched->queues[r->qid].gpu_self_tasks_left);*/
   (void)lock_unlock(&sched->queues[r->qid].lock);
 }
 
+/**
+ * @brief Count the number of GPU pair tasks
+ *
+ * @param r The #runner
+ * @param sched The scheduler
+ * @param t The #task
+ */
 static void runner_gpu_count_pair_task(struct runner *r,
                                        struct scheduler *sched,
                                        struct task *t) {
@@ -119,13 +141,14 @@ static void runner_gpu_count_pair_task(struct runner *r,
   lock_lock(&sched->queues[r->qid].lock);
   sched->queues[r->qid].gpu_pair_tasks_left++;
   runner_gpu_check_queue_counters(r, sched, "runner_gpu_count_pair_task");
-  /*message("GPU_PAIR_COUNTER_INC packed: task=%p qid=%d new=%d",
-          (void *)t, r->qid,
-          sched->queues[r->qid].gpu_pair_tasks_left);*/
   (void)lock_unlock(&sched->queues[r->qid].lock);
 }
 
-
+/**
+ * @brief Bind the GPU to the MPI rank
+ *
+ * @param r The #runner
+ */
 void runner_gpu_bind_device(struct runner *r) {
 
 #if defined(WITH_CUDA) || defined(WITH_HIP)
@@ -144,6 +167,17 @@ void runner_gpu_bind_device(struct runner *r) {
 #endif
 }
 
+/**
+ * @brief Record debugging information when a GPU task is completed.
+ *
+ * Increments the GPU completion counter for the task and records the runner,
+ * queue, MPI rank, and code location responsible for the completion. An error
+ * is raised if the task has already been marked as completed previously.
+ *
+ * @param r The #runner completing the task.
+ * @param t The #task being marked as complete.
+ * @param where String identifying the code location performing the completion.
+ */
 static void runner_gpu_mark_done_debug(
     struct runner *r,
     struct task *t,
@@ -189,6 +223,11 @@ static void runner_gpu_mark_done_debug(
   t->gpu_done_rank = rank;
 }
 
+/**
+ * @brief GPU error check
+ *
+ * @param where	The string for the function that causes the error
+ */
 static inline void runner_gpu_check_error(const char *where) {
   const GPUError err = GPUGetLastError();
 
@@ -196,13 +235,25 @@ static inline void runner_gpu_check_error(const char *where) {
     error("%s: %s", where, GPUGetErrorString(err));
 }
 
+
 /* ------------------------------------------------------------------------- */
 /* GPU timing helpers: thread-local state only, no struct layout changes.     */
 /* This avoids changing runner_gpu.h and avoids shared locks in runner threads.*/
 /* ------------------------------------------------------------------------- */
 
 #ifdef SWIFT_DEBUG_TASKS
-
+/**
+ * @brief Return the elapsed time between two GPU events in seconds.
+ *
+ * Computes the elapsed time between the supplied GPU start and stop events
+ * using GPUEventElapsedTime(). The GPU runtime reports the elapsed time in
+ * milliseconds, which is converted to seconds before being returned.
+ *
+ * @param start The GPU event marking the start of the timed interval.
+ * @param stop The GPU event marking the end of the timed interval.
+ *
+ * @return The elapsed time between @p start and @p stop in seconds.
+ */
 static double runner_gpu_event_offset_s(
     const GPUEvent start,
     const GPUEvent stop) {
@@ -220,7 +271,28 @@ static double runner_gpu_event_offset_s(
   return 1.0e-3 * (double)elapsed_ms;
 }
 
-
+/**
+ * @brief Append a GPU timeline entry to the timeline CSV file.
+ *
+ * Writes timing information for a GPU task to the file specified by the
+ * SWIFT_GPU_TIMELINE_FILE environment variable. If this variable is not set,
+ * the default file "gpu_timeline.csv" is used.
+ *
+ * If the file is empty, a CSV header is written before the first data row.
+ * The function silently returns if the output file cannot be opened.
+ *
+ * @param kind String identifying the type of GPU task, for example "self" or "pair".
+ * @param step Simulation timestep associated with the task.
+ * @param runner_id ID of the runner executing the task.
+ * @param substream_id ID of the GPU substream used for the task.
+ * @param anchor_tic CPU tick value used as the reference point for the timeline measurements.
+ * @param sync_toc CPU tick value recorded after synchronization.
+ * @param h2d_end_s Time, in seconds relative to the timeline anchor, at which the host-to-device transfer completed.
+ * @param kernel_start_s Time, in seconds relative to the timeline anchor, at which the GPU kernel started.
+ * @param kernel_end_s Time, in seconds relative to the timeline anchor, at which the GPU kernel completed.
+ * @param d2h_start_s Time, in seconds relative to the timeline anchor, at which the device-to-host transfer started.
+ * @param d2h_end_s Time, in seconds relative to the timeline anchor, at which the device-to-host transfer completed.
+ */
 static void runner_gpu_write_timeline_row(
     const char *kind,
     const long long step,
@@ -279,12 +351,28 @@ static void runner_gpu_write_timeline_row(
 static __thread double runner_gpu_self_pack_time_s = 0.0;
 static __thread double runner_gpu_pair_pack_time_s = 0.0;
 
+/**
+ * @brief Convert GPU walltime to seconds
+ */
 static inline double runner_gpu_walltime_s(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (double)ts.tv_sec + 1.0e-9 * (double)ts.tv_nsec;
 }
 
+/**
+ * @brief Return the elapsed time between two GPU events in seconds.
+ *
+ * Synchronizes on the stop event to ensure that the timed GPU work has
+ * completed, then computes the elapsed time between the start and stop
+ * events. The GPU runtime reports the elapsed time in milliseconds, which
+ * is converted to seconds before being returned.
+ *
+ * @param start The GPU event marking the start of the timed interval.
+ * @param stop The GPU event marking the end of the timed interval.
+ *
+ * @return The elapsed time between @p start and @p stop in seconds.
+ */
 static double runner_gpu_event_elapsed_s(GPUEvent start, GPUEvent stop) {
   float elapsed_ms = 0.0f;
 
@@ -294,6 +382,19 @@ static double runner_gpu_event_elapsed_s(GPUEvent start, GPUEvent stop) {
   return 1.0e-3 * (double)elapsed_ms;
 }
 
+/**
+ * @brief Return the total host-to-device data size for a self-gravity batch.
+ *
+ * Computes the number of bytes transferred from host to device for the
+ * packed self-gravity particle data, active-particle indices, and per-slot
+ * metadata associated with a GPU substream.
+ *
+ * @param substream The GPU runner substream containing the packed self-gravity
+ *                  particle and active-particle counts.
+ * @param nslots The number of self-gravity slots in the batch.
+ *
+ * @return The total host-to-device transfer size, in bytes.
+ */
 static inline size_t runner_gpu_self_h2d_bytes(
     const struct gpu_runner_substream *substream,
     const int nslots) {
@@ -322,7 +423,20 @@ static inline size_t runner_gpu_self_h2d_bytes(
          slot_metadata_bytes;
 }
 
-
+/**
+ * @brief Return the total host-to-device data size for a pair-gravity batch.
+ *
+ * Computes the number of bytes transferred from host to device for the
+ * packed pair-gravity particle data, active-particle indices, per-slot
+ * metadata, and per-pair metadata associated with a GPU substream.
+ *
+ * @param substream The GPU runner substream containing the packed pair-gravity
+ *                  particle and active-particle counts.
+ * @param nslots The number of cell slots in the pair-gravity batch.
+ * @param npairs The number of cell pairs in the batch.
+ *
+ * @return The total host-to-device transfer size, in bytes.
+ */
 static inline size_t runner_gpu_pair_h2d_bytes(
     const struct gpu_runner_substream *substream,
     const int nslots,
@@ -364,6 +478,30 @@ static inline size_t runner_gpu_pair_h2d_bytes(
          pair_metadata_bytes;
 }
 
+/**
+ * @brief Append a GPU batch timing entry to the timing CSV file.
+ *
+ * Writes timing and workload information for a GPU batch to the file
+ * specified by the SWIFT_GPU_TIMING_FILE environment variable. If this
+ * variable is not set, the default file "gpu_timing_ga008.csv" is used.
+ *
+ * If the file is empty, a CSV header is written before the first data row.
+ * The function silently returns if the output file cannot be opened.
+ *
+ * @param kind String identifying the type of GPU task, for example "self"
+ *             or "pair".
+ * @param step Simulation timestep associated with the batch.
+ * @param runner_id ID of the runner executing the batch.
+ * @param stream_id ID of the GPU stream used for the batch.
+ * @param nslots Number of cell slots contained in the batch.
+ * @param nparts Number of particles contained in the batch.
+ * @param h2d_bytes Number of bytes transferred from host to device.
+ * @param pack_s Time spent packing the batch on the host, in seconds.
+ * @param h2d_s Time spent transferring data from host to device, in seconds.
+ * @param kernel_s Time spent executing the GPU kernel, in seconds.
+ * @param d2h_s Time spent transferring data from device to host, in seconds.
+ * @param unpack_s Time spent unpacking the batch on the host, in seconds.
+ */
 static void runner_gpu_write_timing_row(
     const char *kind,
     long long step,
@@ -417,27 +555,47 @@ static void runner_gpu_write_timing_row(
 #endif
 
 /**
- * @brief Launch the GPU P-P gravity kernel for a packed batch.
+ * @brief Launch the GPU P-P gravity kernel for a packed pair batch.
  *
  * @param periodic Whether periodic boundary conditions are enabled.
- * @param rmavalues_i.x Bounding radius for cell i.
- * @param rmavalues_j.x Bounding radius for cell j.
  * @param min_trunc Minimum truncation radius for periodic forces.
- * @param r_s_inv Inverse splitting scale for periodic mesh forces.
- * @param gcount_i Number of particles in cell i.
- * @param gcount_padded_i Padded particle count for cell i.
- * @param gcount_j Number of particles in cell j.
- * @param gcount_padded_j Padded particle count for cell j.
- * @param ci_active Whether cell i is active on this rank.
- * @param cj_active Whether cell j is active on this rank.
- * @param dim_0 Domain size in the x dimension.
- * @param dim_1 Domain size in the y dimension.
- * @param dim_2 Domain size in the z dimension.
- * @param symmetric Whether to update both cells.
- * @param gravity_gpu_values_send_d Device send buffer.
- * @param gravity_gpu_values_recv_d Device receive buffer.
- * @param ncells Number of packed cells in this batch.
- * @param max_cell_size Maximum number of particles per packed cell.
+ * @param r_s_inv Pointer to the inverse splitting scale for periodic mesh
+ *                forces.
+ * @param pair_use_full_d Device array indicating whether each pair uses the
+ *                        full or truncated gravity interaction.
+ * @param pair_side_active_offsets_d Device array containing the receive-buffer
+ *                                   offsets for each side of every pair.
+ * @param pair_counts_d Device array containing the particle count for each
+ *                      unique cell.
+ * @param pair_offsets_d Device array containing the packed particle offset for
+ *                       each unique cell.
+ * @param pair_active_counts_d Device array containing the number of active
+ *                             particles in each unique cell.
+ * @param pair_active_offsets_d Device array containing the offset into the
+ *                              active-particle index array for each unique
+ *                              cell.
+ * @param pair_active_index_d Device array containing the local indices of
+ *                            active particles.
+ * @param pair_pair_i_d Device array mapping each pair to its first unique-cell
+ *                      slot.
+ * @param pair_pair_j_d Device array mapping each pair to its second unique-cell
+ *                      slot.
+ * @param npairs Number of cell pairs in the batch.
+ * @param nslots Number of unique cell slots in the batch.
+ * @param dim_0 Domain size in the x direction.
+ * @param dim_1 Domain size in the y direction.
+ * @param dim_2 Domain size in the z direction.
+ * @param pair_cell_flags_d Device array indicating which unique cells are
+ *                          active and local to this rank.
+ * @param send_pair_pos_mass_d Device buffer containing packed particle
+ *                             positions and masses.
+ * @param send_pair_h_d Device buffer containing packed particle softenings.
+ * @param gravity_gpu_values_recv_d Device buffer receiving the calculated
+ *                                  gravity results.
+ * @param ncells Number of packed cell slots supplied to the kernel.
+ * @param max_cell_size Maximum number of particles permitted in a packed cell.
+ * @param max_active_count Maximum number of active particles in any packed
+ *                         cell.
  * @param stream GPU stream used for the kernel launch.
  */
 extern void pair_pp_offload_new(
@@ -463,7 +621,31 @@ extern void pair_pp_offload_new(
     int max_active_count,
     GPUStream stream);
     
-    
+/**
+ * @brief Launch the GPU P-P self-gravity kernel for a packed batch.
+ *
+ * @param periodic Whether periodic boundary conditions are enabled.
+ * @param r_s_inv Inverse splitting scale for periodic mesh forces.
+ * @param self_cell_flags_d Device array indicating which cells are active.
+ * @param self_use_full_d Device array indicating whether each cell uses the
+ *                        full or truncated gravity interaction.
+ * @param counts_d Device array containing the particle count for each cell.
+ * @param offsets_d Device array containing the particle offset for each cell.
+ * @param active_counts_d Device array containing the number of active
+ *                        particles in each cell.
+ * @param active_offsets_d Device array containing the offset into the active
+ *                         particle index array for each cell.
+ * @param active_index_d Device array containing the local indices of active
+ *                       particles.
+ * @param send_self_pos_mass_d Device buffer containing packed particle
+ *                             positions and masses.
+ * @param send_self_h_d Device buffer containing packed particle softenings.
+ * @param recv_d Device buffer receiving the calculated gravity results.
+ * @param ncells Number of packed cells in the batch.
+ * @param max_cell_size Maximum number of particles in a packed cell.
+ * @param max_active_count Maximum number of active particles in any cell.
+ * @param stream GPU stream used for the kernel launch.
+ */    
 extern void self_pp_offload_new(
     int periodic,
     const float *r_s_inv,
@@ -528,7 +710,30 @@ static inline void append_packed_pair_cell(
   substream->pair_total_count += count;
 }
 
-
+/**
+ * @brief Find an existing pair-gravity cell slot or pack a new cell.
+ *
+ * Searches the current GPU pair-gravity batch for the supplied cell. If the
+ * cell has already been packed, its existing slot index is returned. Otherwise,
+ * a new slot is allocated and the cell's gravity particle data are copied from
+ * the gravity cache into the packed host buffers.
+ *
+ * The function also constructs the list of active particle indices for the
+ * cell, updates the per-slot and total active-particle counts, and records the
+ * cell in the unique-cell list. An error is raised if the number of unique
+ * cells exceeds the available batch slots or if the cell contains more
+ * particles than the configured maximum cell size.
+ *
+ * @param r The runner processing the GPU gravity batch.
+ * @param substream The GPU runner substream containing the pair-gravity
+ *                  packing buffers and metadata.
+ * @param c The cell to find or pack.
+ * @param cache The gravity cache containing the particle data for @p c.
+ * @param max_cell_size Maximum number of gravity particles allowed in a
+ *                      packed cell.
+ *
+ * @return The slot index corresponding to @p c in the pair-gravity batch.
+ */
 static int runner_gpu_find_or_pack_pair_cell(
     struct runner *r,
     struct gpu_runner_substream *substream,
@@ -633,8 +838,6 @@ static void runner_gpu_complete_self_task(struct runner *r,
 	}
 
 	lock_lock(&sched->queues[r->qid].lock);
-	
-	const int before = sched->queues[r->qid].gpu_self_tasks_left;
 
 	if (sched->queues[r->qid].gpu_self_tasks_left <= 0)
 	  error("gpu_self_tasks_left underflow: task=%p type=%s subtype=%s qid=%d",
@@ -645,15 +848,6 @@ static void runner_gpu_complete_self_task(struct runner *r,
 
 	sched->queues[r->qid].gpu_self_tasks_left--;
 	runner_gpu_check_queue_counters(r, sched, "runner_gpu_complete_self_task");
-	
-	/*message("GPU_SELF_COUNTER_DEC complete: task=%p qid=%d old=%d new=%d "
-        "gpu_completed=%d done_count=%d",
-        (void *)t,
-        r->qid,
-        before,
-        before - 1,
-        t->gpu_completed,
-        t->done_count);*/
 
 	(void)lock_unlock(&sched->queues[r->qid].lock);
 
@@ -664,6 +858,13 @@ static void runner_gpu_complete_self_task(struct runner *r,
   scheduler_done(sched, t);
 }
 
+/**
+ * @brief Wrapper to call runner_gpu_complete_self_task
+ *
+ * @param r The #runner owning the task.
+ * @param sched The scheduler tracking the task.
+ * @param t The task to complete.
+ */
 void runner_gpu_complete_current_self_task(struct runner *r,
                                            struct scheduler *sched,
                                            struct task *t) {
@@ -726,15 +927,6 @@ void runner_gpu_complete_pair_task(struct runner *r, struct scheduler *sched,
   sched->queues[r->qid].gpu_pair_tasks_left--;
   runner_gpu_check_queue_counters(r, sched, "runner_gpu_complete_pair_task");
 
-  /*message("GPU_PAIR_COUNTER_DEC complete: task=%p qid=%d old=%d new=%d "
-          "gpu_completed=%d done_count=%d",
-          (void *)t,
-          r->qid,
-          before,
-          before - 1,
-          t->gpu_completed,
-          t->done_count);*/
-
   (void)lock_unlock(&sched->queues[r->qid].lock);
 
   t->gpu_counted = 0;
@@ -745,10 +937,20 @@ void runner_gpu_complete_pair_task(struct runner *r, struct scheduler *sched,
 }
 
 /**
- * @brief Complete all self-gravity tasks in the current GPU batch.
+ * @brief Complete all eligible self-gravity tasks in the current GPU batch.
+ *
+ * Marks each unique counted scheduler task in the batch as complete, excluding
+ * the currently executing task when one is supplied. The function then clears
+ * the batch task and cell pointers and resets the self-gravity packing
+ * metadata for the substream.
  *
  * @param r The #runner owning the batch.
  * @param sched The scheduler tracking the tasks.
+ * @param substream The GPU substream containing the completed self-gravity
+ *                  batch.
+ * @param current_task The task currently being processed by the runner, or
+ *                     NULL for a leftover batch flush. This task is not
+ *                     completed here.
  */
 void runner_gpu_complete_self_batch(struct runner *r, struct scheduler *sched,
                                     struct gpu_runner_substream *substream,
@@ -757,8 +959,8 @@ void runner_gpu_complete_self_batch(struct runner *r, struct scheduler *sched,
   const int count = substream->grav_batch_self_count;
 
   /* Complete each top-level self task at most once. Recursive self walks can
-   * pack many leaf cells for the same scheduler task, so duplicate task
-   * pointers in grav_tasks_self[] are normal. */
+     pack many leaf cells for the same scheduler task, so duplicate task
+     pointers in grav_tasks_self[] are normal. */
   for (int i = 0; i < count; i++) {
 
     struct task *task = substream->grav_tasks_self[i];
@@ -767,7 +969,7 @@ void runner_gpu_complete_self_batch(struct runner *r, struct scheduler *sched,
       continue;
 
     /* The currently-walking task is completed by runner_main when
-     * flushed_self_task is returned. */
+       flushed_self_task is returned. */
     if (task == current_task)
       continue;
 
@@ -814,10 +1016,17 @@ void runner_gpu_complete_self_batch(struct runner *r, struct scheduler *sched,
 }
 
 /**
- * @brief Complete all unique pair-gravity tasks in the current GPU batch.
+ * @brief Complete all non-internal pair-gravity tasks in the current GPU batch.
+ *
+ * Marks each scheduler pair task in the batch as complete, excluding pair
+ * interactions generated internally from self-gravity walks. The function
+ * then clears the pair task and cell pointers and resets the pair-gravity
+ * packing metadata for the substream.
  *
  * @param r The #runner owning the batch.
  * @param sched The scheduler tracking the tasks.
+ * @param substream The GPU substream containing the completed pair-gravity
+ *                  batch.
  */
 void runner_gpu_complete_pair_batch(struct runner *r, struct scheduler *sched,
                                     struct gpu_runner_substream *substream) {
@@ -856,26 +1065,31 @@ void runner_gpu_complete_pair_batch(struct runner *r, struct scheduler *sched,
 
 
 /**
- * @brief Pack one leaf pair-gravity interaction into the runner GPU batch.
+ * @brief Pack one leaf pair-gravity interaction into a GPU batch.
  *
- * This function populates the gravity caches for both cells and copies the
- * particle data into the next available slot in the pair batch buffer.  The
- * batch counter is incremented but no GPU work is launched; the caller is
- * responsible for checking whether the batch is full and calling
- * runner_dopair_grav_pp_flush() when appropriate.
+ * Populates the gravity caches for both cells, packs any unique cells not
+ * already present in the batch, records the pair-to-cell mapping, active-cell
+ * metadata, and periodic-force mode, and associates the interaction with its
+ * parent scheduler task. No GPU work is launched by this function.
  *
- * @param r The #runner.
+ * @param r The #runner processing the interaction.
+ * @param substream The GPU substream into which the interaction is packed.
  * @param ci The first #cell.
- * @param cj The other #cell.
- * @param symmetric Are we updating both cells (1) or just ci (0) ?
- * @param allow_mpole Are we allowing the use of M2P interactions ?
- * @param gravity_gpu_values_send_pair Host send buffer for this batch.
- * @param gravity_gpu_values_recv_pair Host receive buffer for this batch.
- * @param grav_cells_pair Array of cell pointers for this batch.
- * @param grav_tasks_pair Array of task pointers for this batch.
+ * @param cj The second #cell.
+ * @param symmetric Whether both cells are updated.
+ * @param allow_mpole Whether multipole information may be used when populating
+ *                    the gravity caches.
+ * @param grav_cells_pair Array storing the cell pointers for each packed pair.
+ * @param grav_tasks_pair Array storing the scheduler task associated with each
+ *                        packed pair.
+ * @param grav_pair_internal_from_self Array marking pair interactions generated
+ *                                     internally during a self-gravity walk.
  * @param t The top-level #task currently being processed.
- * @param max_cell_size The maximum number of particles per packed cell.
- * @param stream The GPU stream used for timing events.
+ * @param internal_from_self Whether this pair was generated internally from a
+ *                           self-gravity task.
+ * @param max_cell_size Maximum number of gravity particles permitted in a
+ *                      packed cell.
+ * @param stream GPU stream associated with the batch.
  */
 static void runner_dopair_grav_pp_pack(
     struct runner *r, struct gpu_runner_substream *substream,
@@ -1088,6 +1302,21 @@ static void runner_dopair_grav_pp_pack(
   #endif
 }
 
+/**
+ * @brief Unpack the GPU gravity results for one side of a pair interaction.
+ *
+ * Adds the accelerations and potentials returned by the GPU to the active
+ * particles belonging to the specified cell. Foreign or inactive cells are
+ * not updated.
+ *
+ * @param r The #runner processing the GPU batch.
+ * @param substream The GPU substream containing the returned pair results and
+ *                  active-particle metadata.
+ * @param c The cell whose results are to be unpacked.
+ * @param slot The unique-cell slot associated with @p c.
+ * @param recv_base Offset into the packed receive buffer for this side of the
+ *                  pair interaction.
+ */
 static inline void runner_gpu_unpack_pair_side(
     struct runner *r,
     struct gpu_runner_substream *substream,
@@ -1457,10 +1686,6 @@ runner_gpu_write_timeline_row(
 
 #endif
     
-    #ifdef SWIFT_DEBUG_TASKS
-const ticks gpu_sync_toc = getticks();
-#endif
-    
     #ifdef SWIFT_GPU_TIMING 
     h2d_s = runner_gpu_event_elapsed_s(h2d_start, h2d_stop);
     kernel_s = runner_gpu_event_elapsed_s(kernel_start, kernel_stop);
@@ -1560,15 +1785,6 @@ const ticks gpu_sync_toc = getticks();
 
 	  if (!internal && batch_task == current_task) {
 	    if (!printed_current_skip) {
-	      /*message("PAIR FLUSH skipping current_task: task=%p "
-		      "gpu_counted=%d gpu_completed=%d done_count=%d "
-		      "pair_left=%d npairs=%d",
-		      (void *)batch_task,
-		      batch_task->gpu_counted,
-		      batch_task->gpu_completed,
-		      batch_task->done_count,
-		      sched->queues[r->qid].gpu_pair_tasks_left,
-		      npairs);*/
 	      printed_current_skip = 1;
 	    }
 	    continue;
@@ -1580,15 +1796,19 @@ const ticks gpu_sync_toc = getticks();
     }
   }
   
-  #ifdef SWIFT_GPU_TIMING 
+  #ifdef SWIFT_GPU_TIMING
+
+  const double pair_pack_s = runner_gpu_pair_pack_time_s;
+  runner_gpu_pair_pack_time_s = 0.0;
+
   const size_t h2d_bytes =
     runner_gpu_pair_h2d_bytes(
         substream,
         nslots,
         npairs);
 
-  /* ---- Timing output ---- */
-  runner_gpu_write_timing_row(
+/* ---- Timing output ---- */
+runner_gpu_write_timing_row(
     "pair",
     (long long)e->ti_current,
     r->id,
@@ -1596,12 +1816,13 @@ const ticks gpu_sync_toc = getticks();
     nslots,
     substream->pair_total_count,
     h2d_bytes,
-    pack_s,
+    pair_pack_s,
     h2d_s,
     kernel_s,
     d2h_s,
     unpack_s);
-  #endif
+
+#endif
       
   #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
   GPUEventDestroy(h2d_start);
@@ -1655,10 +1876,6 @@ const ticks gpu_sync_toc = getticks();
       r,
       &r->e->sched,
       "runner_dopair_grav_pp_flush:end");
-
-  /*message("PAIR FLUSH end: qid=%d pair_left=%d",
-          r->qid,
-          r->e->sched.queues[r->qid].gpu_pair_tasks_left);*/
 }
 
 /**
@@ -1721,6 +1938,20 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
   return result;
 }
 
+/**
+ * @brief Launch the GPU P-P self-gravity kernel for a packed self batch.
+ *
+ * Passes the packed self-gravity data and associated metadata for the current
+ * substream to the GPU kernel.
+ *
+ * @param r The #runner processing the batch.
+ * @param substream The GPU substream containing the packed self-gravity data.
+ * @param nslots Number of packed cells in the batch.
+ * @param max_active_count Maximum number of active particles in any packed
+ *                         cell.
+ * @param max_cell_size Maximum number of particles permitted in a packed cell.
+ * @param stream GPU stream used for the kernel launch.
+ */
 static void runner_doself_grav_pp_flush(
     struct runner *r,
     struct gpu_runner_substream *substream,
@@ -1754,14 +1985,24 @@ static void runner_doself_grav_pp_flush(
 }
 
 /**
- * @brief Pack, launch, and unpack a batched self-gravity GPU task.
+ * @brief Pack a self-gravity interaction and flush the GPU batch when full.
  *
- * @param r The #runner.
+ * Packs one self-gravity cell into the current GPU substream. If the batch
+ * reaches its configured capacity, the function copies the packed data to the
+ * device, launches the self-gravity kernel, copies the results back, unpacks
+ * them into the particles, completes the corresponding scheduler tasks, and
+ * resets the batch state.
+ *
+ * @param r The #runner processing the task.
+ * @param substream The GPU substream used for packing and executing the batch.
  * @param ci The #cell to pack.
- * @param t The #task being executed.
- * @param ncells The batch capacity in cells.
- * @param max_cell_size The maximum number of particles per packed cell.
- * @return The outcome of the GPU wrapper for this task.
+ * @param t The top-level #task being executed.
+ * @param ncells Maximum number of cells in the GPU batch.
+ * @param max_cell_size Maximum number of gravity particles permitted in a
+ *                      packed cell.
+ *
+ * @return packed_task if the interaction was packed without flushing, or
+ *         flushed_self_task if the batch was flushed.
  */
   enum runner_gpu_task_type runner_doself_grav_pp_task_new(
     struct runner *r,
@@ -1852,17 +2093,6 @@ static void runner_doself_grav_pp_flush(
 
   	substream->send_self_h[k] = ci_cache->epsilon[i];
   }
-
-  /* Zero only the live recv span, not max_cell_size */
-  /*for (int i = 0; i < gcount; i++) {
-    const int k = offset + i;
-    substream->recv_self[k].values_i.x = 0.0f;
-    substream->recv_self[k].values_i.y = 0.0f;
-    substream->recv_self[k].values_i.z = 0.0f;
-    substream->recv_self[k].values_i.w = 0.0f;
-  }*/
-  
-  //printf("PACKED:%i  \n", substream->grav_batch_self_count);
 
   substream->grav_cells_self[slot] = ci;
   substream->grav_tasks_self[slot] = t;
@@ -2005,13 +2235,6 @@ static void runner_doself_grav_pp_flush(
     #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
     GPUEventRecord(h2d_stop, substream->stream);
     #endif 
-
-    /*GPUMemsetAsync(
-	    substream->recv_self_active_d,
-	    0,
-	    (size_t)substream->self_total_active_count *
-		sizeof(struct gravity_gpu_values_recv),
-	    substream->stream);*/
 
     /* kernel */
     #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
@@ -2181,19 +2404,36 @@ static void runner_doself_grav_pp_flush(
 }
 
 /**
- * @brief Computes the interaction of all the particles in a cell with all the
- * particles of another cell.
+ * @brief Recursively process a pair-gravity interaction, offloading leaf
+ *        P-P interactions to the GPU where appropriate.
  *
- * This function will try to recurse as far down the tree as possible and only
- * default to direct summation if there is no better option.
+ * Recurses through the gravity cell hierarchy and selects between truncated
+ * interactions, CPU multipole interactions, further cell splitting, and
+ * direct particle-particle interactions. Leaf P-P interactions are packed
+ * into the supplied GPU substream and may trigger a batch flush.
  *
- * If using periodic BCs, we will abort the recursion if th distance between the
- * cells is larger than the set threshold.
- *
- * @param r The #runner.
+ * @param r The #runner processing the interaction.
+ * @param substream The GPU substream used for packed pair interactions.
  * @param ci The first #cell.
- * @param cj The other #cell.
- * @param gettimer Are we timing this ?
+ * @param cj The second #cell.
+ * @param gettimer Whether to record the sub-pair gravity timer.
+ * @param grav_cells_pair Array storing the cell pointers associated with
+ *                        packed pairs.
+ * @param grav_tasks_pair Array storing the scheduler tasks associated with
+ *                        packed pairs.
+ * @param grav_pair_internal_from_self Array marking pair interactions generated
+ *                                     internally from self-gravity walks.
+ * @param t The top-level scheduler #task associated with this recursive walk.
+ * @param internal_from_self Whether this pair interaction originates from a
+ *                           self-gravity walk.
+ * @param ncells Maximum number of cell slots available in the GPU pair batch.
+ * @param max_cell_size Maximum number of gravity particles permitted in a
+ *                      packed cell.
+ * @param stream GPU stream associated with the batch.
+ *
+ * @return regular_task if no GPU leaf interaction was generated, packed_task
+ *         if GPU work remains packed in the batch, or flushed_pair_task if
+ *         GPU work was flushed during the recursive walk.
  */
 enum runner_gpu_task_type runner_dopair_recursive_grav_new(
     struct runner *r, struct gpu_runner_substream *substream, struct cell *ci,
@@ -2441,7 +2681,19 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
 
 
 /**
- * @brief Choose number of cells in a batch
+ * @brief Choose the number of cell slots to allocate per GPU gravity batch.
+ *
+ * Estimates a safe batch size from the currently available GPU memory,
+ * maximum cell size, number of GPU streams, number of runner threads, and the
+ * number of local MPI ranks sharing the device. A user-specified
+ * GPU:ncells_per_gpu_grav_pack value is honoured where it fits within the
+ * calculated memory budget.
+ *
+ * @param e The #engine containing the GPU configuration and runtime state.
+ * @param max_cell_size Maximum number of gravity particles permitted in a
+ *                      packed cell.
+ *
+ * @return The selected number of cell slots per GPU gravity batch.
  */
 static int runner_gpu_choose_batch_ncells(const struct engine *e,
                                           int max_cell_size) {
@@ -2503,7 +2755,18 @@ static int runner_gpu_choose_batch_ncells(const struct engine *e,
 
 
 /**
- * @brief Choose number of streams per runner
+ * @brief Choose a safe number of GPU substreams per runner.
+ *
+ * Estimates the maximum number of substreams that can be allocated from the
+ * available GPU memory after accounting for the configured batch size,
+ * maximum cell size, runner threads, and local MPI ranks sharing the device.
+ *
+ * @param e The #engine containing the GPU configuration and runtime state.
+ * @param max_cell_size Maximum number of gravity particles permitted in a
+ *                      packed cell.
+ * @param ncells Number of cell slots allocated per GPU gravity batch.
+ *
+ * @return The maximum safe number of GPU substreams per runner.
  */
 static int runner_gpu_choose_nstreams(const struct engine *e,
                                       int max_cell_size,
@@ -2539,12 +2802,21 @@ static int runner_gpu_choose_nstreams(const struct engine *e,
 
   if (max_safe_nstreams < 1) max_safe_nstreams = 1;
 
-  /* Profiling/tuning usually stops helping after a few streams */
-  //if (max_safe_nstreams > 4) max_safe_nstreams = 4;
-
   return max_safe_nstreams;
 }
 
+/**
+ * @brief Select the GPU device used by a runner.
+ *
+ * Determines the local MPI rank and assigns it to a visible GPU. If a device
+ * is explicitly specified using GPU:device_id, that device is used instead.
+ * The function also determines how many local MPI ranks share the selected
+ * device for use in GPU memory budgeting.
+ *
+ * @param r The #runner whose GPU device is to be selected.
+ *
+ * @return The selected GPU device ID.
+ */
 static int runner_gpu_select_device(struct runner *r) {
 
   struct engine *e = r->e;
@@ -2656,9 +2928,6 @@ void runner_gpu_init(struct runner *r) {
 
   if (ngpu <= 0)
     error("No GPU visible to MPI rank");
-
-  const int gpu_id = local_rank % ngpu;
-  GPUSetDevice(gpu_id);
 
   const int device_id = runner_gpu_select_device(r);
   
@@ -3042,27 +3311,6 @@ runner_gpu_acquire_substream(struct runner *r) {
   gpu->next_substream = (gpu->next_substream + 1) % gpu->nstreams;
 
   return substream;
-}
-
-/**
- * @brief Flush all the substreams for the pair tasks
- *
- * @param r The runner whose GPU state to clean.
- */
-static inline void runner_gpu_flush_all_pair_substreams(struct runner *r) {
-  for (int i = 0; i < r->gpu.nstreams; i++) {
-    struct gpu_runner_substream *substream = &r->gpu.substreams[i];
-
-    if (substream->grav_batch_pair_count > 0) {
-      runner_dopair_grav_pp_flush(
-          r, substream,
-          substream->grav_cells_pair, substream->grav_tasks_pair,
-          NULL,
-          r->gpu.grav_batch_ncells,
-          r->gpu.grav_max_cell_size,
-          substream->stream);
-    }
-  }
 }
 
 /**
@@ -3509,23 +3757,8 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_pair(struct runner *r) {
 
   enum runner_gpu_task_type result = regular_task;
 
-  /*message("runner_gpu_flush_leftover_pair entry: qid=%d "
-        "pair_left=%d",
-        r->qid,
-        r->e->sched.queues[r->qid].gpu_pair_tasks_left);*/
-
 for (int l = 0; l < r->gpu.nstreams; l++) {
   struct gpu_runner_substream *ss = &r->gpu.substreams[l];
-
-  /*message("runner_gpu_flush_leftover_pair stream=%d before: "
-          "pair_batch=%d pair_unique_cells=%d pair_total_count=%d "
-          "pair_total_active=%d pair_total_pair_active=%d",
-          l,
-          ss->grav_batch_pair_count,
-          ss->pair_unique_cell_count,
-          ss->pair_total_count,
-          ss->pair_total_active_count,
-          ss->pair_total_pair_active_count);*/
 
     if (ss->grav_batch_pair_count == 0) continue;
 
@@ -3539,11 +3772,6 @@ for (int l = 0; l < r->gpu.nstreams; l++) {
         ss->stream);
 
     result = flushed_pair_task;
-    
-    /*message("runner_gpu_flush_leftover_pair exit: qid=%d "
-        "pair_left=%d",
-        r->qid,
-        r->e->sched.queues[r->qid].gpu_pair_tasks_left);*/
   }
 
   return result;
