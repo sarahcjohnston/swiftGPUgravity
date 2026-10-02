@@ -598,7 +598,7 @@ static void runner_gpu_write_timing_row(
  *                         cell.
  * @param stream GPU stream used for the kernel launch.
  */
-extern void pair_pp_offload_new(
+extern void pair_pp_offload_gpu(
     int periodic, double min_trunc, const float *r_s_inv,
     const int *pair_use_full_d,
     const int *pair_side_active_offsets_d,
@@ -646,7 +646,7 @@ extern void pair_pp_offload_new(
  * @param max_active_count Maximum number of active particles in any cell.
  * @param stream GPU stream used for the kernel launch.
  */    
-extern void self_pp_offload_new(
+extern void self_pp_offload_gpu(
     int periodic,
     const float *r_s_inv,
     const int *self_cell_flags_d,
@@ -1377,7 +1377,7 @@ static inline void runner_gpu_unpack_pair_side(
  *        and metadata reset.
  *
  * current_task is skipped because it may still be in the recursive walk.
- * If this flush happened while walking current_task, runner_dopair_grav_pp_new()
+ * If this flush happened while walking current_task, runner_dopair_grav_pp_gpu()
  * must return flushed_pair_task so runner_main() completes current_task.
  * If this is a leftover flush, current_task should be NULL and all non-internal
  * tasks in the batch are completed here.
@@ -1584,7 +1584,7 @@ GPUEventRecord(h2d_start, stream);
     GPUEventRecord(kernel_start, stream);
     #endif
 
-    pair_pp_offload_new(
+    pair_pp_offload_gpu(
         periodic,
         min_trunc,
         &r_s_inv,
@@ -1881,7 +1881,7 @@ runner_gpu_write_timing_row(
 /**
  * @brief Pack a leaf pair-gravity interaction and flush if the batch is full.
  *
- * This is the main entry point called from runner_dopair_recursive_grav_new()
+ * This is the main entry point called from runner_dopair_recursive_grav_gpu()
  * when two unsplit leaf cells are reached. It packs the pair, and if the batch
  * is now full it flushes the GPU work before returning.
  *
@@ -1891,7 +1891,7 @@ runner_gpu_write_timing_row(
  * @param symmetric Are we updating both cells (1) or just ci (0) ?
  * @param allow_mpole Are we allowing the use of M2P interactions ?
  */
-enum runner_gpu_task_type runner_dopair_grav_pp_new(
+enum runner_gpu_task_type runner_dopair_grav_pp_gpu(
     struct runner *r, struct gpu_runner_substream *substream, struct cell *ci,
     struct cell *cj, const int symmetric, const int allow_mpole,
     struct cell **grav_cells_pair, struct task **grav_tasks_pair,
@@ -1965,7 +1965,7 @@ static void runner_doself_grav_pp_flush(
   const float r_s_inv = e->mesh->r_s_inv;
   const double min_trunc = e->mesh->r_cut_min;
 
-  self_pp_offload_new(
+  self_pp_offload_gpu(
     periodic,
     &r_s_inv,
     substream->self_cell_flags_d,
@@ -2004,7 +2004,7 @@ static void runner_doself_grav_pp_flush(
  * @return packed_task if the interaction was packed without flushing, or
  *         flushed_self_task if the batch was flushed.
  */
-  enum runner_gpu_task_type runner_doself_grav_pp_task_new(
+  enum runner_gpu_task_type runner_doself_grav_pp_task_gpu(
     struct runner *r,
     struct gpu_runner_substream *substream,
     struct cell *ci,
@@ -2435,7 +2435,7 @@ static void runner_doself_grav_pp_flush(
  *         if GPU work remains packed in the batch, or flushed_pair_task if
  *         GPU work was flushed during the recursive walk.
  */
-enum runner_gpu_task_type runner_dopair_recursive_grav_new(
+enum runner_gpu_task_type runner_dopair_recursive_grav_gpu(
     struct runner *r, struct gpu_runner_substream *substream, struct cell *ci,
     struct cell *cj, const int gettimer,
     struct cell **grav_cells_pair, struct task **grav_tasks_pair,
@@ -2444,7 +2444,7 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
     int ncells, int max_cell_size, GPUStream stream) {
 
   if (ci == NULL || cj == NULL)
-    error("runner_dopair_recursive_grav_new got NULL cell");
+    error("runner_dopair_recursive_grav_gpu got NULL cell");
 
   const struct engine *e = r->e;
 
@@ -2556,7 +2556,7 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
   } else if (!ci->split && !cj->split) {
 
     /* We have two leaves. Go P-P. */
-    return runner_dopair_grav_pp_new(
+    return runner_dopair_grav_pp_gpu(
     r, substream, ci, cj, 1, 1,
     substream->grav_cells_pair,
     substream->grav_tasks_pair,
@@ -2585,7 +2585,7 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
           if (ci->progeny[k] != NULL) {
             // runner_dopair_recursive_grav(r, ci->progeny[k], cj, 0);
             enum runner_gpu_task_type child_type =
-    		runner_dopair_recursive_grav_new(
+    		runner_dopair_recursive_grav_gpu(
         		r, substream, ci->progeny[k], cj, 0,
         		substream->grav_cells_pair, substream->grav_tasks_pair,
         		substream->grav_pair_internal_from_self,
@@ -2604,7 +2604,7 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
           if (cj->progeny[k] != NULL) {
             // runner_dopair_recursive_grav(r, ci, cj->progeny[k], 0);
             enum runner_gpu_task_type child_type =
-                runner_dopair_recursive_grav_new(
+                runner_dopair_recursive_grav_gpu(
                     r, substream, ci, cj->progeny[k], 0,
 		    substream->grav_cells_pair, substream->grav_tasks_pair,
 		    substream->grav_pair_internal_from_self,
@@ -2623,7 +2623,7 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
           if (cj->progeny[k] != NULL) {
             // runner_dopair_recursive_grav(r, ci, cj->progeny[k], 0);
             enum runner_gpu_task_type child_type =
-                runner_dopair_recursive_grav_new(
+                runner_dopair_recursive_grav_gpu(
                     r, substream, ci, cj->progeny[k], 0,
 		    substream->grav_cells_pair, substream->grav_tasks_pair,
 		    substream->grav_pair_internal_from_self,
@@ -2642,7 +2642,7 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
           if (ci->progeny[k] != NULL) {
             // runner_dopair_recursive_grav(r, ci->progeny[k], cj, 0);
             enum runner_gpu_task_type child_type =
-                runner_dopair_recursive_grav_new(
+                runner_dopair_recursive_grav_gpu(
                     r, substream, ci->progeny[k], cj, 0,
 		    substream->grav_cells_pair, substream->grav_tasks_pair,
 		    substream->grav_pair_internal_from_self,

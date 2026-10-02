@@ -820,10 +820,6 @@ if test "x$with_cuda" != "xno" -a "x$with_hip" != "xno"; then
    AC_MSG_ERROR([Please specify only one GPU backend via --with-cuda or --with-hip])
 fi
 
-if test "x$with_cuda" = "xno" -a "x$with_hip" = "xno"; then
-   AC_MSG_ERROR([Please specify a GPU backend via --with-cuda=PATH or --with-hip=PATH])
-fi
-
 
 GPU_BACKEND="none"
 GPUCC=""
@@ -929,6 +925,10 @@ if test "x$with_hip" != "xno"; then
    GPU_FLAGS="$HIP_FLAGS"
    GPU_COMPILE_MODE_FLAGS="-c"
    AC_DEFINE([WITH_HIP], 1, [Compile with the HIP GPU backend])
+fi
+
+if test "x$GPU_BACKEND" != "xnone"; then
+    AC_DEFINE([WITH_GPU], [1], [Compile with GPU support])
 fi
 
 AC_SUBST([GPU_BACKEND])

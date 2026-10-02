@@ -33,9 +33,11 @@
 #include "space_getsid.h"
 #include "timers.h"
 
+#ifdef WITH_GPU
 /* GPU headers */
 #include "gpu_functions.h"
 #include "gpu_mapping.h"
+#endif
 
 /**
  * @brief Recursively propagate the multipoles down the tree by applying the
@@ -102,29 +104,6 @@ void runner_do_grav_down(struct runner *r, struct cell *c, int timer) {
     if (!c->grav.multipole->pot.interacted) return;
 
     if (!cell_are_gpart_drifted(c, e)) error("Un-drifted gparts");
-    /*if (!cell_are_gpart_drifted(c, e)) {
-    printf("[GRAV_DOWN] qid=%d cell=%p split=%d count=%zu "
-       "ti_old_part=%lld ti_current=%lld "
-       "do_grav_drift=%d do_grav_sub_drift=%d drifted=%d\n",
-       r->qid,
-       (void*)c,
-       c->split,
-       c->grav.count,
-       (long long)c->grav.ti_old_part,
-       (long long)e->ti_current,
-       cell_get_flag(c, cell_flag_do_grav_drift),
-       cell_get_flag(c, cell_flag_do_grav_sub_drift),
-       cell_are_gpart_drifted(c, e));
-
-      cell_set_flag(c, cell_flag_do_grav_drift);
-      cell_set_flag(c, cell_flag_do_grav_sub_drift);*/
-    // runner_do_drift_gpart(r, c, /*timer=*/0);
-
-    /*printf("[POST_DRIFT] qid=%d ti_old_part=%lld ti_current=%lld
-  drifted=%d\n", r->qid, (long long)c->grav.ti_old_part, (long
-  long)e->ti_current, cell_are_gpart_drifted(c, e));} if
-  (!cell_are_gpart_drifted(c, e)) error("qid:%i gparts still not drifted after
-  drift",r->qid);*/
 
 #ifndef SWIFT_TASKS_WITHOUT_ATOMICS
     /* Lock the cell for the particle updates */
@@ -2002,12 +1981,6 @@ static INLINE void runner_doself_grav_pp_truncated(
   }
 }
 
-extern void self_pp_offload(
-    int periodic, const float *rmax_d, double min_trunc, const float *r_s_inv,
-    const int *counts_d, const int *offsets_d,
-    struct gravity_gpu_values_send *gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
-    int ncells, int max_cell_size, GPUStream stream);
 /**
  * @brief Computes the interaction of all the particles in a cell with all the
  * other ones.
@@ -2022,12 +1995,7 @@ extern void self_pp_offload(
  * @param r The #runner.
  * @param c The #cell.
  */
-void runner_doself_grav_pp(struct runner *r, struct cell *c, float *d_h_i,
-                           float *d_mass_i, float *d_x_i, float *d_y_i,
-                           float *d_z_i, float *d_a_x_i, float *d_a_y_i,
-                           float *d_a_z_i, float *d_pot_i, int *d_active_i,
-                           int ncells, int max_cell_size, int *gcounts,
-                           int *cell_active, GPUStream stream) {
+void runner_doself_grav_pp(struct runner *r, struct cell *c) {
 
   /* Recover some useful constants */
   const struct engine *e = r->e;
@@ -2043,13 +2011,13 @@ void runner_doself_grav_pp(struct runner *r, struct cell *c, float *d_h_i,
 #endif
 
   /* Anything to do here? */
-  /// if (!cell_is_active_gravity(c, e)) return;
+  if (!cell_is_active_gravity(c, e)) return;
 
   /* Check that we are not doing something stupid */
-  // if (c->split) error("Running P-P on a splitable cell"); //MYCOMMENT
+  if (c->split) error("Running P-P on a splitable cell");
 
   /* Do we need to start by drifting things ? */
-  // if (!cell_are_gpart_drifted(c, e)) error("Un-drifted gparts"); //MYCOMMENT
+  if (!cell_are_gpart_drifted(c, e)) error("Un-drifted gparts");
 
   /* Start by constructing a cache for the particles */
   struct gravity_cache *const ci_cache = &r->ci_gravity_cache;
@@ -2068,132 +2036,45 @@ void runner_doself_grav_pp(struct runner *r, struct cell *c, float *d_h_i,
                                   gcount, gcount_padded, loc, c,
                                   e->gravity_properties);
 
-  const float rmax = 2. * c->grav.multipole->r_max;
-  const int ci_active =
-      cell_is_active_gravity(c, e) && (c->nodeID == e->nodeID);
+  /* Can we use the Newtonian version or do we need the truncated one ? */
+  if (!periodic) {
 
-  // printf("runner active: %i\n", cell_active[0]);
-  TIMER_TOC(timer_doself_grav_pp);
+    /* Not periodic -> Can always use Newtonian potential */
+    runner_doself_grav_pp_full(ci_cache, gcount, gcount_padded, e,
+                               c->grav.parts);
 
-  /*self_pp_offload(periodic, rmax, min_trunc, &r_s_inv, &gcount, &gcount_padded,
-                  ci_active, d_h_i, d_mass_i, d_x_i, d_y_i, d_z_i, d_a_x_i,
-                  d_a_y_i, d_a_z_i, d_pot_i, d_active_i, ncells, max_cell_size,
-                  gcounts, cell_active, stream);*/
+  } else {
 
-  if (2 < 1) {
-    /* Can we use the Newtonian version or do we need the truncated one ? */
-    if (!periodic) {
+    /* Get the maximal distance between any two particles */
+    const double max_r = 2. * c->grav.multipole->r_max;
 
-      /* Not periodic -> Can always use Newtonian potential */
-      runner_doself_grav_pp_full(ci_cache, gcount, gcount_padded, e,
-                                 c->grav.parts);
+    /* Do we need to use the truncated interactions ? */
+    if (max_r > min_trunc) {
+
+      /* Periodic but far-away cells must use the truncated potential */
+      runner_doself_grav_pp_truncated(ci_cache, gcount, gcount_padded, r_s_inv,
+                                      e, c->grav.parts);
 
     } else {
 
-      /* Get the maximal distance between any two particles */
-      const double max_r = 2. * c->grav.multipole->r_max;
-
-      /* Do we need to use the truncated interactions ? */
-      if (max_r > min_trunc) {
-
-        /* Periodic but far-away cells must use the truncated potential */
-        runner_doself_grav_pp_truncated(ci_cache, gcount, gcount_padded,
-                                        r_s_inv, e, c->grav.parts);
-
-      } else {
-
-        /* Periodic but close-by cells can use the full Newtonian potential */
-        runner_doself_grav_pp_full(ci_cache, gcount, gcount_padded, e,
-                                   c->grav.parts);
-      }
+      /* Periodic but close-by cells can use the full Newtonian potential */
+      runner_doself_grav_pp_full(ci_cache, gcount, gcount_padded, e,
+                                 c->grav.parts);
     }
   }
 
-  // MY COMMENT - commenting this out so it doesn't do the lock/unlock here
   /* Write back to the particles */
-  /*#ifndef SWIFT_TASKS_WITHOUT_ATOMICS
-    lock_lock(&c->grav.plock);
-  #endif
-    printf("Before cache! \n");
-    gravity_cache_write_back(ci_cache, c, c->grav.parts, gcount);
-    printf("After cache! \n");
-  #ifndef SWIFT_TASKS_WITHOUT_ATOMICS
-    if (lock_unlock(&c->grav.plock) != 0) error("Error unlocking cell");
-  #endif*/
-
-  // TIMER_TOC(timer_doself_grav_pp);
-}
-
-extern void self_pp_offload_new(
-    int periodic, const float *rmax_d, double min_trunc, const float *r_s_inv,
-    const int *counts_d, const int *offsets_d,
-    struct gravity_gpu_values_send *gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
-    int ncells, int max_cell_size, GPUStream stream);
-/**
- * @brief Computes the interaction of all the particles in a cell with all the
- * other ones.
- *
- * This function switches between the full potential and the truncated one
- * depending on needs.
- *
- * This function starts by constructing the require #gravity_cache for the
- * cell and then call the specialised functions doing the actual work on
- * the cache. It then write the data back to the particles.
- *
- * @param r The #runner.
- * @param c The #cell.
- */
-void runner_doself_grav_pp_new(
-    struct runner *r, struct cell *c,
-    struct gravity_gpu_values_send *gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
-    const int *counts_d,
-    const int *offsets_d,
-    int ncells,
-    int max_cell_size,
-    GPUStream stream) {
-
-  /* Recover some useful constants */
-  const struct engine *e = r->e;
-  const int periodic = e->mesh->periodic;
-  const float r_s_inv = e->mesh->r_s_inv;
-  const double min_trunc = e->mesh->r_cut_min;
-
-  TIMER_TIC;
-
-#ifdef SWIFT_DEBUG_CHECKS
-  if (c->grav.count == 0) error("Doing self gravity on an empty cell !");
-  if (c->nodeID != e->nodeID) error("Running on foreign cell!");
+#ifndef SWIFT_TASKS_WITHOUT_ATOMICS
+  lock_lock(&c->grav.plock);
 #endif
-
-  /* Start by constructing a cache for the particles */
-  struct gravity_cache *const ci_cache = &r->ci_gravity_cache;
-
-  /* Shift to apply to the particles in the cell */
-  const double loc[3] = {c->loc[0] + 0.5 * c->width[0],
-                         c->loc[1] + 0.5 * c->width[1],
-                         c->loc[2] + 0.5 * c->width[2]};
-
-  /* Computed the padded counts */
-  const int gcount = c->grav.count;
-  const int gcount_padded = gcount - (gcount % VEC_SIZE) + VEC_SIZE;
-
-  /* Fill the cache */
-  gravity_cache_populate_no_mpole(e->max_active_bin, ci_cache, c->grav.parts,
-                                  gcount, gcount_padded, loc, c,
-                                  e->gravity_properties);
-
-  //const float rmax = 2. * c->grav.multipole->r_max;
-
-  self_pp_offload_new(periodic, NULL, min_trunc, &r_s_inv,
-                      counts_d, offsets_d,
-                      gravity_gpu_values_send_d,
-                      gravity_gpu_values_recv_d,
-                      ncells, max_cell_size, stream);
+  gravity_cache_write_back(ci_cache, c, c->grav.parts, gcount);
+#ifndef SWIFT_TASKS_WITHOUT_ATOMICS
+  if (lock_unlock(&c->grav.plock) != 0) error("Error unlocking cell");
+#endif
 
   TIMER_TOC(timer_doself_grav_pp);
 }
+
 
 /**
  * @brief Computes all the M-M interactions between all the well-separated (at
@@ -2518,7 +2399,54 @@ void runner_dopair_recursive_grav(struct runner *r, struct cell *ci,
  * @param c The first #cell.
  * @param gettimer Are we timing this ?
  */
+void runner_doself_recursive_grav(struct runner *r, struct cell *c,
+                                  const int gettimer) {
 
+  /* Some constants */
+  const struct engine *e = r->e;
+
+  /* Clear the flags */
+  runner_clear_grav_flags(c, e);
+
+#ifdef SWIFT_DEBUG_CHECKS
+  /* Early abort? */
+  if (c->grav.count == 0) error("Doing self gravity on an empty cell !");
+#endif
+
+  TIMER_TIC;
+
+  /* Anything to do here? */
+  if (!cell_is_active_gravity(c, e)) return;
+
+  /* If the cell is split, interact each progeny with itself, and with
+     each of its siblings. */
+  if (c->split) {
+
+    for (int j = 0; j < 8; j++) {
+      if (c->progeny[j] != NULL) {
+
+        runner_doself_recursive_grav(r, c->progeny[j], 0);
+
+        for (int k = j + 1; k < 8; k++) {
+          if (c->progeny[k] != NULL) {
+
+            runner_dopair_recursive_grav(r, c->progeny[j], c->progeny[k], 0);
+          }
+        }
+      }
+    }
+  }
+
+  /* If the cell is not split, then just go for it... */
+  else {
+
+    runner_doself_grav_pp(r, c);
+  }
+
+  if (gettimer) TIMER_TOC(timer_dosub_self_grav);
+}
+
+#ifdef WITH_GPU
 /**
  * @brief Computes the interaction of all the particles in a cell.
  *
@@ -2529,7 +2457,7 @@ void runner_dopair_recursive_grav(struct runner *r, struct cell *ci,
  * @param c The first #cell.
  * @param gettimer Are we timing this ?
  */
-enum runner_gpu_task_type runner_doself_recursive_grav_new(
+enum runner_gpu_task_type runner_doself_recursive_grav_gpu(
     struct runner *r,
     struct gpu_runner_substream *substream,
     struct cell *c,
@@ -2564,7 +2492,7 @@ enum runner_gpu_task_type runner_doself_recursive_grav_new(
       if (c->progeny[j] == NULL) continue;
 
       enum runner_gpu_task_type child_self_type =
-          runner_doself_recursive_grav_new(
+          runner_doself_recursive_grav_gpu(
 		    r,
 		    substream,
 		    c->progeny[j],
@@ -2582,7 +2510,7 @@ enum runner_gpu_task_type runner_doself_recursive_grav_new(
         if (c->progeny[k] == NULL) continue;
 
         enum runner_gpu_task_type child_pair_type =
-    	runner_dopair_recursive_grav_new(
+    	runner_dopair_recursive_grav_gpu(
         	r, substream, c->progeny[j], c->progeny[k], 0,
         	substream->grav_cells_pair, substream->grav_tasks_pair,
         	substream->grav_pair_internal_from_self,
@@ -2595,7 +2523,7 @@ enum runner_gpu_task_type runner_doself_recursive_grav_new(
   } else {
 
     /* Leaf self cell: pack it */
-    task_type = runner_doself_grav_pp_task_new(
+    task_type = runner_doself_grav_pp_task_gpu(
         r, substream, c, t, ncells, max_cell_size);
   }
 
@@ -2623,3 +2551,4 @@ enum runner_gpu_task_type runner_doself_recursive_grav_new(
   if (gettimer) TIMER_TOC(timer_dosub_self_grav);
   return final_type;
 }
+#endif

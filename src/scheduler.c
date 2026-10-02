@@ -71,6 +71,7 @@ static void scheduler_mark_done_debug(struct scheduler *s,
   int rank = 0;
 #endif
 
+#ifdef WITH_GPU
   const int old_count = t->done_count;
   t->done_count++;
 
@@ -104,6 +105,7 @@ static void scheduler_mark_done_debug(struct scheduler *s,
   t->done_runner = -1;
   t->done_qid = -1;
   t->done_rank = rank;
+#endif
 }
 
 /**
@@ -240,13 +242,16 @@ struct task *scheduler_addtask(struct scheduler *s, enum task_types type,
   t->nr_unlock_tasks = 0;
 #ifdef SWIFT_DEBUG_TASKS
   t->rid = -1;
+#ifdef WITH_GPU
   t->gpu_host_toc = 0;
   t->gpu_debug_result = gpu_debug_none;
   t->gpu_debug_pair_flushes = 0;
 #endif
+#endif
   t->tic = 0;
   t->toc = 0;
   t->total_ticks = 0;
+#ifdef WITH_GPU
   t->gpu_done_count = 0;
   t->gpu_done_where = NULL;
   t->gpu_done_runner = -1;
@@ -265,6 +270,7 @@ struct task *scheduler_addtask(struct scheduler *s, enum task_types type,
   t->wait_set_where = NULL;
   
   t->gpu_counted = 0;
+#endif
 
   if (ci != NULL) cell_set_flag(ci, cell_flag_has_tasks);
   if (cj != NULL) cell_set_flag(cj, cell_flag_has_tasks);
@@ -464,12 +470,14 @@ void scheduler_ranktasks(struct scheduler *s) {
     }
   }
 
+#ifdef WITH_GPU
   /* Optional snapshot for debugging only. */
   for (int i = 0; i < nr_tasks; i++) {
     tasks[i].wait_initial = tasks[i].wait;
     tasks[i].wait_rank_seen = 1;
     tasks[i].wait_set_where = "scheduler_ranktasks:after_unlock_count";
   }
+#endif
 
   /* Load the tids of tasks with no waits. */
   int left = 0;
@@ -560,8 +568,10 @@ void scheduler_reset(struct scheduler *s, int size) {
   
   for (int k = 0; k < s->nr_queues; k++) {
   s->queues[k].tasks = s->tasks;
+#ifdef WITH_GPU
   s->queues[k].gpu_self_tasks_left = 0;
   s->queues[k].gpu_pair_tasks_left = 0;
+#endif
 }
 }
 
@@ -948,6 +958,7 @@ void scheduler_start(struct scheduler *s) {
   for (int i = 0; i < s->active_count; i++) {
   struct task *t = &s->tasks[s->tid_active[i]];
 
+#ifdef WITH_GPU
   t->done_count = 0;
   t->done_where = NULL;
   t->done_runner = -1;
@@ -969,12 +980,15 @@ void scheduler_start(struct scheduler *s) {
   t->gpu_debug_result = gpu_debug_none;
   t->gpu_debug_pair_flushes = 0;
 #endif
+#endif
 }
 
+#ifdef WITH_GPU
   for (int i = 0; i < s->nr_queues; i++) {
     s->queues[i].gpu_self_tasks_left = 0;
     s->queues[i].gpu_pair_tasks_left = 0;
   }
+#endif
 
   /* Re-wait the tasks. */
   if (s->active_count > 1000) {
@@ -1419,10 +1433,15 @@ struct task *scheduler_done(struct scheduler *s, struct task *t) {
    * runner_main(). Their scheduler completion occurs later and must not
    * overwrite toc or add the submit-to-GPU-completion latency.
    */
+#ifdef WITH_GPU
   if (!t->gpu_completed) {
     t->toc = getticks();
     t->total_ticks += t->toc - t->tic;
   }
+#else
+  t->toc = getticks();
+  t->total_ticks += t->toc - t->tic;
+#endif
 
 #ifdef SWIFT_DEBUG_CHECKS
   else if (t->toc == 0) {
@@ -1659,6 +1678,7 @@ struct task *scheduler_gettask(struct scheduler *s, int qid,
        * Return NULL so runner_main can flush the GPU leftovers. */
       if (res == NULL) {
 
+#ifdef WITH_GPU
   if (q->gpu_self_tasks_left < 0 || q->gpu_pair_tasks_left < 0) {
     error("GPU task counter corrupted in scheduler_gettask: "
           "qid=%d self_left=%d pair_left=%d waiting=%d",
@@ -1671,6 +1691,7 @@ struct task *scheduler_gettask(struct scheduler *s, int qid,
   if (q->gpu_self_tasks_left > 0 || q->gpu_pair_tasks_left > 0) {
     return NULL;
   }
+#endif
 }
     }
 
@@ -1684,6 +1705,7 @@ struct task *scheduler_gettask(struct scheduler *s, int qid,
       pthread_mutex_lock(&s->sleep_mutex);
       res = queue_gettask(&s->queues[qid], prev, 1);
       if (res == NULL && s->waiting > 0) {
+      #ifdef WITH_GPU
         if (q->gpu_self_tasks_left > 0 || q->gpu_pair_tasks_left > 0) {
           error("scheduler_gettask about to sleep with GPU work pending: "
                 "qid=%d self_left=%d pair_left=%d waiting=%d",
@@ -1692,6 +1714,7 @@ struct task *scheduler_gettask(struct scheduler *s, int qid,
                 q->gpu_pair_tasks_left,
                 s->waiting);
         }
+      #endif
         
         pthread_cond_wait(&s->sleep_cond, &s->sleep_mutex);
       }

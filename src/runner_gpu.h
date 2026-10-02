@@ -212,7 +212,7 @@ void runner_gpu_clean(struct runner *r);
  * @param max_cell_size The maximum number of particles per packed cell.
  * @return The outcome of the GPU wrapper for this task.
  */
-enum runner_gpu_task_type runner_doself_grav_pp_task_new(
+enum runner_gpu_task_type runner_doself_grav_pp_task_gpu(
     struct runner *r, struct gpu_runner_substream *substream,
     struct cell *c, struct task *t, int ncells, int max_cell_size);
 
@@ -221,7 +221,7 @@ enum runner_gpu_task_type runner_doself_grav_pp_task_new(
  *
  * @return The outcome of the GPU wrapper for this task.
  */
-enum runner_gpu_task_type runner_dopair_grav_pp_new(
+enum runner_gpu_task_type runner_dopair_grav_pp_gpu(
     struct runner *r, struct gpu_runner_substream *substream, struct cell *ci,
     struct cell *cj, const int symmetric, const int allow_mpole,
     struct cell **grav_cells_pair, struct task **grav_tasks_pair,
@@ -234,7 +234,7 @@ enum runner_gpu_task_type runner_dopair_grav_pp_new(
  *
  * @return The outcome of the GPU wrapper for this task.
  */
-enum runner_gpu_task_type runner_dopair_recursive_grav_new(
+enum runner_gpu_task_type runner_dopair_recursive_grav_gpu(
     struct runner *r, struct gpu_runner_substream *substream, struct cell *ci,
     struct cell *cj, const int gettimer,
     struct cell **grav_cells_pair, struct task **grav_tasks_pair,
@@ -243,7 +243,7 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_new(
     int ncells, int max_cell_size, GPUStream stream);
     
     
-enum runner_gpu_task_type runner_doself_recursive_grav_new(
+enum runner_gpu_task_type runner_doself_recursive_grav_gpu(
     struct runner *r,
     struct gpu_runner_substream *substream,
     struct cell *c,

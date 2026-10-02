@@ -29,7 +29,7 @@
  * @param max_cell_size Maximum number of particles per packed cell.
  * @param stream GPU stream used for the kernel launch.
  */
-extern "C" void self_pp_offload_new(
+extern "C" void self_pp_offload_gpu(
     int periodic,
     const float *r_s_inv,
     const int *self_cell_flags_d,
@@ -105,7 +105,7 @@ extern "C" void self_pp_offload_new(
  * @param max_cell_size Maximum number of particles per packed cell.
  * @param stream GPU stream used for the kernel launch.
  */
-extern "C" void pair_pp_offload_new(
+extern "C" void pair_pp_offload_gpu(
     int periodic,
     double min_trunc,
     const float *r_s_inv,

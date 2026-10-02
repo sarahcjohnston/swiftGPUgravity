@@ -29,15 +29,19 @@
 #include "timers.h"
 
 /* GPU headers */
+#ifdef WITH_GPU
 #include "gpu_mapping.h"
+#endif
 
 /* Avoid cyclic inclusions. */
 struct runner;
 struct cell;
 struct task;
 struct scheduler;
+#ifdef WITH_GPU
 struct gravity_gpu_values_send;
 struct gravity_gpu_values_recv;
+#endif
 
 /**
  * @brief Clear the gravity unskip flags of this cell.
@@ -62,47 +66,41 @@ static inline void runner_clear_grav_flags(struct cell *c,
 
 void runner_do_grav_down(struct runner *r, struct cell *c, int timer);
 
+/* Normal CPU gravity interface. */
 void runner_dopair_grav_pp(struct runner *r, struct cell *ci, struct cell *cj,
                            const int symmetric, const int allow_mpole);
 
-void runner_doself_recursive_grav(
-    struct runner *r, struct cell *c, int gettimer, float *d_h_i, float *d_h_j,
-    float *d_mass_i, float *d_mass_j, float *d_x_i, float *d_x_j, float *d_y_i,
-    float *d_y_j, float *d_z_i, float *d_z_j, float *d_a_x_i, float *d_a_y_i,
-    float *d_a_z_i, float *d_a_x_j, float *d_a_y_j, float *d_a_z_j,
-    float *d_pot_i, float *d_pot_j, int *d_active_i, int *d_active_j,
-    float *d_CoM_i, float *d_CoM_j, int ncells, int max_cell_size,
-    int *d_gcounts, int *d_cell_active, GPUStream stream);
+void runner_doself_recursive_grav(struct runner *r, struct cell *c,
+                                  int gettimer);
 
 void runner_dopair_recursive_grav(struct runner *r, struct cell *ci,
                                   struct cell *cj, int gettimer);
+
 void runner_dopair_grav_mm_progenies(struct runner *r, const long long flags,
                                      struct cell *restrict ci,
                                      struct cell *restrict cj);
 
 void runner_do_grav_long_range(struct runner *r, struct cell *ci, int timer);
 
-/* Internal functions (for unit tests and debugging) */
+/* Internal CPU function. */
+void runner_doself_grav_pp(struct runner *r, struct cell *c);
 
-void runner_doself_grav_pp(struct runner *r, struct cell *c, float *d_h_i,
-                           float *d_mass_i, float *d_x_i, float *d_y_i,
-                           float *d_z_i, float *d_a_x_i, float *d_a_y_i,
-                           float *d_a_z_i, float *d_pot_i, int *d_active_i,
-                           int ncells, int max_cell_size, int *gcounts,
-                           int *cell_active, GPUStream stream);
+/* GPU-only interface. */
+#ifdef WITH_GPU
 
-void runner_doself_grav_pp_new(
-    struct runner *r, struct cell *c,
-    struct gravity_gpu_values_send *gravity_gpu_values_send_d,
-    struct gravity_gpu_values_recv *gravity_gpu_values_recv_d,
-    const int *counts_d,
-    const int *offsets_d,
+enum runner_gpu_task_type runner_doself_recursive_grav_gpu(
+    struct runner *r,
+    struct gpu_runner_substream *substream,
+    struct cell *c,
+    const int gettimer,
+    struct cell **grav_cells_self,
+    struct task **grav_tasks_self,
+    struct task *t,
     int ncells,
     int max_cell_size,
     GPUStream stream);
 
-void runner_dopair_grav_pp(struct runner *r, struct cell *ci, struct cell *cj,
-                           const int symmetric, const int allow_mpole);
+#endif /* WITH_GPU */
 
 /**
  * @brief Computes the interaction of the field tensor in a cell with the

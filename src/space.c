@@ -1297,7 +1297,7 @@ void space_init(struct space* s, struct swift_params* params,
       parser_get_opt_param_int(params, "Scheduler:cell_subdepth_diff_grav",
                                space_subdepth_diff_grav_default);
 
-#if defined(WITH_CUDA) || defined(WITH_HIP)
+#ifdef WITH_GPU
   /* When running with GPU gravity support the cell splitting parameters are
    * superseded. */
   space_subsize_self_grav = parser_get_opt_param_int(

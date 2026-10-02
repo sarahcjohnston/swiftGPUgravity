@@ -1293,6 +1293,7 @@ void task_free_mpi_comms(void) {
  */
 static inline ticks task_get_plot_toc(const struct task *t) {
 
+  #ifdef WITH_GPU
   if ((t->type == task_type_self || t->type == task_type_pair) &&
       t->subtype == task_subtype_grav &&
       t->gpu_host_toc > t->tic) {
@@ -1300,6 +1301,8 @@ static inline ticks task_get_plot_toc(const struct task *t) {
   }
 
   return t->toc;
+  
+  #endif
 }
 #endif
 
@@ -1360,24 +1363,47 @@ void task_dump_all(struct engine *e, int step) {
       for (int l = 0; l < e->sched.nr_tasks; l++) {
         if (!e->sched.tasks[l].implicit &&
             e->sched.tasks[l].tic > e->tic_step) {
-          fprintf(
-	    file_thread,
-	    " %03i %i %i %i %i %lli %lli %i %i %i %i %lli %i %i %i\n",
-	    engine_rank,
-	    e->sched.tasks[l].rid,
-	    e->sched.tasks[l].type,
-	    e->sched.tasks[l].subtype,
-	    (e->sched.tasks[l].cj == NULL),
-	    (long long int)e->sched.tasks[l].tic,
-	    (long long int)task_get_plot_toc(&e->sched.tasks[l]),
-	    (e->sched.tasks[l].ci != NULL) ? e->sched.tasks[l].ci->hydro.count : 0,
-	    (e->sched.tasks[l].cj != NULL) ? e->sched.tasks[l].cj->hydro.count : 0,
-	    (e->sched.tasks[l].ci != NULL) ? e->sched.tasks[l].ci->grav.count : 0,
-	    (e->sched.tasks[l].cj != NULL) ? e->sched.tasks[l].cj->grav.count : 0,
-	    e->sched.tasks[l].flags,
-	    e->sched.tasks[l].sid,
-	    e->sched.tasks[l].gpu_debug_result,
-	    e->sched.tasks[l].gpu_debug_pair_flushes);
+          #ifdef WITH_GPU
+
+		fprintf(
+		    file_thread,
+		    " %03i %i %i %i %i %lli %lli %i %i %i %i %lli %i %i %i\n",
+		    engine_rank,
+		    e->sched.tasks[l].rid,
+		    e->sched.tasks[l].type,
+		    e->sched.tasks[l].subtype,
+		    (e->sched.tasks[l].cj == NULL),
+		    (long long int)e->sched.tasks[l].tic,
+		    (long long int)task_get_plot_toc(&e->sched.tasks[l]),
+		    (e->sched.tasks[l].ci != NULL) ? e->sched.tasks[l].ci->hydro.count : 0,
+		    (e->sched.tasks[l].cj != NULL) ? e->sched.tasks[l].cj->hydro.count : 0,
+		    (e->sched.tasks[l].ci != NULL) ? e->sched.tasks[l].ci->grav.count : 0,
+		    (e->sched.tasks[l].cj != NULL) ? e->sched.tasks[l].cj->grav.count : 0,
+		    e->sched.tasks[l].flags,
+		    e->sched.tasks[l].sid,
+		    e->sched.tasks[l].gpu_debug_result,
+		    e->sched.tasks[l].gpu_debug_pair_flushes);
+
+		#else
+
+		fprintf(
+		    file_thread,
+		    " %03i %i %i %i %i %lli %lli %i %i %i %i %lli %i\n",
+		    engine_rank,
+		    e->sched.tasks[l].rid,
+		    e->sched.tasks[l].type,
+		    e->sched.tasks[l].subtype,
+		    (e->sched.tasks[l].cj == NULL),
+		    (long long int)e->sched.tasks[l].tic,
+		    (long long int)e->sched.tasks[l].toc,
+		    (e->sched.tasks[l].ci != NULL) ? e->sched.tasks[l].ci->hydro.count : 0,
+		    (e->sched.tasks[l].cj != NULL) ? e->sched.tasks[l].cj->hydro.count : 0,
+		    (e->sched.tasks[l].ci != NULL) ? e->sched.tasks[l].ci->grav.count : 0,
+		    (e->sched.tasks[l].cj != NULL) ? e->sched.tasks[l].cj->grav.count : 0,
+		    e->sched.tasks[l].flags,
+		    e->sched.tasks[l].sid);
+
+		#endif
         }
       }
       fclose(file_thread);
@@ -1403,7 +1429,9 @@ void task_dump_all(struct engine *e, int step) {
         e->s_updates, 0, 0, 0, cpufreq);
   for (int l = 0; l < e->sched.nr_tasks; l++) {
     if (!e->sched.tasks[l].implicit && e->sched.tasks[l].tic > e->tic_step) {
-      fprintf(
+      #ifdef WITH_GPU
+
+	fprintf(
 	    file_thread,
 	    " %i %i %i %i %lli %lli %i %i %i %i %i %i %i\n",
 	    e->sched.tasks[l].rid,
@@ -1419,6 +1447,25 @@ void task_dump_all(struct engine *e, int step) {
 	    e->sched.tasks[l].sid,
 	    e->sched.tasks[l].gpu_debug_result,
 	    e->sched.tasks[l].gpu_debug_pair_flushes);
+
+	#else
+
+	fprintf(
+	    file_thread,
+	    " %i %i %i %i %lli %lli %i %i %i %i %i\n",
+	    e->sched.tasks[l].rid,
+	    e->sched.tasks[l].type,
+	    e->sched.tasks[l].subtype,
+	    (e->sched.tasks[l].cj == NULL),
+	    (unsigned long long)e->sched.tasks[l].tic,
+	    (unsigned long long)e->sched.tasks[l].toc,
+	    (e->sched.tasks[l].ci == NULL) ? 0 : e->sched.tasks[l].ci->hydro.count,
+	    (e->sched.tasks[l].cj == NULL) ? 0 : e->sched.tasks[l].cj->hydro.count,
+	    (e->sched.tasks[l].ci == NULL) ? 0 : e->sched.tasks[l].ci->grav.count,
+	    (e->sched.tasks[l].cj == NULL) ? 0 : e->sched.tasks[l].cj->grav.count,
+	    e->sched.tasks[l].sid);
+
+	#endif
     }
   }
   fclose(file_thread);

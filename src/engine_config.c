@@ -1013,9 +1013,11 @@ void engine_config(int restart, int fof, struct engine* e,
     e->runners[k].qid = k * nr_queues / e->nr_threads;
   }
 
+#ifdef WITH_GPU
   /* GPU runner setup. Keep this before pthread_create if your GPU code
      expects buffers/streams to exist before runner_main starts. */
   runner_gpu_init(&e->runners[k]);
+#endif
 
   /* Allocate particle caches. */
   e->runners[k].ci_gravity_cache.count = 0;
