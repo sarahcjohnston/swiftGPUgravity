@@ -2539,7 +2539,6 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_gpu(
         /* Loop over ci's children */
         for (int k = 0; k < 8; k++) {
           if (ci->progeny[k] != NULL) {
-            // runner_dopair_recursive_grav(r, ci->progeny[k], cj, 0);
             enum runner_gpu_task_type child_type =
     		runner_dopair_recursive_grav_gpu(
         		r, substream, ci->progeny[k], cj, 0,
@@ -2558,7 +2557,6 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_gpu(
         /* Loop over cj's children */
         for (int k = 0; k < 8; k++) {
           if (cj->progeny[k] != NULL) {
-            // runner_dopair_recursive_grav(r, ci, cj->progeny[k], 0);
             enum runner_gpu_task_type child_type =
                 runner_dopair_recursive_grav_gpu(
                     r, substream, ci, cj->progeny[k], 0,
@@ -2577,7 +2575,6 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_gpu(
         /* Loop over cj's children */
         for (int k = 0; k < 8; k++) {
           if (cj->progeny[k] != NULL) {
-            // runner_dopair_recursive_grav(r, ci, cj->progeny[k], 0);
             enum runner_gpu_task_type child_type =
                 runner_dopair_recursive_grav_gpu(
                     r, substream, ci, cj->progeny[k], 0,
@@ -2596,7 +2593,6 @@ enum runner_gpu_task_type runner_dopair_recursive_grav_gpu(
         /* Loop over ci's children */
         for (int k = 0; k < 8; k++) {
           if (ci->progeny[k] != NULL) {
-            // runner_dopair_recursive_grav(r, ci->progeny[k], cj, 0);
             enum runner_gpu_task_type child_type =
                 runner_dopair_recursive_grav_gpu(
                     r, substream, ci->progeny[k], cj, 0,
@@ -2665,7 +2661,7 @@ static int runner_gpu_choose_batch_ncells(const struct engine *e,
   const size_t usable_bytes = (size_t)(free_bytes * usable_fraction);
   
   const int nstreams = parser_get_opt_param_int(
-      e->parameter_file, "GPU:nstreams", 1); //try changing this to 1 and see if it works better?
+      e->parameter_file, "GPU:nstreams", 1);
 
   const size_t bytes_per_cell_per_substream =
       (size_t)max_cell_size *
