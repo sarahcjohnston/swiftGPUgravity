@@ -1,4 +1,4 @@
-/*******************************************************************************
+ /*******************************************************************************
  * This file is part of SWIFT.
  * Copyright (c) 2012 Pedro Gonnet (pedro.gonnet@durham.ac.uk)
  *                    Matthieu Schaller (schaller@strw.leidenuniv.nl)
@@ -136,9 +136,24 @@
 #include "runner_doiact_hydro.h"
 #include "runner_doiact_undef.h"
 
+/* Import the GPU functions needed. */
+#include "active.h"
+
+#ifdef WITH_GPU
+#include "gpu_functions.h"
+#endif
+
+#include <stdatomic.h>
+
 /* likwid markers. */
 #ifdef WITH_LIKWID
 #include "likwid_wrapper.h"
+#endif
+
+#ifdef SWIFT_DEBUG_TASKS
+int debug_gpu_packed = 0;
+int debug_gpu_flushed_pair = 0;
+int debug_gpu_flushed_self = 0;
 #endif
 
 /**
@@ -151,6 +166,13 @@ void *runner_main(void *data) {
   struct runner *r = (struct runner *)data;
   struct engine *e = r->e;
   struct scheduler *sched = &e->sched;
+  
+  #ifdef WITH_GPU
+  runner_gpu_bind_device(r);
+
+  const int max_cell_size = r->gpu.grav_max_cell_size;
+  const int ncells = r->gpu.grav_batch_ncells;
+  #endif
 
 #ifdef WITH_LIKWID
   swift_likwid_marker_start_region("runner_main");
@@ -174,14 +196,41 @@ void *runner_main(void *data) {
       /* If there's no old task, try to get a new one. */
       if (t == NULL) {
 
-        /* Get the task. */
-        TIMER_TIC
-        t = scheduler_gettask(sched, r->qid, prev);
-        TIMER_TOC(timer_gettask);
+  TIMER_TIC;
+  t = scheduler_gettask(sched, r->qid, prev);
+  TIMER_TOC(timer_gettask);
 
-        /* Did I get anything? */
-        if (t == NULL) break;
-      }
+  /* scheduler_gettask() may consume prev. */
+  prev = NULL;
+
+  if (t == NULL) {
+
+    #ifdef WITH_GPU
+    if (runner_gpu_flush_leftover_self(r) == flushed_self_task) {
+      continue;
+    }
+
+    if (runner_gpu_flush_leftover_pair(r) == flushed_pair_task) {
+      continue;
+    }
+    
+    lock_lock(&sched->queues[r->qid].lock);
+
+  if (sched->queues[r->qid].gpu_self_tasks_left != 0 ||
+      sched->queues[r->qid].gpu_pair_tasks_left != 0) {
+    error("Runner exiting task loop with unfinished GPU tasks: "
+          "qid=%d gpu_self_tasks_left=%d gpu_pair_tasks_left=%d",
+          r->qid,
+          sched->queues[r->qid].gpu_self_tasks_left,
+          sched->queues[r->qid].gpu_pair_tasks_left);
+  }
+
+  (void)lock_unlock(&sched->queues[r->qid].lock);
+  #endif
+
+    break;
+  }
+}
 
       /* Get the cells. */
       struct cell *ci = t->ci;
@@ -210,13 +259,32 @@ void *runner_main(void *data) {
 #endif
 
       const ticks task_beg = getticks();
+      #ifdef WITH_GPU
+      enum runner_gpu_task_type gpu_task_type = regular_task;
+      #endif
+
       /* Different types of tasks... */
       switch (t->type) {
 
         case task_type_self:
-          if (t->subtype == task_subtype_grav)
-            runner_doself_recursive_grav(r, ci, 1);
-          else if (t->subtype == task_subtype_external_grav)
+          if (t->subtype == task_subtype_grav) {
+          #ifdef WITH_GPU
+            struct gpu_runner_substream *substream = runner_gpu_acquire_substream(r);
+	    gpu_task_type = runner_doself_recursive_grav_gpu(
+		    r,
+		    substream,
+		    ci,
+		    1,
+		    substream->grav_cells_self,
+		    substream->grav_tasks_self,
+		    t,
+		    ncells,
+		    max_cell_size,
+		    substream->stream);
+	  #else
+	    runner_doself_recursive_grav(r, ci, 1);
+	  #endif 
+          } else if (t->subtype == task_subtype_external_grav)
             runner_do_grav_external(r, ci, 1);
           else if (t->subtype == task_subtype_density)
             runner_dosub_self1_density(r, ci, /*below_h_max=*/0, 1);
@@ -275,9 +343,18 @@ void *runner_main(void *data) {
           break;
 
         case task_type_pair:
-          if (t->subtype == task_subtype_grav)
-            runner_dopair_recursive_grav(r, ci, cj, 1);
-          else if (t->subtype == task_subtype_density)
+          if (t->subtype == task_subtype_grav) {
+          #ifdef WITH_GPU
+            struct gpu_runner_substream *substream = runner_gpu_acquire_substream(r);
+	    gpu_task_type = runner_dopair_recursive_grav_gpu(
+    		r, substream, ci, cj, 1,
+    		substream->grav_cells_pair, substream->grav_tasks_pair,
+    		substream->grav_pair_internal_from_self,
+    		t, 0, ncells, max_cell_size, substream->stream);
+    	  #else
+    	    runner_dopair_recursive_grav(r, ci, cj, 1);
+    	  #endif
+          } else if (t->subtype == task_subtype_density)
             runner_dosub_pair1_density(r, ci, cj, /*below_h_max=*/0, 1);
 #ifdef EXTRA_HYDRO_LOOP
           else if (t->subtype == task_subtype_gradient)
@@ -576,7 +653,22 @@ void *runner_main(void *data) {
         default:
           error("Unknown/invalid task type (%d).", t->type);
       }
-      r->active_time += (getticks() - task_beg);
+
+      const ticks task_end = getticks();
+
+      r->active_time += task_end - task_beg;
+
+	/*
+	 * A deferred GPU task is no longer occupying this CPU runner after this
+	 * point. Close its CPU-side task interval now so task traces remain
+	 * non-overlapping.
+	 */
+	#ifdef WITH_GPU
+	if (gpu_task_type != regular_task) {
+	  t->toc = task_end;
+	  t->total_ticks += t->toc - t->tic;
+	}
+	#endif
 
 /* Mark that we have run this task on these cells */
 #ifdef SWIFT_DEBUG_CHECKS
@@ -594,15 +686,79 @@ void *runner_main(void *data) {
 #endif
 
       /* We're done with this task, see if we get a next one. */
-      prev = t;
+      //prev = t;
+
+  #ifdef WITH_GPU
+  switch (gpu_task_type) {
+        case regular_task:
+          t = scheduler_done(sched, t);
+          break;
+
+        case packed_task: {
+          #ifdef SWIFT_DEBUG_TASKS
+  		debug_gpu_packed++;
+	  #endif
+	  
+	  #ifdef SWIFT_DEBUG_TASKS
+	  /*
+	   * This task has now finished occupying the CPU runner.
+	   * The task itself remains outstanding until its GPU batch completes.
+	   */
+	  if ((t->type == task_type_self || t->type == task_type_pair) &&
+	      t->subtype == task_subtype_grav) {
+	    t->gpu_host_toc = getticks();
+	    t->gpu_debug_result = gpu_debug_packed;
+	  }
+	  #endif
+
+	  prev = NULL;
+	  t = NULL;
+	  break;
+	}
+
+        case flushed_self_task:
+
+	  #ifdef SWIFT_DEBUG_TASKS
+		debug_gpu_flushed_self++;
+		t->gpu_debug_result = gpu_debug_flushed_self;
+	  #endif
+
+	  if (!t->gpu_completed)
+  		runner_gpu_complete_current_self_task(r, sched, t);
+
+	  prev = NULL;
+	  t = NULL;
+	  break;
+
+        case flushed_pair_task:
+        #ifdef SWIFT_DEBUG_TASKS
+  		debug_gpu_flushed_pair++;
+  		t->gpu_debug_result = gpu_debug_flushed_pair;
+	#endif
+
+	  if (!t->gpu_completed)
+	    runner_gpu_complete_pair_task(r, sched, t);
+
+	  prev = NULL;
+	  t = NULL;
+	  break;
+
+        default:
+          error("Unknown GPU task result (%d).", gpu_task_type);
+      }
+      
+      #else
+      
       t = scheduler_done(sched, t);
+      
+      #endif
+      
 
     } /* main loop. */
   }
 #ifdef WITH_LIKWID
   swift_likwid_marker_stop_region("runner_main");
 #endif
-
   /* Be kind, rewind. */
   return NULL;
 }
