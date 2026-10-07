@@ -29,6 +29,9 @@
 /* Local headers. */
 #include "cache.h"
 #include "gravity_cache.h"
+#ifdef WITH_GPU
+#include "runner_gpu.h"
+#endif
 
 struct cell;
 struct engine;
@@ -74,6 +77,11 @@ struct runner {
 
   /*! Time this runner was active during the last engine_launch. */
   ticks active_time;
+
+#ifdef WITH_GPU
+  /*! GPU-specific runner state. */
+  struct gpu_runner gpu;
+#endif
 
 #ifdef WITH_VECTORIZATION
 
