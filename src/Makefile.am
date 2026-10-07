@@ -21,12 +21,8 @@ GPU_LIBS = @GPU_LIBS@
 
 # Add the non-standard paths to the included library headers
 AM_CFLAGS = $(HDF5_CPPFLAGS) $(GSL_INCS) $(FFTW_INCS) $(NUMA_INCS) \
-<<<<<<< ours
         $(GRACKLE_INCS)  $(SUNDIALS_INCS) $(CHEALPIX_CFLAGS) $(LUSTREAPI_INCS) \
-        $(AGAMA_INCS)
-=======
-        $(GRACKLE_INCS)  $(SUNDIALS_INCS) $(CHEALPIX_CFLAGS) $(LUSTREAPI_INCS) $(GPU_CPPFLAGS)
->>>>>>> theirs
+        $(AGAMA_INCS) $(GPU_CPPFLAGS)
 
 # Assign a "safe" version number
 AM_LDFLAGS = $(HDF5_LDFLAGS) $(FFTW_LIBS) $(GPU_LDFLAGS)
@@ -558,13 +554,8 @@ libgrav_la_LDFLAGS = $(AM_LDFLAGS) $(EXTRA_LIBS) $(GPU_LDFLAGS)
 
 # Sources and special flags for the gravity MPI library
 libgrav_mpi_la_SOURCES = runner_doiact_grav.c runner_doiact_long_range_grav.c
-<<<<<<< ours
 libgrav_mpi_la_CFLAGS = $(AM_CFLAGS) $(MPI_FLAGS) $(GRAVITY_CFLAGS) -DWITH_MPI
 libgrav_mpi_la_LDFLAGS = $(AM_LDFLAGS) $(MPI_LIBS) $(EXTRA_LIBS)
-=======
-libgrav_mpi_la_CFLAGS = $(AM_CFLAGS) $(GRAVITY_CFLAGS) -DWITH_MPI
-libgrav_mpi_la_LDFLAGS = $(AM_LDFLAGS) $(MPI_LIBS) $(EXTRA_LIBS) $(GPU_LDFLAGS)
->>>>>>> theirs
 
 # Sources and flags for regular library
 libswiftsim_la_SOURCES = $(AM_SOURCES)
