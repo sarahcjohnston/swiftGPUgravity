@@ -81,15 +81,42 @@ else
 ENGINE_POLICY_SETAFFINITY=
 endif
 
+GPUCC = @GPUCC@
+GPU_CPPFLAGS = @GPU_CPPFLAGS@
+GPU_LDFLAGS = @GPU_LDFLAGS@
+GPU_LIBS = @GPU_LIBS@
+GPU_FLAGS = @GPU_FLAGS@
+GPU_COMPILE_MODE_FLAGS = @GPU_COMPILE_MODE_FLAGS@
+GPU_DEVICE_LINK_FLAGS = @GPU_DEVICE_LINK_FLAGS@
+GPU_DEVICE_LINK_LIBS = @GPU_DEVICE_LINK_LIBS@
+GPU_DLINK_OBJECT = @GPU_DLINK_OBJECT@
+
+if HAVEGPU
+GPU_OBJECTS = gpu_grav.o $(GPU_DLINK_OBJECT)
+
+swift_DEPENDENCIES = $(GPU_OBJECTS)
+swift_mpi_DEPENDENCIES = $(GPU_OBJECTS)
+
+gpu_grav.o: grav_pp_offload.cu
+	$(GPUCC) $(GPU_COMPILE_MODE_FLAGS) grav_pp_offload.cu -o gpu_grav.o $(GPU_CPPFLAGS) $(GPU_FLAGS) -I./src -I.
+
+gpu_link.o: gpu_grav.o
+	$(GPUCC) $(GPU_DEVICE_LINK_FLAGS) gpu_grav.o -o gpu_link.o $(GPU_FLAGS) $(GPU_DEVICE_LINK_LIBS)
+else
+GPU_OBJECTS =
+endif
+
 # Sources for swift
 swift_SOURCES = swift.c
-swift_CFLAGS = $(MYFLAGS) $(AM_CFLAGS) -DENGINE_POLICY="engine_policy_keep $(ENGINE_POLICY_SETAFFINITY)"
-swift_LDADD =  src/libswiftsim.la argparse/libargparse.la $(VELOCIRAPTOR_LIBS) $(EXTRA_LIBS) $(LD_CSDS)
+swift_CFLAGS = $(MYFLAGS) $(AM_CFLAGS) $(GPU_CPPFLAGS) -DENGINE_POLICY="engine_policy_keep $(ENGINE_POLICY_SETAFFINITY)"
+swift_LDFLAGS = $(GPU_LDFLAGS)
+swift_LDADD =  $(GPU_OBJECTS) src/libswiftsim.la argparse/libargparse.la $(VELOCIRAPTOR_LIBS) $(EXTRA_LIBS) $(LD_CSDS) $(GPU_LIBS)
 
 # Sources for swift_mpi, do we need an affinity policy for MPI?
 swift_mpi_SOURCES = swift.c
-swift_mpi_CFLAGS = $(MYFLAGS) $(AM_CFLAGS) $(MPI_FLAGS) -DENGINE_POLICY="engine_policy_keep $(ENGINE_POLICY_SETAFFINITY)"
-swift_mpi_LDADD =  src/libswiftsim_mpi.la argparse/libargparse.la $(MPI_LIBS) $(VELOCIRAPTOR_MPI_LIBS) $(EXTRA_LIBS) $(LD_CSDS)
+swift_mpi_CFLAGS = $(MYFLAGS) $(AM_CFLAGS) $(MPI_FLAGS) $(GPU_CPPFLAGS) -DENGINE_POLICY="engine_policy_keep $(ENGINE_POLICY_SETAFFINITY)"
+swift_mpi_LDFLAGS = $(GPU_LDFLAGS)
+swift_mpi_LDADD =  $(GPU_OBJECTS) src/libswiftsim_mpi.la argparse/libargparse.la $(MPI_LIBS) $(VELOCIRAPTOR_MPI_LIBS) $(EXTRA_LIBS) $(LD_CSDS) $(GPU_LIBS)
 
 # Sources for fof
 fof_SOURCES = swift_fof.c
