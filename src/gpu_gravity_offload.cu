@@ -6,7 +6,7 @@
 #include "gpu_mapping.h"
 #include <unistd.h>
 
-#include "externalfunctions.cu"
+#include "gpu_gravity_functions.cuh"
 #include "multipole_struct.h"
 #include "periodic.h"
 
