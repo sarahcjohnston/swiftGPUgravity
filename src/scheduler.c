@@ -875,11 +875,10 @@ void scheduler_enqueue_mapper(void *map_data, int num_elements,
  * @param s The #scheduler.
  */
 void scheduler_start(struct scheduler *s) {
-
+#ifdef WITH_GPU
   for (int i = 0; i < s->active_count; i++) {
   struct task *t = &s->tasks[s->tid_active[i]];
 
-#ifdef WITH_GPU
   t->gpu_completed = 0;
   t->gpu_counted = 0;
   
@@ -888,10 +887,8 @@ void scheduler_start(struct scheduler *s) {
   t->gpu_debug_result = gpu_debug_none;
   t->gpu_debug_pair_flushes = 0;
 #endif
-#endif
 }
 
-#ifdef WITH_GPU
   for (int i = 0; i < s->nr_queues; i++) {
     s->queues[i].gpu_self_tasks_left = 0;
     s->queues[i].gpu_pair_tasks_left = 0;
@@ -1507,7 +1504,9 @@ struct task *scheduler_gettask(struct scheduler *s, int qid,
   if (qid >= nr_queues || qid < 0) error("Bad queue ID.");
 
   /* Get a pointer to our queue for re-use */
+  #ifdef WITH_GPU
   struct queue *q = &s->queues[qid];
+  #endif
   /* Loop as long as there are tasks... */
   while (s->waiting > 0 && res == NULL) {
     /* Try more than once before sleeping. */

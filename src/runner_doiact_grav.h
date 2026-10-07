@@ -32,6 +32,27 @@
 struct runner;
 struct cell;
 
+/**
+ * @brief Clear the unskip flags of this cell.
+ *
+ * For inactive or foreign cells, we additionally need to recurse.
+ *
+ * @brief c The #cell of interest.
+ * @brief e The #engine (to check whether active or not).
+ */
+static INLINE void runner_clear_grav_flags(struct cell *c,
+                                           const struct engine *e) {
+
+  if ((!cell_is_active_gravity(c, e) || c->nodeID != e->nodeID) && c->split) {
+    for (int k = 0; k < 8; ++k)
+      if (c->progeny[k] != NULL) runner_clear_grav_flags(c->progeny[k], e);
+  }
+
+  /* Remove the unskip flags. */
+  cell_clear_flag(c, cell_flag_unskip_self_grav_processed |
+                         cell_flag_unskip_pair_grav_processed);
+}
+
 void runner_do_grav_down(struct runner *r, struct cell *c, int timer);
 
 void runner_dopair_grav_pp(struct runner *r, struct cell *ci, struct cell *cj,

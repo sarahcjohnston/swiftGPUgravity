@@ -694,6 +694,9 @@ struct engine {
   /* Flag to tell brute force checks a snapshot was recently written. */
   int force_checks_snapshot_flag;
 #endif
+
+  /* How many cells will we pack onto the GPU at a time? */
+  int ncells_per_gpu_grav_pack;
 };
 
 /* Function prototypes, engine.c. */
