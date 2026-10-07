@@ -1308,6 +1308,14 @@ void space_init(struct space *s, struct swift_params *params,
   space_subdepth_diff_grav =
       parser_get_opt_param_int(params, "Scheduler:cell_subdepth_diff_grav",
                                space_subdepth_diff_grav_default);
+  #ifdef WITH_GPU
+  /* When running with GPU gravity support the cell splitting parameters are
+   * superseded. */
+  space_subsize_self_grav = parser_get_opt_param_int(
+      params, "GPU:gpu_grav_cell_size", space_subsize_self_grav_default);
+  space_splitsize = parser_get_opt_param_int(params, "GPU:gpu_grav_cell_size",
+                                             space_splitsize_default);
+  #endif
 
   space_recurse_size_self_hydro =
       parser_get_opt_param_int(params, "Scheduler:cell_recurse_size_self_hydro",
