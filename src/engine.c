@@ -95,6 +95,9 @@
 #include "restart.h"
 #include "rt_properties.h"
 #include "runner.h"
+#ifdef WITH_GPU
+#include "runner_gpu.h"
+#endif
 #include "sink_properties.h"
 #include "sort_part.h"
 #include "star_formation.h"
@@ -3650,6 +3653,10 @@ void engine_init(
   e->total_nr_cells = 0;
   e->total_nr_tasks = 0;
 
+#ifdef WITH_GPU
+  runner_gpu_params_init(e);
+#endif
+
 #ifdef SWIFT_GRAVITY_FORCE_CHECKS
   e->force_checks_only_all_active =
       parser_get_opt_param_int(params, "ForceChecks:only_when_all_active", 0);
@@ -4013,6 +4020,9 @@ void engine_clean(struct engine *e, const int fof, const int restart) {
   for (int k = 0; k < e->nr_threads; k++) {
     if (pthread_join(e->runners[k].thread, /*retval=*/NULL) != 0)
       error("Failed to join runner %i.", k);
+#ifdef WITH_GPU
+    runner_gpu_clean(&e->runners[k]);
+#endif
 #ifdef WITH_VECTORIZATION
     cache_clean(&e->runners[k].ci_cache);
     cache_clean(&e->runners[k].cj_cache);
