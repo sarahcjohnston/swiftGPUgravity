@@ -201,7 +201,9 @@ struct task *scheduler_addtask(struct scheduler *s, enum task_types type,
   t->toc = 0;
   t->total_ticks = 0;
 #ifdef WITH_GPU
+  t->gpu_completed = 0;
   t->gpu_counted = 0;
+  t->gpu_unlocked = 0;
 #endif
 
   if (ci != NULL) cell_set_flag(ci, cell_flag_has_tasks);
@@ -881,6 +883,7 @@ void scheduler_start(struct scheduler *s) {
 
   t->gpu_completed = 0;
   t->gpu_counted = 0;
+  t->gpu_unlocked = 0;
   
 #ifdef SWIFT_DEBUG_TASKS
   t->gpu_host_toc = 0;
@@ -892,6 +895,9 @@ void scheduler_start(struct scheduler *s) {
   for (int i = 0; i < s->nr_queues; i++) {
     s->queues[i].gpu_self_tasks_left = 0;
     s->queues[i].gpu_pair_tasks_left = 0;
+    s->queues[i].gpu_hydro_density_tasks_left = 0;
+    s->queues[i].gpu_hydro_gradient_tasks_left = 0;
+    s->queues[i].gpu_hydro_force_tasks_left = 0;
   }
 #endif
 
@@ -1294,7 +1300,27 @@ void scheduler_enqueue(struct scheduler *s, struct task *t) {
 struct task *scheduler_done(struct scheduler *s, struct task *t) {
 
   /* Release whatever locks this task held. */
-  if (!t->implicit) task_unlock(t);
+  if (!t->implicit){
+
+#ifdef WITH_GPU
+  /*
+   * Asynchronous hydro GPU tasks release their cell locks before
+   * the GPU launch so that unpacking can safely lock individual
+   * cells. Do not unlock those cells a second time here.
+   */
+  if (!t->gpu_unlocked)
+    task_unlock(t);
+
+  /*
+   * Completion consumes the "already unlocked" state.
+   * The task may be activated again on a later timestep.
+   */
+  t->gpu_unlocked = 0;
+#else
+  task_unlock(t);
+#endif
+
+}
 
   /* Loop through the dependencies and add them to a queue if
      they are ready. */
@@ -1579,18 +1605,60 @@ struct task *scheduler_gettask(struct scheduler *s, int qid,
       if (res == NULL) {
 
 #ifdef WITH_GPU
-  if (q->gpu_self_tasks_left < 0 || q->gpu_pair_tasks_left < 0) {
+
+  /*
+   * GPU task counters are modified under q->lock by the GPU
+   * count/completion routines. Take a consistent snapshot here
+   * before deciding whether GPU work remains.
+   */
+  int gpu_self_left;
+  int gpu_pair_left;
+  int gpu_hydro_density_left;
+  int gpu_hydro_gradient_left;
+  int gpu_hydro_force_left;
+
+  lock_lock(&q->lock);
+
+  gpu_self_left = q->gpu_self_tasks_left;
+  gpu_pair_left = q->gpu_pair_tasks_left;
+  gpu_hydro_density_left = q->gpu_hydro_density_tasks_left;
+  gpu_hydro_gradient_left = q->gpu_hydro_gradient_tasks_left;
+  gpu_hydro_force_left = q->gpu_hydro_force_tasks_left;
+
+  (void)lock_unlock(&q->lock);
+
+  if (gpu_self_left < 0 ||
+      gpu_pair_left < 0 ||
+      gpu_hydro_density_left < 0 ||
+      gpu_hydro_gradient_left < 0 ||
+      gpu_hydro_force_left < 0) {
+
     error("GPU task counter corrupted in scheduler_gettask: "
-          "qid=%d self_left=%d pair_left=%d waiting=%d",
+          "qid=%d self_left=%d pair_left=%d "
+          "hydro_density_left=%d hydro_gradient_left=%d "
+          "hydro_force_left=%d waiting=%d",
           qid,
-          q->gpu_self_tasks_left,
-          q->gpu_pair_tasks_left,
+          gpu_self_left,
+          gpu_pair_left,
+          gpu_hydro_density_left,
+          gpu_hydro_gradient_left,
+          gpu_hydro_force_left,
           s->waiting);
   }
 
-  if (q->gpu_self_tasks_left > 0 || q->gpu_pair_tasks_left > 0) {
+  if (gpu_self_left > 0 ||
+      gpu_pair_left > 0 ||
+      gpu_hydro_density_left > 0 ||
+      gpu_hydro_gradient_left > 0 ||
+      gpu_hydro_force_left > 0) {
+
+    /*
+     * Give runner_main() an opportunity to flush any partial GPU
+     * batches instead of allowing this runner to sleep.
+     */
     return NULL;
   }
+
 #endif
 }
     }
@@ -1606,15 +1674,25 @@ struct task *scheduler_gettask(struct scheduler *s, int qid,
       res = queue_gettask(&s->queues[qid], prev, 1);
       if (res == NULL && s->waiting > 0) {
       #ifdef WITH_GPU
-        if (q->gpu_self_tasks_left > 0 || q->gpu_pair_tasks_left > 0) {
-          error("scheduler_gettask about to sleep with GPU work pending: "
-                "qid=%d self_left=%d pair_left=%d waiting=%d",
-                qid,
-                q->gpu_self_tasks_left,
-                q->gpu_pair_tasks_left,
-                s->waiting);
-        }
-      #endif
+	if (q->gpu_self_tasks_left > 0 ||
+	    q->gpu_pair_tasks_left > 0 ||
+	    q->gpu_hydro_density_tasks_left > 0 ||
+	    q->gpu_hydro_gradient_tasks_left > 0 ||
+	    q->gpu_hydro_force_tasks_left > 0) {
+
+	  error("scheduler_gettask about to sleep with GPU work pending: "
+		"qid=%d self_left=%d pair_left=%d "
+		"hydro_density_left=%d hydro_gradient_left=%d "
+		"hydro_force_left=%d waiting=%d",
+		qid,
+		q->gpu_self_tasks_left,
+		q->gpu_pair_tasks_left,
+		q->gpu_hydro_density_tasks_left,
+		q->gpu_hydro_gradient_tasks_left,
+		q->gpu_hydro_force_tasks_left,
+		s->waiting);
+	}
+	#endif
         
         pthread_cond_wait(&s->sleep_cond, &s->sleep_mutex);
       }

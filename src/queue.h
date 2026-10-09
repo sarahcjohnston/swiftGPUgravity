@@ -83,6 +83,17 @@ struct queue {
   int gpu_pair_tasks_left;
 #endif
 
+#ifdef WITH_CUDA
+  /*! Hydro density tasks awaiting GPU completion. */
+  int gpu_hydro_density_tasks_left;
+
+  /*! Hydro gradient tasks awaiting GPU completion. */
+  int gpu_hydro_gradient_tasks_left;
+
+  /*! Hydro force tasks awaiting GPU completion. */
+  int gpu_hydro_force_tasks_left;
+#endif
+
 } __attribute__((aligned(queue_struct_align)));
 
 /* Function prototypes. */

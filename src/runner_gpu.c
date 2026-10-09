@@ -23,6 +23,7 @@
 #include "error.h"
 #include "gpu_functions.h"
 #include "gpu_mapping.h"
+#include "hydro_properties.h"
 #include "runner.h"
 #include "runner_doiact_grav.h"
 #include "scheduler.h"
@@ -38,6 +39,11 @@
 
 #ifdef WITH_MPI
 #include <mpi.h>
+#endif
+
+#ifdef WITH_CUDA
+#include "gpu_pack_params.h"
+#include "cuda/cuda_config.h"
 #endif
 
 static int runner_gpu_local_ranks_on_device_for_budget = 1;
@@ -59,15 +65,32 @@ static void runner_gpu_check_queue_counters(struct runner *r,
 
   const int self_left = sched->queues[r->qid].gpu_self_tasks_left;
   const int pair_left = sched->queues[r->qid].gpu_pair_tasks_left;
+  const int hydro_density_left = sched->queues[r->qid].gpu_hydro_density_tasks_left;
+  const int hydro_gradient_left = sched->queues[r->qid].gpu_hydro_gradient_tasks_left;
+  const int hydro_force_left = sched->queues[r->qid].gpu_hydro_force_tasks_left;
 
-  if (self_left < 0 || pair_left < 0 ||
-      self_left > 1000000 || pair_left > 1000000) {
+  if (self_left < 0 ||
+      pair_left < 0 ||
+      hydro_density_left < 0 ||
+      hydro_gradient_left < 0 ||
+      hydro_force_left < 0 ||
+      self_left > 1000000 ||
+      pair_left > 1000000 ||
+      hydro_density_left > 1000000 ||
+      hydro_gradient_left > 1000000 ||
+      hydro_force_left > 1000000) {
     error("%s: GPU queue counter corrupted: qid=%d "
-          "self_left=%d pair_left=%d",
+          "self_left=%d pair_left=%d "
+          "hydro_density_left=%d "
+          "hydro_gradient_left=%d "
+          "hydro_force_left=%d",
           where,
           r->qid,
           self_left,
-          pair_left);
+          pair_left,
+          hydro_density_left,
+          hydro_gradient_left,
+          hydro_force_left);
   }
 }
 
@@ -129,6 +152,85 @@ static void runner_gpu_count_pair_task(struct runner *r,
   lock_lock(&sched->queues[r->qid].lock);
   sched->queues[r->qid].gpu_pair_tasks_left++;
   runner_gpu_check_queue_counters(r, sched, "runner_gpu_count_pair_task");
+  (void)lock_unlock(&sched->queues[r->qid].lock);
+}
+
+/**
+ * @brief Count a hydro scheduler task that has been offloaded to the GPU.
+ *
+ * The task is counted only once even if the recursive hydro walk packs
+ * multiple leaf interactions belonging to the same scheduler task.
+ *
+ * @param r The runner executing the task.
+ * @param sched The scheduler.
+ * @param t The hydro scheduler task being offloaded.
+ */
+void runner_gpu_count_hydro_task(struct runner *r,
+                                 struct scheduler *sched,
+                                 struct task *t) {
+
+  if (t == NULL)
+    error("runner_gpu_count_hydro_task got NULL task.");
+
+  if (t->gpu_completed) {
+    error("Packing already GPU-completed hydro task: "
+          "task=%p type=%s subtype=%s gpu_counted=%d qid=%d",
+          (void *)t,
+          taskID_names[t->type],
+          subtaskID_names[t->subtype],
+          t->gpu_counted,
+          r->qid);
+  }
+
+  /*
+   * Only ordinary hydro density, gradient and force scheduler tasks
+   * should reach this function.
+   */
+  if (t->subtype != task_subtype_density &&
+      t->subtype != task_subtype_gradient &&
+      t->subtype != task_subtype_force) {
+
+    error("runner_gpu_count_hydro_task called for non-hydro task: "
+          "task=%p type=%s subtype=%s qid=%d",
+          (void *)t,
+          taskID_names[t->type],
+          subtaskID_names[t->subtype],
+          r->qid);
+  }
+
+  /*
+   * Recursive walks can encounter many leaves for one top-level scheduler
+   * task. That task owns only one queue counter.
+   */
+  if (t->gpu_counted)
+    return;
+
+  t->gpu_counted = 1;
+
+  lock_lock(&sched->queues[r->qid].lock);
+
+  switch (t->subtype) {
+
+    case task_subtype_density:
+      sched->queues[r->qid].gpu_hydro_density_tasks_left++;
+      break;
+
+    case task_subtype_gradient:
+      sched->queues[r->qid].gpu_hydro_gradient_tasks_left++;
+      break;
+
+    case task_subtype_force:
+      sched->queues[r->qid].gpu_hydro_force_tasks_left++;
+      break;
+
+    default:
+      /* Protected by the check above. */
+      error("Unexpected hydro GPU task subtype.");
+  }
+
+  runner_gpu_check_queue_counters(
+      r, sched, "runner_gpu_count_hydro_task");
+
   (void)lock_unlock(&sched->queues[r->qid].lock);
 }
 
@@ -1017,6 +1119,95 @@ void runner_gpu_complete_pair_batch(struct runner *r, struct scheduler *sched,
   substream->pair_total_active_count = 0;
   substream->pair_max_active_count = 0;
   substream->pair_total_pair_active_count = 0;
+}
+
+/**
+ * @brief Mark a GPU hydro task as complete.
+ *
+ * Decrements the appropriate hydro GPU queue counter and hands final
+ * dependency completion back to the normal SWIFT scheduler.
+ *
+ * @param r The runner owning the task.
+ * @param sched The scheduler.
+ * @param t The completed hydro task.
+ */
+void runner_gpu_complete_hydro_task(struct runner *r,
+                                    struct scheduler *sched,
+                                    struct task *t) {
+
+  if (t == NULL)
+    error("runner_gpu_complete_hydro_task got NULL task.");
+
+  if (t->gpu_completed)
+    error(
+        "runner_gpu_complete_hydro_task called for already-completed task: "
+        "task=%p type=%s subtype=%s qid=%d",
+        (void *)t,
+        taskID_names[t->type],
+        subtaskID_names[t->subtype],
+        r->qid);
+
+  if (!t->gpu_counted)
+    error(
+        "Completing uncounted GPU hydro task: "
+        "task=%p type=%s subtype=%s qid=%d",
+        (void *)t,
+        taskID_names[t->type],
+        subtaskID_names[t->subtype],
+        r->qid);
+
+  lock_lock(&sched->queues[r->qid].lock);
+
+  switch (t->subtype) {
+
+    case task_subtype_density:
+
+      if (sched->queues[r->qid].gpu_hydro_density_tasks_left <= 0)
+        error("gpu_hydro_density_tasks_left underflow.");
+
+      sched->queues[r->qid].gpu_hydro_density_tasks_left--;
+      break;
+
+    case task_subtype_gradient:
+
+      if (sched->queues[r->qid].gpu_hydro_gradient_tasks_left <= 0)
+        error("gpu_hydro_gradient_tasks_left underflow.");
+
+      sched->queues[r->qid].gpu_hydro_gradient_tasks_left--;
+      break;
+
+    case task_subtype_force:
+
+      if (sched->queues[r->qid].gpu_hydro_force_tasks_left <= 0)
+        error("gpu_hydro_force_tasks_left underflow.");
+
+      sched->queues[r->qid].gpu_hydro_force_tasks_left--;
+      break;
+
+    default:
+
+      error(
+          "runner_gpu_complete_hydro_task called for invalid subtype %s.",
+          subtaskID_names[t->subtype]);
+  }
+
+  runner_gpu_check_queue_counters(
+      r, sched, "runner_gpu_complete_hydro_task");
+
+  (void)lock_unlock(&sched->queues[r->qid].lock);
+
+  /*
+   * This task no longer owns a queue counter.
+   */
+  t->gpu_counted = 0;
+
+  /*
+   * Set this before scheduler_done(). Your current scheduler uses this flag
+   * to avoid charging the GPU wait time to the CPU-side task timer.
+   */
+  t->gpu_completed = 1;
+
+  scheduler_done(sched, t);
 }
 
 
@@ -2852,6 +3043,278 @@ static int runner_gpu_select_device(struct runner *r) {
   return device_id;
 }
 
+#ifdef WITH_CUDA
+/**
+ * @brief Initialise the hydro GPU packing parameters for a runner.
+ *
+ * @param r The runner.
+ */
+static void runner_gpu_hydro_set_params(struct runner *r) {
+
+  struct engine *e = r->e;
+  struct gpu_global_pack_params *params = &r->gpu.hydro.params;
+
+  const int pack_size =
+      parser_get_param_int(
+          e->parameter_file,
+          "Scheduler:gpu_pack_size");
+
+  /*
+   * Preserve the behaviour of the hydro GPU branch for now:
+   * bundle_size is currently read from the same parameter.
+   */
+  const int bundle_size =
+      parser_get_param_int(
+          e->parameter_file,
+          "Scheduler:gpu_pack_size");
+
+  const int tester_var =
+      parser_get_param_int(
+          e->parameter_file,
+          "Scheduler:gpu_tester_param");
+
+  const int gpu_recursion_max_depth =
+      parser_get_opt_param_int(
+          e->parameter_file,
+          "Scheduler:gpu_recursion_max_depth",
+          4);
+
+  const int gpu_part_buffer_size =
+      parser_get_opt_param_int(
+          e->parameter_file,
+          "Scheduler:gpu_part_buffer_size",
+          -1);
+
+  if (e->s->maxdepth > gpu_recursion_max_depth) {
+    warning(
+        "space max depth=%d > gpu_recursion_max_depth=%d, "
+        "this may lead to trouble with hydro GPU buffer sizes.",
+        e->s->maxdepth,
+        gpu_recursion_max_depth);
+  }
+
+  gpu_pack_params_set(
+      params,
+      pack_size,
+      bundle_size,
+      gpu_recursion_max_depth,
+      gpu_part_buffer_size,
+      e->hydro_properties->eta_neighbours,
+      e->s->nr_parts,
+      e->s->nr_cells,
+      e->nr_threads,
+      tester_var);
+      
+  if (e->verbose && r->id == 0) {
+
+  message(
+      "Hydro GPU parameters: "
+      "pack_size=%d bundle_size=%d n_bundles=%d "
+      "leaf_buffer_size=%d part_buffer_size=%ld tester_param=%d",
+      params->pack_size,
+      params->bundle_size,
+      params->n_bundles,
+      params->leaf_buffer_size,
+      params->part_buffer_size,
+      params->tester_param);
+}
+}
+#endif
+
+#ifdef WITH_CUDA
+
+/**
+ * @brief Size the hydro GPU buffers using the available GPU memory.
+ *
+ * This ports the relevant buffer-sizing logic from the hydro branch's
+ * gpu_init_thread() without importing its GPU device-management code.
+ */
+static void runner_gpu_hydro_size_buffers(struct runner *r) {
+
+  struct engine *e = r->e;
+  struct gpu_runner *gpu = &r->gpu;
+  struct gpu_global_pack_params *params = &r->gpu.hydro.params;
+
+  size_t free_mem = 0;
+  size_t total_mem = 0;
+
+  cudaError_t cu_error = cudaMemGetInfo(&free_mem, &total_mem);
+
+  if (cu_error != cudaSuccess)
+    error("cudaMemGetInfo failed while sizing hydro GPU buffers: %s",
+          cudaGetErrorString(cu_error));
+
+  const size_t GB = 1024ULL * 1024ULL * 1024ULL;
+
+  /*
+   * Leave some GPU memory unused.
+   *
+   * On GPUs with >32 GB free, reserve 5 GB.
+   * Otherwise use at most 90% of the currently free memory.
+   */
+  size_t safe_free_mem;
+
+  if (free_mem > 32ULL * GB)
+    safe_free_mem = free_mem - 5ULL * GB;
+  else
+    safe_free_mem = free_mem * 90ULL / 100ULL;
+
+  /*
+   * Each SWIFT runner owns its own hydro buffers.
+   *
+   * If multiple MPI ranks share this GPU, divide the available
+   * memory budget between both the runner threads and the MPI ranks.
+   */
+  const int ranks_on_device =
+      gpu->local_ranks_on_device > 0 ? gpu->local_ranks_on_device : 1;
+
+  if (e->nr_threads <= 0)
+    error("Invalid number of SWIFT threads while sizing hydro GPU buffers: %d",
+          e->nr_threads);
+
+  const size_t n_consumers =
+      (size_t)e->nr_threads * (size_t)ranks_on_device;
+
+  const size_t free_mem_per_runner =
+      safe_free_mem / n_consumers;
+
+  /*
+   * Particle send/receive storage required by all three hydro phases.
+   *
+   * This already includes density + gradient + force, so do NOT
+   * multiply mem_req_part by three again below.
+   */
+  const size_t mem_send_d = sizeof(struct gpu_part_data_d);
+  const size_t mem_send_g = sizeof(struct gpu_part_data_g);
+  const size_t mem_send_f = sizeof(struct gpu_part_data_f);
+
+  const size_t mem_recv_d = sizeof(struct gpu_part_recv_d);
+  const size_t mem_recv_g = sizeof(struct gpu_part_recv_g);
+  const size_t mem_recv_f = sizeof(struct gpu_part_recv_f);
+
+  const double mem_req_part =
+      (double)(mem_send_d + mem_send_g + mem_send_f +
+               mem_recv_d + mem_recv_g + mem_recv_f);
+
+  /*
+   * Density, gradient and force each own their own metadata buffers.
+   *
+   * Each phase therefore needs:
+   *   - one int4 per leaf interaction
+   *   - one int2 per CUDA block
+   *
+   * Budget for all three phases here.
+   */
+  const double mem_req_leaf = 3.0 * sizeof(int4);
+  const double mem_req_block = 3.0 * sizeof(int2);
+
+  /*
+   * Estimate particles per leaf cell from the neighbour resolution.
+   */
+  double np_per_cell =
+      1.2 * 2.0 * ceil(2.0 * e->hydro_properties->eta_neighbours);
+
+#if defined(HYDRO_DIMENSION_2D)
+  np_per_cell *= np_per_cell;
+#elif defined(HYDRO_DIMENSION_3D)
+  np_per_cell *= np_per_cell * np_per_cell;
+#elif defined(HYDRO_DIMENSION_1D)
+  /* Nothing more to do. */
+#endif
+
+  if (np_per_cell <= 0.0)
+    error("Invalid hydro GPU np_per_cell=%g", np_per_cell);
+
+  /*
+   * Estimated total GPU-memory cost associated with one packed particle.
+   *
+   * Metadata costs are converted to an approximate per-particle cost
+   * using the expected particles per cell and threads per CUDA block.
+   */
+  const double total_memory_per_particle =
+      mem_req_part +
+      mem_req_leaf / np_per_cell +
+      mem_req_block / GPU_THREAD_BLOCK_SIZE;
+
+  /*
+   * Divide this runner's memory budget between particle data,
+   * leaf metadata and block metadata in proportion to their costs.
+   */
+  const double memory_for_parts =
+      free_mem_per_runner *
+      mem_req_part / total_memory_per_particle;
+
+  const double memory_for_cell_md =
+      free_mem_per_runner *
+      mem_req_leaf /
+      (np_per_cell * total_memory_per_particle);
+
+  const double memory_for_block_id =
+      free_mem_per_runner *
+      mem_req_block /
+      (GPU_THREAD_BLOCK_SIZE * total_memory_per_particle);
+
+  /*
+   * Convert memory budgets into capacities.
+   *
+   * mem_req_leaf and mem_req_block contain the cost of all three
+   * hydro phases, so these capacities are the number of entries
+   * that can be allocated to EACH phase.
+   */
+  const long available_part_buffer =
+      (long)(memory_for_parts / mem_req_part);
+
+  const int available_cell_buffer =
+      (int)(memory_for_cell_md / mem_req_leaf);
+
+  const int available_block_buffer =
+      (int)(memory_for_block_id / mem_req_block);
+
+  /*
+   * gpu_pack_params_set() has already calculated the minimum/requested
+   * particle-buffer capacity. Check that the GPU can accommodate it.
+   */
+  if (available_part_buffer < params->part_buffer_size)
+    error(
+        "Insufficient GPU memory for hydro buffers: "
+        "GPU allows %ld particles per runner, but at least %ld are required.",
+        available_part_buffer, params->part_buffer_size);
+
+  params->part_buffer_size = available_part_buffer;
+  params->cell_start_end_buffer_size = available_cell_buffer;
+  params->cuda_blockid_buffer_size = available_block_buffer;
+
+  if (params->part_buffer_size <= 0 ||
+      params->cell_start_end_buffer_size <= 0 ||
+      params->cuda_blockid_buffer_size <= 0)
+    error(
+        "Invalid hydro GPU buffer sizes: "
+        "particles=%ld cell_md=%d block_id=%d",
+        params->part_buffer_size,
+        params->cell_start_end_buffer_size,
+        params->cuda_blockid_buffer_size);
+
+  message(
+      "Hydro GPU memory budget: "
+      "free=%.3f GB safe=%.3f GB "
+      "threads=%d ranks_on_device=%d consumers=%zu "
+      "per_runner=%.3f GB",
+      (double)free_mem / (double)GB,
+      (double)safe_free_mem / (double)GB,
+      e->nr_threads,
+      ranks_on_device,
+      n_consumers,
+      (double)free_mem_per_runner / (double)GB);
+
+  message(
+      "Hydro GPU buffers: particles=%ld cell_md=%d block_id=%d",
+      params->part_buffer_size,
+      params->cell_start_end_buffer_size,
+      params->cuda_blockid_buffer_size);
+}
+
+#endif
+
 /**
  * @brief Initialise the GPU-specific state attached to a runner.
  *
@@ -3204,11 +3667,98 @@ void runner_gpu_init(struct runner *r) {
     substream->self_rmax_h == NULL)
   error("Failed to allocate runner GPU self substream metadata arrays.");
   }
+  
+  #ifdef WITH_CUDA
+  size_t free_before_hydro = 0, total_before_hydro = 0;
+GPUMemGetInfo(&free_before_hydro, &total_before_hydro);
+
+if (r->id == 0)
+  message("GPU free before hydro allocation: %.3f GB",
+          free_before_hydro / (1024.0 * 1024.0 * 1024.0));
+          
+  runner_gpu_hydro_set_params(r);
+
+  runner_gpu_hydro_size_buffers(r);
+  
+  runner_gpu_hydro_init(r);
+  
+  size_t free_after_hydro = 0, total_after_hydro = 0;
+GPUMemGetInfo(&free_after_hydro, &total_after_hydro);
+
+if (r->id == 0)
+  message("GPU free after hydro allocation: %.3f GB",
+          free_after_hydro / (1024.0 * 1024.0 * 1024.0));
+  #endif
 
   const GPUError err = GPUGetLastError();
   if (err != GPU_SUCCESS)
     error("runner_gpu_init failed: %s", GPUGetErrorString(err));
 }
+
+
+#ifdef WITH_CUDA
+
+void runner_gpu_hydro_init(struct runner *r) {
+
+  struct gpu_hydro_state *hydro = &r->gpu.hydro;
+
+  hydro->initialised = 0;
+  hydro->streams = NULL;
+  hydro->nstreams = 0;
+
+  /*
+   * hydro->params must be populated before this point.
+   *
+   * We'll deal with exactly where these parameters come from
+   * in the next integration step.
+   */
+
+  gpu_data_buffers_init(
+      &hydro->density,
+      &hydro->params,
+      sizeof(struct gpu_part_send_d),
+      sizeof(struct gpu_part_recv_d));
+
+  gpu_data_buffers_init(
+      &hydro->gradient,
+      &hydro->params,
+      sizeof(struct gpu_part_send_g),
+      sizeof(struct gpu_part_recv_g));
+
+  gpu_data_buffers_init(
+      &hydro->force,
+      &hydro->params,
+      sizeof(struct gpu_part_send_f),
+      sizeof(struct gpu_part_recv_f));
+
+  hydro->nstreams = hydro->params.n_bundles;
+
+  if (hydro->nstreams < 1)
+    error("Invalid number of hydro GPU streams (%d).",
+          hydro->nstreams);
+
+  hydro->streams =
+      malloc((size_t)hydro->nstreams * sizeof(GPUStream));
+
+  if (hydro->streams == NULL)
+    error("Failed to allocate hydro GPU stream array.");
+
+  for (int i = 0; i < hydro->nstreams; i++) {
+
+    const GPUError err =
+        GPUStreamCreateWithFlags(
+            &hydro->streams[i],
+            GPUStreamNonBlocking);
+
+    if (err != GPU_SUCCESS)
+      error("Failed to create hydro GPU stream %d: %s",
+            i, GPUGetErrorString(err));
+  }
+
+  hydro->initialised = 1;
+}
+#endif
+
 
 /**
  * @brief Acquire the substream for the GPU work to be launched to
@@ -3294,10 +3844,13 @@ void runner_gpu_clean(struct runner *r) {
     free(substream->pair_counts_h);
     free(substream->pair_offsets_h);
     free(substream->pair_active_counts_h);
+    free(substream->pair_active_offsets_h);
     free(substream->pair_active_index_h);
+
     GPUFree(substream->pair_counts_d);
     GPUFree(substream->pair_offsets_d);
     GPUFree(substream->pair_active_counts_d);
+    GPUFree(substream->pair_active_offsets_d);
     GPUFree(substream->pair_active_index_d);
     
     GPUFreeHost(substream->recv_pair_active);
@@ -3402,7 +3955,39 @@ void runner_gpu_clean(struct runner *r) {
   free(gpu->substreams);
   gpu->substreams = NULL;
   gpu->nstreams = 0;
+  
+  #ifdef WITH_CUDA
+  runner_gpu_hydro_clean(r);
+  #endif
 }
+
+
+#ifdef WITH_CUDA
+void runner_gpu_hydro_clean(struct runner *r) {
+
+  struct gpu_hydro_state *hydro = &r->gpu.hydro;
+
+  if (!hydro->initialised)
+    return;
+
+  /* Make sure nothing is still using these streams. */
+  for (int i = 0; i < hydro->nstreams; i++)
+    GPUStreamSynchronize(hydro->streams[i]);
+
+  gpu_data_buffers_free(&hydro->density);
+  gpu_data_buffers_free(&hydro->gradient);
+  gpu_data_buffers_free(&hydro->force);
+
+  for (int i = 0; i < hydro->nstreams; i++)
+    GPUStreamDestroy(hydro->streams[i]);
+
+  free(hydro->streams);
+
+  hydro->streams = NULL;
+  hydro->nstreams = 0;
+  hydro->initialised = 0;
+}
+#endif
 
 /**
  * @brief Flush any leftover packed self-gravity work owned by a runner.

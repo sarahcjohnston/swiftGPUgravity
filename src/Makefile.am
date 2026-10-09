@@ -185,6 +185,11 @@ AM_SOURCES += runner_main.c runner_doiact_hydro.c runner_doiact_limiter.c
 if HAVEGPU
 AM_SOURCES += runner_gpu.c
 endif
+if HAVECUDA
+AM_SOURCES += gpu_pack_params.c
+AM_SOURCES += gpu_pack_metadata.c
+AM_SOURCES += cuda/gpu_offload_data.c
+endif
 AM_SOURCES += runner_doiact_stars.c runner_doiact_black_holes.c runner_doiact_sinks.c runner_ghost.c
 AM_SOURCES += runner_recv.c runner_pack.c
 AM_SOURCES += runner_sort.c runner_drift.c runner_black_holes.c runner_time_integration.c
@@ -546,6 +551,20 @@ nobase_noinst_HEADERS += fvpm_geometry/None/fvpm_geometry.h fvpm_geometry/None/f
 nobase_noinst_HEADERS += fvpm_geometry/Gizmo/fvpm_geometry.h fvpm_geometry/Gizmo/fvpm_geometry_struct.h
 nobase_noinst_HEADERS += fvpm_geometry/Gizmo/MFM/fvpm_geometry.h fvpm_geometry/Gizmo/MFV/fvpm_geometry.h
 nobase_noinst_HEADERS += likwid_wrapper.h
+if HAVECUDA
+nobase_noinst_HEADERS += gpu_pack_params.h
+nobase_noinst_HEADERS += gpu_pack_metadata.h
+nobase_noinst_HEADERS += runner_gpu_pack_functions.h
+nobase_noinst_HEADERS += runner_doiact_functions_hydro_gpu.h
+nobase_noinst_HEADERS += cuda/cuda_config.h
+nobase_noinst_HEADERS += cuda/gpu_offload_data.h
+nobase_noinst_HEADERS += cuda/gpu_utils.h
+nobase_noinst_HEADERS += cuda/gpu_part_structs.h
+nobase_noinst_HEADERS += cuda/gpu_part_pack_functions.h
+nobase_noinst_HEADERS += cuda/gpu_launch.h
+nobase_noinst_HEADERS += cuda/device_functions.cuh
+nobase_noinst_HEADERS += cuda/cuda_particle_kernels.cuh
+endif
 
 # Sources and special flags for the gravity library
 libgrav_la_SOURCES = runner_doiact_grav.c runner_doiact_long_range_grav.c

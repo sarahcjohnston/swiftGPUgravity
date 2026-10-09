@@ -92,7 +92,14 @@ GPU_DEVICE_LINK_LIBS = @GPU_DEVICE_LINK_LIBS@
 GPU_DLINK_OBJECT = @GPU_DLINK_OBJECT@
 
 if HAVEGPU
-GPU_OBJECTS = gpu_grav.o $(GPU_DLINK_OBJECT)
+
+GPU_DEVICE_OBJECTS = gpu_grav.o
+
+if HAVECUDA
+GPU_DEVICE_OBJECTS += gpu_hydro.o
+endif
+
+GPU_OBJECTS = $(GPU_DEVICE_OBJECTS) $(GPU_DLINK_OBJECT)
 
 swift_DEPENDENCIES = $(GPU_OBJECTS)
 swift_mpi_DEPENDENCIES = $(GPU_OBJECTS)
@@ -100,8 +107,16 @@ swift_mpi_DEPENDENCIES = $(GPU_OBJECTS)
 gpu_grav.o: src/gpu_gravity_offload.cu
 	$(GPUCC) $(GPU_COMPILE_MODE_FLAGS) src/gpu_gravity_offload.cu -o gpu_grav.o $(GPU_CPPFLAGS) $(GPU_FLAGS) -I./src -I.
 
-gpu_link.o: gpu_grav.o
-	$(GPUCC) $(GPU_DEVICE_LINK_FLAGS) gpu_grav.o -o gpu_link.o $(GPU_FLAGS) $(GPU_DEVICE_LINK_LIBS)
+if HAVECUDA
+
+gpu_hydro.o: src/cuda/gpu_launch.cu
+	$(GPUCC) $(GPU_COMPILE_MODE_FLAGS) src/cuda/gpu_launch.cu -o gpu_hydro.o $(GPU_CPPFLAGS) $(GPU_FLAGS) -I./src -I.
+
+gpu_link.o: $(GPU_DEVICE_OBJECTS)
+	$(GPUCC) $(GPU_DEVICE_LINK_FLAGS) $(GPU_DEVICE_OBJECTS) -o gpu_link.o $(GPU_FLAGS) $(GPU_DEVICE_LINK_LIBS)
+
+endif
+	
 else
 GPU_OBJECTS =
 endif

@@ -143,6 +143,10 @@
 #include "gpu_functions.h"
 #endif
 
+#ifdef WITH_CUDA
+#include "runner_doiact_functions_hydro_gpu.h"
+#endif
+
 #include <stdatomic.h>
 
 /* likwid markers. */
@@ -185,6 +189,25 @@ void *runner_main(void *data) {
 
     /* Can we go home yet? */
     if (e->step_props & engine_step_prop_done) break;
+    
+    #if defined(WITH_GPU) && defined(WITH_CUDA)
+    /*
+     * Decide whether this timestep contains enough hydro work to make
+     * GPU offloading worthwhile.
+     */
+    const int offload =
+        runner_GPU_offload_switch(r, sched, e, &r->gpu.hydro.density,
+                                  /*timer=*/1);
+
+    /* Reset the hydro GPU buffers for this timestep. */
+    gpu_data_buffers_init_step(&r->gpu.hydro.density);
+    gpu_data_buffers_init_step(&r->gpu.hydro.gradient);
+    gpu_data_buffers_init_step(&r->gpu.hydro.force);
+
+    /* Cosmological quantities required by the hydro GPU kernels. */
+    const float d_a = e->cosmology->a;
+    const float d_H = e->cosmology->H;
+    #endif
 
     /* Re-set the pointer to the previous task, as there is none. */
     struct task *t = NULL;
@@ -214,18 +237,80 @@ void *runner_main(void *data) {
       continue;
     }
     
+    #if defined(WITH_GPU) && defined(WITH_CUDA)
+  /*
+   * Flush any partially filled hydro GPU batch.
+   *
+   * Flush one phase at a time and return to scheduler_gettask() afterwards,
+   * since completing the batch may have unlocked new scheduler tasks.
+   */
+	#if defined(GPUOFFLOAD_DENSITY)
+	  if (runner_gpu_flush_hydro_buffer(
+		  r,
+		  sched,
+		  &r->gpu.hydro.density,
+		  r->gpu.hydro.streams,
+		  task_subtype_density,
+		  d_a,
+		  d_H)) {
+
+	    continue;
+	  }
+	#endif
+
+	#if defined(EXTRA_HYDRO_LOOP) && defined(GPUOFFLOAD_GRADIENT)
+	  if (runner_gpu_flush_hydro_buffer(
+		  r,
+		  sched,
+		  &r->gpu.hydro.gradient,
+		  r->gpu.hydro.streams,
+		  task_subtype_gradient,
+		  d_a,
+		  d_H)) {
+
+	    continue;
+	  }
+	#endif
+
+	#if defined(GPUOFFLOAD_FORCE)
+	  if (runner_gpu_flush_hydro_buffer(
+		  r,
+		  sched,
+		  &r->gpu.hydro.force,
+		  r->gpu.hydro.streams,
+		  task_subtype_force,
+		  d_a,
+		  d_H)) {
+
+	    continue;
+	  }
+	#endif
+	#endif
+    
     lock_lock(&sched->queues[r->qid].lock);
 
-  if (sched->queues[r->qid].gpu_self_tasks_left != 0 ||
-      sched->queues[r->qid].gpu_pair_tasks_left != 0) {
-    error("Runner exiting task loop with unfinished GPU tasks: "
-          "qid=%d gpu_self_tasks_left=%d gpu_pair_tasks_left=%d",
-          r->qid,
-          sched->queues[r->qid].gpu_self_tasks_left,
-          sched->queues[r->qid].gpu_pair_tasks_left);
-  }
+	if (sched->queues[r->qid].gpu_self_tasks_left != 0 ||
+	    sched->queues[r->qid].gpu_pair_tasks_left != 0 ||
+	    sched->queues[r->qid].gpu_hydro_density_tasks_left != 0 ||
+	    sched->queues[r->qid].gpu_hydro_gradient_tasks_left != 0 ||
+	    sched->queues[r->qid].gpu_hydro_force_tasks_left != 0) {
 
-  (void)lock_unlock(&sched->queues[r->qid].lock);
+  error("Runner exiting task loop with unfinished GPU tasks: "
+        "qid=%d "
+        "gpu_self_tasks_left=%d "
+        "gpu_pair_tasks_left=%d "
+        "gpu_hydro_density_tasks_left=%d "
+        "gpu_hydro_gradient_tasks_left=%d "
+        "gpu_hydro_force_tasks_left=%d",
+        r->qid,
+        sched->queues[r->qid].gpu_self_tasks_left,
+        sched->queues[r->qid].gpu_pair_tasks_left,
+        sched->queues[r->qid].gpu_hydro_density_tasks_left,
+        sched->queues[r->qid].gpu_hydro_gradient_tasks_left,
+        sched->queues[r->qid].gpu_hydro_force_tasks_left);
+}
+
+(void)lock_unlock(&sched->queues[r->qid].lock);
   #endif
 
     break;
@@ -284,21 +369,75 @@ void *runner_main(void *data) {
 	  #else
 	    runner_doself_recursive_grav(r, ci, 1);
 	  #endif 
-          } else if (t->subtype == task_subtype_external_grav)
-            runner_do_grav_external(r, ci, 1);
-          else if (t->subtype == task_subtype_density)
-            runner_dosub_self1_density(r, ci, /*below_h_max=*/0, 1);
+          } else if (t->subtype == task_subtype_external_grav){
+            runner_do_grav_external(r, ci, 1);}
+          else if (t->subtype == task_subtype_density){
+            #if defined(WITH_GPU) && defined(WITH_CUDA) && defined(GPUOFFLOAD_DENSITY)
+            if (offload) {
+              runner_gpu_count_hydro_task(r, sched, t);
+              
+              runner_doself_gpu_density(
+                  r, sched, &r->gpu.hydro.density, t,
+                  r->gpu.hydro.streams, d_a, d_H);
+
+              /*
+               * The CPU runner is finished with this task, but the scheduler
+               * task remains outstanding until the GPU result is unpacked.
+               */
+              gpu_task_type = packed_task;
+
+            } else
+#endif
+            {
+              runner_dosub_self1_density(r, ci, /*below_h_max=*/0, 1);
+            }
+
 #ifdef EXTRA_HYDRO_LOOP
-          else if (t->subtype == task_subtype_gradient)
+          } else if (t->subtype == task_subtype_gradient) {
+
+#if defined(WITH_GPU) && defined(WITH_CUDA) && defined(GPUOFFLOAD_GRADIENT)
+            if (offload) {
+              runner_gpu_count_hydro_task(r, sched, t);
+
+              runner_doself_gpu_gradient(
+                  r, sched, &r->gpu.hydro.gradient, t,
+                  r->gpu.hydro.streams, d_a, d_H);
+
+              gpu_task_type = packed_task;
+
+            } else
+#endif
+            {
+
 #ifdef EXTRA_HYDRO_LOOP_TYPE2
-            runner_dosub_self2_gradient(r, ci, /*below_h_max=*/0, 1);
+              runner_dosub_self2_gradient(r, ci, /*below_h_max=*/0, 1);
 #else
-            runner_dosub_self1_gradient(r, ci, /*below_h_max=*/0, 1);
+              runner_dosub_self1_gradient(r, ci, /*below_h_max=*/0, 1);
 #endif
+
+            }
+#endif /* EXTRA_HYDRO_LOOP */
+
+          } else if (t->subtype == task_subtype_force) {
+
+#if defined(WITH_GPU) && defined(WITH_CUDA) && defined(GPUOFFLOAD_FORCE)
+            if (offload) {
+              runner_gpu_count_hydro_task(r, sched, t);
+
+              runner_doself_gpu_force(
+                  r, sched, &r->gpu.hydro.force, t,
+                  r->gpu.hydro.streams, d_a, d_H);
+
+              gpu_task_type = packed_task;
+
+            } else
 #endif
-          else if (t->subtype == task_subtype_force)
-            runner_dosub_self2_force(r, ci, /*below_h_max=*/0, 1);
-          else if (t->subtype == task_subtype_limiter)
+            {
+              runner_dosub_self2_force(r, ci, /*below_h_max=*/0, 1);
+            }
+
+          } else if (t->subtype == task_subtype_limiter) 
+
             runner_dosub_self1_limiter(r, ci, /*below_h_max=*/0, 1);
           else if (t->subtype == task_subtype_stars_density)
             runner_dosub_self_stars_density(r, ci, /*offset=*/t->flags,
@@ -354,20 +493,76 @@ void *runner_main(void *data) {
     	  #else
     	    runner_dopair_recursive_grav(r, ci, cj, 1);
     	  #endif
-          } else if (t->subtype == task_subtype_density)
-            runner_dosub_pair1_density(r, ci, cj, /*below_h_max=*/0, 1);
+          } else if (t->subtype == task_subtype_density) {
+
+#if defined(WITH_GPU) && defined(WITH_CUDA) && defined(GPUOFFLOAD_DENSITY)
+            if (offload) {
+              runner_gpu_count_hydro_task(r, sched, t);
+
+              runner_dopair_gpu_density(
+                  r, sched, ci, cj, &r->gpu.hydro.density, t,
+                  r->gpu.hydro.streams, d_a, d_H);
+
+              gpu_task_type = packed_task;
+
+            } else
+#endif
+            {
+              runner_dosub_pair1_density(
+                  r, ci, cj, /*below_h_max=*/0, 1);
+            }
+
 #ifdef EXTRA_HYDRO_LOOP
-          else if (t->subtype == task_subtype_gradient)
+          } else if (t->subtype == task_subtype_gradient) {
+
+#if defined(WITH_GPU) && defined(WITH_CUDA) && defined(GPUOFFLOAD_GRADIENT)
+            if (offload) {
+              runner_gpu_count_hydro_task(r, sched, t);
+
+              runner_dopair_gpu_gradient(
+                  r, sched, ci, cj, &r->gpu.hydro.gradient, t,
+                  r->gpu.hydro.streams, d_a, d_H);
+
+              gpu_task_type = packed_task;
+
+            } else
+#endif
+            {
+
 #ifdef EXTRA_HYDRO_LOOP_TYPE2
-            runner_dosub_pair2_gradient(r, ci, cj, /*below_h_max=*/0, 1);
+              runner_dosub_pair2_gradient(
+                  r, ci, cj, /*below_h_max=*/0, 1);
 #else
-            runner_dosub_pair1_gradient(r, ci, cj, /*below_h_max=*/0, 1);
+              runner_dosub_pair1_gradient(
+                  r, ci, cj, /*below_h_max=*/0, 1);
 #endif
+
+            }
+#endif /* EXTRA_HYDRO_LOOP */
+
+          } else if (t->subtype == task_subtype_force) {
+
+#if defined(WITH_GPU) && defined(WITH_CUDA) && defined(GPUOFFLOAD_FORCE)
+            if (offload) {
+              runner_gpu_count_hydro_task(r, sched, t);
+
+              runner_dopair_gpu_force(
+                  r, sched, ci, cj, &r->gpu.hydro.force, t,
+                  r->gpu.hydro.streams, d_a, d_H);
+
+              gpu_task_type = packed_task;
+
+            } else
 #endif
-          else if (t->subtype == task_subtype_force)
-            runner_dosub_pair2_force(r, ci, cj, /*below_h_max=*/0, 1);
-          else if (t->subtype == task_subtype_limiter)
-            runner_dosub_pair1_limiter(r, ci, cj, /*below_h_max=*/0, 1);
+            {
+              runner_dosub_pair2_force(
+                  r, ci, cj, /*below_h_max=*/0, 1);
+            }
+
+          } else if (t->subtype == task_subtype_limiter) {
+
+            runner_dosub_pair1_limiter(
+                r, ci, cj, /*below_h_max=*/0, 1);}
           else if (t->subtype == task_subtype_stars_density)
             runner_dosub_pair_stars_density(r, ci, cj, /*offset=*/0,
                                             /*ntasks=*/1, /*below_h_max=*/0, 1);

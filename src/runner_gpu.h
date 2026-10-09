@@ -20,6 +20,10 @@
 #define SWIFT_RUNNER_GPU_H
 
 #include "gpu_mapping.h"
+#ifdef WITH_CUDA
+#include "gpu_pack_params.h"
+#include "cuda/gpu_offload_data.h"
+#endif
 
 struct cell;
 struct engine;
@@ -147,11 +151,30 @@ struct gpu_runner_substream {
   int pair_max_active_count;
 };
 
+#ifdef WITH_CUDA
+struct gpu_hydro_state {
+    /*hydro packing params*/
+    struct gpu_global_pack_params params;
+
+    /* hydro gpu buffers */
+    struct gpu_offload_data density;
+    struct gpu_offload_data gradient;
+    struct gpu_offload_data force;
+    
+    /* hydro streams */
+    GPUStream *streams;
+    int nstreams;
+
+    int initialised;
+};
+#endif
+
 /**
  * @brief GPU-specific state owned by a single runner.
  */
 struct gpu_runner {
   /*! Substreams for explicit multi-stream execution. */
+  /* Gravity-specific */
   struct gpu_runner_substream *substreams;
   
   /*! Number of GPU streams launched per runner. */
@@ -177,7 +200,17 @@ struct gpu_runner {
 
   /*! Number of local MPI ranks sharing this selected GPU. */
   int local_ranks_on_device;
+  
+  #ifdef WITH_CUDA
+  /*Hydro*/
+  struct gpu_hydro_state hydro;
+  #endif
 };
+
+#ifdef WITH_CUDA
+void runner_gpu_hydro_init(struct runner *r);
+void runner_gpu_hydro_clean(struct runner *r);
+#endif
 
 struct gpu_runner_substream *runner_gpu_acquire_substream(struct runner *r);
 
@@ -295,5 +328,16 @@ void runner_gpu_bind_device(struct runner *r);
 void runner_gpu_complete_current_self_task(struct runner *r,
                                            struct scheduler *sched,
                                            struct task *t);
+                                           
+/**
+ * @brief Count a hydro scheduler task offloaded to the GPU.
+ */
+void runner_gpu_count_hydro_task(struct runner *r,
+                                 struct scheduler *sched,
+                                 struct task *t);
+                                 
+void runner_gpu_complete_hydro_task(struct runner *r,
+                                    struct scheduler *sched,
+                                    struct task *t);                          
 
 #endif /* SWIFT_RUNNER_GPU_H */

@@ -323,9 +323,20 @@ struct task {
 #endif /* SWIFT_DEBUG_CHECKS */
 
 #ifdef WITH_GPU
-  /* GPU completion flag */
+  /* Has this task completed its asynchronous GPU work? */
   int gpu_completed;
+
+  /* Does this task currently own a GPU queue counter? */
   int gpu_counted;
+
+  /*
+   * Has the task already released its cell locks while GPU work
+   * is in flight?
+   *
+   * Hydro GPU tasks unlock before launching so that unpacking
+   * cannot deadlock on cells held by the current task.
+   */
+  int gpu_unlocked;
 #endif
 
 } SWIFT_STRUCT_ALIGN;
