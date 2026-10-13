@@ -3809,15 +3809,34 @@ enum runner_gpu_task_type runner_doself_recursive_grav_gpu(
         r, substream, c, t, ncells, max_cell_size);
   }
 
+  /*
+	 * A self-gravity scheduler task can generate pair interactions while
+	 * recursively walking its children. These internal pair interactions belong
+	 * to the parent self task and must be completed before that task can be
+	 * released to the scheduler.
+	 */
+	if (gettimer && substream->grav_batch_pair_count > 0) {
+
+	  runner_dopair_grav_pp_flush(
+	      r,
+	      substream,
+	      substream->grav_cells_pair,
+	      substream->grav_tasks_pair,
+	      t,  /* current parent self task */
+	      ncells,
+	      max_cell_size,
+	      substream->stream);
+	}
+      
+
     enum runner_gpu_task_type final_type = regular_task;
 
-  if (task_type == packed_task) {
-    final_type = packed_task;
-  } else if (task_type == flushed_self_task ||
-             task_type == flushed_pair_task) {
-    final_type = flushed_self_task;
+  if (substream->grav_batch_self_count > 0) {
+  final_type = packed_task;
+  } else if (task_type != regular_task) {
+  final_type = flushed_self_task;
   } else {
-    final_type = regular_task;
+  final_type = regular_task;
   }
 
   if (gettimer) {
