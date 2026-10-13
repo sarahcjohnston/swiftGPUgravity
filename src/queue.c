@@ -205,6 +205,17 @@ void queue_init(struct queue *q, struct task *tasks) {
 
   /* Init counters. */
   q->count = 0;
+  
+  #ifdef WITH_GPU
+  q->gpu_self_tasks_left = 0;
+  q->gpu_pair_tasks_left = 0;
+  #endif
+
+  #ifdef WITH_CUDA
+  q->gpu_hydro_density_tasks_left = 0;
+  q->gpu_hydro_gradient_tasks_left = 0;
+  q->gpu_hydro_force_tasks_left = 0;
+  #endif
 
   /* Init the queue lock. */
   if (lock_init(&q->lock) != 0) error("Failed to init queue lock.");

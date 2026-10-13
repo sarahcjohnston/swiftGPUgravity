@@ -495,6 +495,12 @@ void scheduler_reset(struct scheduler *s, int size) {
     s->queues[k].gpu_self_tasks_left = 0;
     s->queues[k].gpu_pair_tasks_left = 0;
 #endif
+
+#ifdef WITH_CUDA
+  s->queues[k].gpu_hydro_density_tasks_left = 0;
+  s->queues[k].gpu_hydro_gradient_tasks_left = 0;
+  s->queues[k].gpu_hydro_force_tasks_left = 0;
+#endif
 }
 }
 
@@ -895,9 +901,11 @@ void scheduler_start(struct scheduler *s) {
   for (int i = 0; i < s->nr_queues; i++) {
     s->queues[i].gpu_self_tasks_left = 0;
     s->queues[i].gpu_pair_tasks_left = 0;
+    #ifdef WITH_CUDA
     s->queues[i].gpu_hydro_density_tasks_left = 0;
     s->queues[i].gpu_hydro_gradient_tasks_left = 0;
     s->queues[i].gpu_hydro_force_tasks_left = 0;
+    #endif
   }
 #endif
 
@@ -1613,17 +1621,21 @@ struct task *scheduler_gettask(struct scheduler *s, int qid,
    */
   int gpu_self_left;
   int gpu_pair_left;
+  #ifdef WITH_CUDA
   int gpu_hydro_density_left;
   int gpu_hydro_gradient_left;
   int gpu_hydro_force_left;
+  #endif
 
   lock_lock(&q->lock);
 
   gpu_self_left = q->gpu_self_tasks_left;
   gpu_pair_left = q->gpu_pair_tasks_left;
+  #ifdef WITH_CUDA
   gpu_hydro_density_left = q->gpu_hydro_density_tasks_left;
   gpu_hydro_gradient_left = q->gpu_hydro_gradient_tasks_left;
   gpu_hydro_force_left = q->gpu_hydro_force_tasks_left;
+  #endif
 
   (void)lock_unlock(&q->lock);
 
