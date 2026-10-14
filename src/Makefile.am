@@ -184,8 +184,6 @@ AM_SOURCES += space_cell_index.c space_recycle.c
 AM_SOURCES += runner_main.c runner_doiact_hydro.c runner_doiact_limiter.c
 if HAVEGPU
 AM_SOURCES += runner_gpu.c
-endif
-if HAVECUDA
 AM_SOURCES += gpu_pack_params.c
 AM_SOURCES += gpu_pack_metadata.c
 AM_SOURCES += cuda/gpu_offload_data.c
@@ -551,7 +549,7 @@ nobase_noinst_HEADERS += fvpm_geometry/None/fvpm_geometry.h fvpm_geometry/None/f
 nobase_noinst_HEADERS += fvpm_geometry/Gizmo/fvpm_geometry.h fvpm_geometry/Gizmo/fvpm_geometry_struct.h
 nobase_noinst_HEADERS += fvpm_geometry/Gizmo/MFM/fvpm_geometry.h fvpm_geometry/Gizmo/MFV/fvpm_geometry.h
 nobase_noinst_HEADERS += likwid_wrapper.h
-if HAVECUDA
+if HAVEGPU
 nobase_noinst_HEADERS += gpu_pack_params.h
 nobase_noinst_HEADERS += gpu_pack_metadata.h
 nobase_noinst_HEADERS += runner_gpu_pack_functions.h

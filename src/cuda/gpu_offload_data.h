@@ -35,7 +35,7 @@ extern "C" {
 #include "gpu_pack_params.h"
 #include "gpu_part_structs.h"
 
-#include <cuda_runtime.h>
+#include "gpu_mapping.h"
 
 /* Rule-of-thumb: Everything related to actual particle data and everything
  * CUDA-specific goes in here. Everything else goes into gpu_pack_metadata
@@ -43,7 +43,6 @@ extern "C" {
 
 /*! Struct to hold all data for the transfer of a single task (sub)type. */
 struct gpu_offload_data {
-#ifdef WITH_CUDA
 
   /*! bookkeeping meta-data for offloading */
   struct gpu_pack_metadata md;
@@ -79,7 +78,7 @@ struct gpu_offload_data {
   };
 
   /*! Handle on events per cuda stream to register completion of async ops */
-  cudaEvent_t *event_end;
+  GPUEvent *event_end;
 
   /*! Arrays used to receive positions of first/last particle in cells in the particle arrays above
    * from device to host. cell_i_j_start_end.x is ci_start, y is ci_end, z is cj_start, w is cj_end
@@ -104,8 +103,6 @@ struct gpu_offload_data {
     /*Device copy*/
     int2 *d_block_leaf_id;
   } gpu_md;
-
-#endif /* WITH_CUDA */
 };
 
 void gpu_data_buffers_init(struct gpu_offload_data *buf,

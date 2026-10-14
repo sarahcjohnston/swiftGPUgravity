@@ -27,21 +27,29 @@
 /*TODO: Figure out why this only works when included from here.
  * When included in cuda_particle_kernels.cuh compiler complains with
  * error: this declaration may not have extern "C" linkage */
-#include <cuda_pipeline.h>
 
 /* ifdef __cplusplus prevents name mangling. C code sees exact names
  of functions rather than mangled template names produced by C++ */
-#ifdef __cplusplus
-extern "C" {
+#include <config.h>
+
+#include "gpu_mapping.h"
+
+#if defined(WITH_CUDA)
+#include <cuda_runtime.h>
+#elif defined(WITH_HIP)
+#include <hip/hip_runtime.h>
+#else
+#error "No GPU backend selected"
 #endif
 
-/* Required header files */
 #include "cuda_config.h"
+#include "gpu_pipeline.h"
 #include "cuda_particle_kernels.cuh"
 #include "gpu_launch.h"
 
-#include <config.h>
-#include <cuda.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
 /* #include <cuda_device_runtime_api.h> */
 /* #include <cuda_profiler_api.h> */
 /* #include <cuda_runtime.h> */
@@ -68,7 +76,7 @@ void gpu_launch_density(
     const int4* __restrict__ d_cell_i_j_start_end,
     const int2* __restrict__ d_block_leaf_id,
     const double3 space_dim,
-    cudaStream_t stream, const int tester_param){
+    GPUStream stream, const int tester_param){
 
 	static_assert(
 	    GPU_THREAD_BLOCK_SIZE > 0 &&
@@ -113,7 +121,7 @@ void gpu_launch_gradient(
     const int4* __restrict__ d_cell_i_j_start_end,
     const int2* __restrict__ d_block_leaf_id,
     const double3 space_dim,
-    cudaStream_t stream, const int tester_param)
+    GPUStream stream, const int tester_param)
 {
 
   static_assert(
@@ -163,7 +171,7 @@ void gpu_launch_force(
     const int4* __restrict__ d_cell_i_j_start_end,
     const int2* __restrict__ d_block_leaf_id,
     const double3 space_dim,
-    cudaStream_t stream, const int tester_param)
+    GPUStream stream, const int tester_param)
 {
 
 	static_assert(

@@ -24,11 +24,11 @@ typedef cudaEvent_t GPUEvent;
 typedef cudaError_t GPUError;
 typedef struct cudaDeviceProp GPUDeviceProp;
 
-#define GPU_SUCCESS cudaSuccess
+#define GPUSuccess cudaSuccess
 
-#define GPU_MEMCPY_HOST_TO_DEVICE cudaMemcpyHostToDevice
-#define GPU_MEMCPY_DEVICE_TO_HOST cudaMemcpyDeviceToHost
-#define GPU_MEMCPY_DEVICE_TO_DEVICE cudaMemcpyDeviceToDevice
+#define GPUMemcpyHostToDevice cudaMemcpyHostToDevice
+#define GPUMemcpyDeviceToHost cudaMemcpyDeviceToHost
+#define GPUMemcpyDeviceToDevice cudaMemcpyDeviceToDevice
 
 #define GPUGetLastError cudaGetLastError
 #define GPUGetPeekAtLastError cudaPeekAtLastError
@@ -85,11 +85,11 @@ typedef hipEvent_t GPUEvent;
 typedef hipError_t GPUError;
 typedef hipDeviceProp_t GPUDeviceProp;
 
-#define GPU_SUCCESS hipSuccess
+#define GPUSuccess hipSuccess
 
-#define GPU_MEMCPY_HOST_TO_DEVICE hipMemcpyHostToDevice
-#define GPU_MEMCPY_DEVICE_TO_HOST hipMemcpyDeviceToHost
-#define GPU_MEMCPY_DEVICE_TO_DEVICE hipMemcpyDeviceToDevice
+#define GPUMemcpyHostToDevice hipMemcpyHostToDevice
+#define GPUMemcpyDeviceToHost hipMemcpyDeviceToHost
+#define GPUMemcpyDeviceToDevice hipMemcpyDeviceToDevice
 
 #define GPUGetLastError hipGetLastError
 #define GPUGetPeekAtLastError hipPeekAtLastError

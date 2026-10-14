@@ -121,14 +121,14 @@ __device__ __forceinline__ void neighbour_interactions_density(
 
     for (int t = tid; t < tileCount0; t += GPU_THREAD_BLOCK_SIZE) {
       const int gj = base0 + t;
-      __pipeline_memcpy_async(&s_x_y[0 * GPU_THREAD_BLOCK_SIZE + t],
+      GPU_PIPELINE_COPY(&s_x_y[0 * GPU_THREAD_BLOCK_SIZE + t],
                               &d_parts_send[gj].p_data.x_y, sizeof(double2));
-      __pipeline_memcpy_async(&s_z_h[0 * GPU_THREAD_BLOCK_SIZE + t],
+      GPU_PIPELINE_COPY(&s_z_h[0 * GPU_THREAD_BLOCK_SIZE + t],
                               &d_parts_send[gj].p_data.z_h, sizeof(double2));
-      __pipeline_memcpy_async(&s_vx_m[0 * GPU_THREAD_BLOCK_SIZE + t],
+      GPU_PIPELINE_COPY(&s_vx_m[0 * GPU_THREAD_BLOCK_SIZE + t],
                               &d_parts_send[gj].p_data.vx_m, sizeof(float4));
     }
-    __pipeline_commit();
+    GPU_PIPELINE_COMMIT();
   }
   /* Loop over tiles prefetching of "next" tile while computing "current" */
   for (int tile = 0; tile < numTiles; ++tile) {
@@ -140,7 +140,7 @@ __device__ __forceinline__ void neighbour_interactions_density(
 
     /* Make sure the current tile (already committed) is resident in shared
      * memory */
-    __pipeline_wait_prior(0);
+    GPU_PIPELINE_WAIT();
     __syncthreads();
 
     /* Initiate prefetch for the next tile (overlaps with compute further in the
@@ -161,15 +161,15 @@ __device__ __forceinline__ void neighbour_interactions_density(
       /*Now issue pre-fetch for next data set*/
       for (int t = tid; t < nextCnt; t += GPU_THREAD_BLOCK_SIZE) {
         const int gj = nextBase + t;
-        __pipeline_memcpy_async(&s_x_y[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
+        GPU_PIPELINE_COPY(&s_x_y[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
                                 &d_parts_send[gj].p_data.x_y, sizeof(double2));
-        __pipeline_memcpy_async(&s_z_h[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
+        GPU_PIPELINE_COPY(&s_z_h[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
                                 &d_parts_send[gj].p_data.z_h, sizeof(double2));
-        __pipeline_memcpy_async(&s_vx_m[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
+        GPU_PIPELINE_COPY(&s_vx_m[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
                                 &d_parts_send[gj].p_data.vx_m, sizeof(float4));
       }
       /*Commit but don't sync, syncing is done at the end of computations*/
-      __pipeline_commit();
+      GPU_PIPELINE_COMMIT();
     }
     /* Run computations on the current tile (buf)*/
     if (i_in_range) {
@@ -751,20 +751,19 @@ __device__ __forceinline__ void neighbour_interactions_gradient(
 
     for (int t = tid; t < tileCount0; t += GPU_THREAD_BLOCK_SIZE) {
       const int gj = base0 + t;
-      __pipeline_memcpy_async(&s_x_y[0 * GPU_THREAD_BLOCK_SIZE + t],
+      GPU_PIPELINE_COPY(&s_x_y[0 * GPU_THREAD_BLOCK_SIZE + t],
                               &d_parts_send[gj].p_data.x_y, sizeof(double2));
-      __pipeline_memcpy_async(&s_z_h[0 * GPU_THREAD_BLOCK_SIZE + t],
+      GPU_PIPELINE_COPY(&s_z_h[0 * GPU_THREAD_BLOCK_SIZE + t],
                               &d_parts_send[gj].p_data.z_h, sizeof(double2));
-      __pipeline_memcpy_async(&s_vx_m[0 * GPU_THREAD_BLOCK_SIZE + t],
+      GPU_PIPELINE_COPY(&s_vx_m[0 * GPU_THREAD_BLOCK_SIZE + t],
                               &d_parts_send[gj].p_data.vx_m, sizeof(float4));
-      __pipeline_memcpy_async(
-          &s_u_rho_c_aviscmax[0 * GPU_THREAD_BLOCK_SIZE + t],
+      GPU_PIPELINE_COPY(&s_u_rho_c_aviscmax[0 * GPU_THREAD_BLOCK_SIZE + t],
           &d_parts_send[gj].p_data.u_rho_c_aviscmax, sizeof(float4));
-      __pipeline_memcpy_async(&s_avisc_vsig[0 * GPU_THREAD_BLOCK_SIZE + t],
+      GPU_PIPELINE_COPY(&s_avisc_vsig[0 * GPU_THREAD_BLOCK_SIZE + t],
                               &d_parts_send[gj].p_data.avisc_vsig,
                               sizeof(float4));
     }
-    __pipeline_commit();
+    GPU_PIPELINE_COMMIT();
   }
   /* Loop over tiles prefetching of "next" tile while computing "current" */
   for (int tile = 0; tile < numTiles; ++tile) {
@@ -776,7 +775,7 @@ __device__ __forceinline__ void neighbour_interactions_gradient(
 
     /* Make sure the current tile (already committed) is resident in shared
      * memory */
-    __pipeline_wait_prior(0);
+    GPU_PIPELINE_WAIT();
     __syncthreads();
 
     /* Initiate prefetch for the next tile (overlaps with compute further in the
@@ -796,21 +795,19 @@ __device__ __forceinline__ void neighbour_interactions_gradient(
       /*Now issue pre-fetch for next data set*/
       for (int t = tid; t < nextCnt; t += GPU_THREAD_BLOCK_SIZE) {
         const int gj = nextBase + t;
-        __pipeline_memcpy_async(&s_x_y[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
+        GPU_PIPELINE_COPY(&s_x_y[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
                                 &d_parts_send[gj].p_data.x_y, sizeof(double2));
-        __pipeline_memcpy_async(&s_z_h[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
+        GPU_PIPELINE_COPY(&s_z_h[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
                                 &d_parts_send[gj].p_data.z_h, sizeof(double2));
-        __pipeline_memcpy_async(&s_vx_m[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
+        GPU_PIPELINE_COPY(&s_vx_m[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
                                 &d_parts_send[gj].p_data.vx_m, sizeof(float4));
-        __pipeline_memcpy_async(
-            &s_u_rho_c_aviscmax[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
+        GPU_PIPELINE_COPY(&s_u_rho_c_aviscmax[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
             &d_parts_send[gj].p_data.u_rho_c_aviscmax, sizeof(float4));
-        __pipeline_memcpy_async(
-            &s_avisc_vsig[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
+        GPU_PIPELINE_COPY(&s_avisc_vsig[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
             &d_parts_send[gj].p_data.avisc_vsig, sizeof(float4));
       }
       /*Commit but don't sync, syncing is done at the end of computations*/
-      __pipeline_commit();
+      GPU_PIPELINE_COMMIT();
     }
     /* Run computations on the current tile (buf)*/
     if (i_in_range) {
@@ -1472,23 +1469,23 @@ __device__ __forceinline__ void neighbour_interactions_force(
 
     for (int t = tid; t < tileCount0; t += GPU_THREAD_BLOCK_SIZE) {
       const int gj = base0 + t;
-      __pipeline_memcpy_async(&s_x_y[0 * GPU_THREAD_BLOCK_SIZE + t],
+      GPU_PIPELINE_COPY(&s_x_y[0 * GPU_THREAD_BLOCK_SIZE + t],
                               &d_parts_send[gj].p_data.x_y, sizeof(double2));
-      __pipeline_memcpy_async(&s_z_h[0 * GPU_THREAD_BLOCK_SIZE + t],
+      GPU_PIPELINE_COPY(&s_z_h[0 * GPU_THREAD_BLOCK_SIZE + t],
                               &d_parts_send[gj].p_data.z_h, sizeof(double2));
-      __pipeline_memcpy_async(&s_vx_m[0 * GPU_THREAD_BLOCK_SIZE + t],
+      GPU_PIPELINE_COPY(&s_vx_m[0 * GPU_THREAD_BLOCK_SIZE + t],
                               &d_parts_send[gj].p_data.vx_m, sizeof(float4));
-      __pipeline_memcpy_async(&s_u_r_f_p[0 * GPU_THREAD_BLOCK_SIZE + t],
+      GPU_PIPELINE_COPY(&s_u_r_f_p[0 * GPU_THREAD_BLOCK_SIZE + t],
                               &d_parts_send[gj].p_data.u_rho_f_p,
                               sizeof(float4));
-      __pipeline_memcpy_async(&s_b_c_av_ad[0 * GPU_THREAD_BLOCK_SIZE + t],
+      GPU_PIPELINE_COPY(&s_b_c_av_ad[0 * GPU_THREAD_BLOCK_SIZE + t],
                               &d_parts_send[gj].p_data.bals_c_avisc_adiff,
                               sizeof(float4));
-      __pipeline_memcpy_async(&s_tb_min_ngb_tb[0 * GPU_THREAD_BLOCK_SIZE + t],
+      GPU_PIPELINE_COPY(&s_tb_min_ngb_tb[0 * GPU_THREAD_BLOCK_SIZE + t],
                               &d_parts_send[gj].p_data.timebin_minngbtimebin,
                               sizeof(int2));
     }
-    __pipeline_commit();
+    GPU_PIPELINE_COMMIT();
   }
   /* Loop over tiles prefetching of "next" tile while computing "current" */
   for (int tile = 0; tile < numTiles; ++tile) {
@@ -1500,7 +1497,7 @@ __device__ __forceinline__ void neighbour_interactions_force(
 
     /* Make sure the current tile (already committed) is resident in shared
      * memory */
-    __pipeline_wait_prior(0);
+    GPU_PIPELINE_WAIT();
     __syncthreads();
 
     /* Initiate prefetch for the next tile (overlaps with compute further in the
@@ -1520,24 +1517,22 @@ __device__ __forceinline__ void neighbour_interactions_force(
       /*Now issue pre-fetch for next data set*/
       for (int t = tid; t < nextCnt; t += GPU_THREAD_BLOCK_SIZE) {
         const int gj = nextBase + t;
-        __pipeline_memcpy_async(&s_x_y[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
+        GPU_PIPELINE_COPY(&s_x_y[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
                                 &d_parts_send[gj].p_data.x_y, sizeof(double2));
-        __pipeline_memcpy_async(&s_z_h[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
+        GPU_PIPELINE_COPY(&s_z_h[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
                                 &d_parts_send[gj].p_data.z_h, sizeof(double2));
-        __pipeline_memcpy_async(&s_vx_m[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
+        GPU_PIPELINE_COPY(&s_vx_m[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
                                 &d_parts_send[gj].p_data.vx_m, sizeof(float4));
-        __pipeline_memcpy_async(&s_u_r_f_p[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
+        GPU_PIPELINE_COPY(&s_u_r_f_p[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
                                 &d_parts_send[gj].p_data.u_rho_f_p,
                                 sizeof(float4));
-        __pipeline_memcpy_async(
-            &s_b_c_av_ad[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
+        GPU_PIPELINE_COPY(&s_b_c_av_ad[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
             &d_parts_send[gj].p_data.bals_c_avisc_adiff, sizeof(float4));
-        __pipeline_memcpy_async(
-            &s_tb_min_ngb_tb[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
+        GPU_PIPELINE_COPY(&s_tb_min_ngb_tb[nextBuf * GPU_THREAD_BLOCK_SIZE + t],
             &d_parts_send[gj].p_data.timebin_minngbtimebin, sizeof(int2));
       }
       /*Commit but don't sync, syncing is done at the end of computations*/
-      __pipeline_commit();
+      GPU_PIPELINE_COMMIT();
     }
 
     /* Run computations on the current tile (buf)*/

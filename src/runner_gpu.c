@@ -41,10 +41,8 @@
 #include <mpi.h>
 #endif
 
-#ifdef WITH_CUDA
 #include "gpu_pack_params.h"
 #include "cuda/cuda_config.h"
-#endif
 
 static int runner_gpu_local_ranks_on_device_for_budget = 1;
 
@@ -249,7 +247,7 @@ void runner_gpu_bind_device(struct runner *r) {
 
   const GPUError err = GPUSetDevice(device_id);
 
-  if (err != GPU_SUCCESS)
+  if (err != GPUSuccess)
     error("runner_gpu_bind_device: GPUSetDevice(%d) failed: %s",
           device_id, GPUGetErrorString(err));
 #else
@@ -293,7 +291,7 @@ static void runner_gpu_mark_done_debug(
 static inline void runner_gpu_check_error(const char *where) {
   const GPUError err = GPUGetLastError();
 
-  if (err != GPU_SUCCESS)
+  if (err != GPUSuccess)
     error("%s: %s", where, GPUGetErrorString(err));
 }
 
@@ -325,7 +323,7 @@ static double runner_gpu_event_offset_s(
   const GPUError err =
       GPUEventElapsedTime(&elapsed_ms, start, stop);
 
-  if (err != GPU_SUCCESS) {
+  if (err != GPUSuccess) {
     error("GPUEventElapsedTime failed: %s",
           GPUGetErrorString(err));
   }
@@ -1638,84 +1636,84 @@ GPUEventRecord(h2d_start, stream);
         substream->send_pair_pos_mass_d,
         substream->send_pair_pos_mass,
         (size_t)substream->pair_total_count * sizeof(float4),
-        GPU_MEMCPY_HOST_TO_DEVICE,
+        GPUMemcpyHostToDevice,
         stream);
 
     GPUMemcpyAsync(
         substream->send_pair_h_d,
         substream->send_pair_h,
         (size_t)substream->pair_total_count * sizeof(float),
-        GPU_MEMCPY_HOST_TO_DEVICE,
+        GPUMemcpyHostToDevice,
         stream);
 
     GPUMemcpyAsync(
         substream->pair_counts_d,
         substream->pair_counts_h,
         (size_t)nslots * sizeof(int),
-        GPU_MEMCPY_HOST_TO_DEVICE,
+        GPUMemcpyHostToDevice,
         stream);
 
     GPUMemcpyAsync(
         substream->pair_offsets_d,
         substream->pair_offsets_h,
         (size_t)nslots * sizeof(int),
-        GPU_MEMCPY_HOST_TO_DEVICE,
+        GPUMemcpyHostToDevice,
         stream);
 
     GPUMemcpyAsync(
         substream->pair_active_counts_d,
         substream->pair_active_counts_h,
         (size_t)nslots * sizeof(int),
-        GPU_MEMCPY_HOST_TO_DEVICE,
+        GPUMemcpyHostToDevice,
         stream);
 
     GPUMemcpyAsync(
         substream->pair_active_offsets_d,
         substream->pair_active_offsets_h,
         (size_t)nslots * sizeof(int),
-        GPU_MEMCPY_HOST_TO_DEVICE,
+        GPUMemcpyHostToDevice,
         stream);
 
     GPUMemcpyAsync(
         substream->pair_active_index_d,
         substream->pair_active_index_h,
         (size_t)substream->pair_total_active_count * sizeof(int),
-        GPU_MEMCPY_HOST_TO_DEVICE,
+        GPUMemcpyHostToDevice,
         stream);
 
     GPUMemcpyAsync(
         substream->pair_pair_i_d,
         substream->pair_pair_i_h,
         (size_t)npairs * sizeof(int),
-        GPU_MEMCPY_HOST_TO_DEVICE,
+        GPUMemcpyHostToDevice,
         stream);
 
     GPUMemcpyAsync(
         substream->pair_pair_j_d,
         substream->pair_pair_j_h,
         (size_t)npairs * sizeof(int),
-        GPU_MEMCPY_HOST_TO_DEVICE,
+        GPUMemcpyHostToDevice,
         stream);
 
     GPUMemcpyAsync(
         substream->pair_use_full_d,
         substream->pair_use_full_h,
         (size_t)npairs * sizeof(int),
-        GPU_MEMCPY_HOST_TO_DEVICE,
+        GPUMemcpyHostToDevice,
         stream);
 
     GPUMemcpyAsync(
         substream->pair_side_active_offsets_d,
         substream->pair_side_active_offsets_h,
         (size_t)(2 * npairs) * sizeof(int),
-        GPU_MEMCPY_HOST_TO_DEVICE,
+        GPUMemcpyHostToDevice,
         stream);
 
     GPUMemcpyAsync(
         substream->pair_cell_flags_d,
         substream->pair_cell_flags_h,
         (size_t)nslots * sizeof(int),
-        GPU_MEMCPY_HOST_TO_DEVICE,
+        GPUMemcpyHostToDevice,
         stream);
         
     #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
@@ -1788,7 +1786,7 @@ GPUEventRecord(h2d_start, stream);
         substream->recv_pair_active_d,
         (size_t)substream->pair_total_pair_active_count *
             sizeof(struct gravity_gpu_values_recv),
-        GPU_MEMCPY_DEVICE_TO_HOST,
+        GPUMemcpyDeviceToHost,
         stream);
         
     #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
@@ -2319,35 +2317,35 @@ static void runner_doself_grav_pp_flush(
         substream->self_counts_d,
         substream->self_counts_h,
         nslots * sizeof(int),
-        GPU_MEMCPY_HOST_TO_DEVICE,
+        GPUMemcpyHostToDevice,
         substream->stream);
 
     GPUMemcpyAsync(
         substream->self_offsets_d,
         substream->self_offsets_h,
         nslots * sizeof(int),
-        GPU_MEMCPY_HOST_TO_DEVICE,
+        GPUMemcpyHostToDevice,
         substream->stream);
 
     GPUMemcpyAsync(
         substream->self_active_counts_d,
         substream->self_active_counts_h,
         nslots * sizeof(int),
-        GPU_MEMCPY_HOST_TO_DEVICE,
+        GPUMemcpyHostToDevice,
         substream->stream);
 
     GPUMemcpyAsync(
     substream->self_active_offsets_d,
     substream->self_active_offsets_h,
     nslots * sizeof(int),
-    GPU_MEMCPY_HOST_TO_DEVICE,
+    GPUMemcpyHostToDevice,
     substream->stream);
 
     GPUMemcpyAsync(
     substream->self_active_index_d,
     substream->self_active_index_h,
     (size_t)substream->self_total_active_count * sizeof(int),
-    GPU_MEMCPY_HOST_TO_DEVICE,
+    GPUMemcpyHostToDevice,
     substream->stream);
 
     /* H2D: only live data */
@@ -2355,28 +2353,28 @@ static void runner_doself_grav_pp_flush(
     	substream->self_cell_flags_d,
     	substream->self_cell_flags_h,
     	nslots * sizeof(int),
-    	GPU_MEMCPY_HOST_TO_DEVICE,
+    	GPUMemcpyHostToDevice,
     	substream->stream);
 
 	GPUMemcpyAsync(
 	    substream->self_use_full_d,
 	    substream->self_use_full_h,
 	    nslots * sizeof(int),
-	    GPU_MEMCPY_HOST_TO_DEVICE,
+	    GPUMemcpyHostToDevice,
 	    substream->stream);
 
 	GPUMemcpyAsync(
 	    substream->send_self_pos_mass_d,
 	    substream->send_self_pos_mass,
 	    total * sizeof(float4),
-	    GPU_MEMCPY_HOST_TO_DEVICE,
+	    GPUMemcpyHostToDevice,
 	    substream->stream);
 
 	GPUMemcpyAsync(
 	    substream->send_self_h_d,
 	    substream->send_self_h,
 	    total * sizeof(float),
-	    GPU_MEMCPY_HOST_TO_DEVICE,
+	    GPUMemcpyHostToDevice,
 	    substream->stream);
 
     #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
@@ -2405,7 +2403,7 @@ static void runner_doself_grav_pp_flush(
 	    substream->recv_self_active_d,
 	    (size_t)substream->self_total_active_count *
 		sizeof(struct gravity_gpu_values_recv),
-	    GPU_MEMCPY_DEVICE_TO_HOST,
+	    GPUMemcpyDeviceToHost,
 	    substream->stream);
 
     #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS) 
@@ -3043,7 +3041,6 @@ static int runner_gpu_select_device(struct runner *r) {
   return device_id;
 }
 
-#ifdef WITH_CUDA
 /**
  * @brief Initialise the hydro GPU packing parameters for a runner.
  *
@@ -3119,9 +3116,7 @@ static void runner_gpu_hydro_set_params(struct runner *r) {
       params->tester_param);
 }
 }
-#endif
 
-#ifdef WITH_CUDA
 
 /**
  * @brief Size the hydro GPU buffers using the available GPU memory.
@@ -3138,11 +3133,11 @@ static void runner_gpu_hydro_size_buffers(struct runner *r) {
   size_t free_mem = 0;
   size_t total_mem = 0;
 
-  cudaError_t cu_error = cudaMemGetInfo(&free_mem, &total_mem);
+  GPUError cu_error = GPUMemGetInfo(&free_mem, &total_mem);
 
-  if (cu_error != cudaSuccess)
-    error("cudaMemGetInfo failed while sizing hydro GPU buffers: %s",
-          cudaGetErrorString(cu_error));
+  if (cu_error != GPUSuccess)
+    error("GPUMemGetInfo failed while sizing hydro GPU buffers: %s",
+          GPUGetErrorString(cu_error));
 
   const size_t GB = 1024ULL * 1024ULL * 1024ULL;
 
@@ -3313,7 +3308,6 @@ static void runner_gpu_hydro_size_buffers(struct runner *r) {
       params->cuda_blockid_buffer_size);
 }
 
-#endif
 
 /**
  * @brief Initialise the GPU-specific state attached to a runner.
@@ -3668,7 +3662,6 @@ void runner_gpu_init(struct runner *r) {
   error("Failed to allocate runner GPU self substream metadata arrays.");
   }
   
-  #ifdef WITH_CUDA
   size_t free_before_hydro = 0, total_before_hydro = 0;
 GPUMemGetInfo(&free_before_hydro, &total_before_hydro);
 
@@ -3688,15 +3681,13 @@ GPUMemGetInfo(&free_after_hydro, &total_after_hydro);
 if (r->id == 0)
   message("GPU free after hydro allocation: %.3f GB",
           free_after_hydro / (1024.0 * 1024.0 * 1024.0));
-  #endif
 
   const GPUError err = GPUGetLastError();
-  if (err != GPU_SUCCESS)
+  if (err != GPUSuccess)
     error("runner_gpu_init failed: %s", GPUGetErrorString(err));
 }
 
 
-#ifdef WITH_CUDA
 
 void runner_gpu_hydro_init(struct runner *r) {
 
@@ -3750,14 +3741,13 @@ void runner_gpu_hydro_init(struct runner *r) {
             &hydro->streams[i],
             GPUStreamNonBlocking);
 
-    if (err != GPU_SUCCESS)
+    if (err != GPUSuccess)
       error("Failed to create hydro GPU stream %d: %s",
             i, GPUGetErrorString(err));
   }
 
   hydro->initialised = 1;
 }
-#endif
 
 
 /**
@@ -3784,7 +3774,7 @@ runner_gpu_acquire_substream(struct runner *r) {
 
     const GPUError qerr = GPUEventQuery(substream->done);
 
-    if (qerr == GPU_SUCCESS) {
+    if (qerr == GPUSuccess) {
       substream->busy = 1;
       gpu->next_substream = (idx + 1) % gpu->nstreams;
       return substream;
@@ -3805,7 +3795,7 @@ runner_gpu_acquire_substream(struct runner *r) {
       &gpu->substreams[gpu->next_substream];
 
   const GPUError serr = GPUEventSynchronize(substream->done);
-  if (serr != GPU_SUCCESS)
+  if (serr != GPUSuccess)
     error("runner_gpu_acquire_substream: GPUEventSynchronize failed: %s",
           GPUGetErrorString(serr));
 
@@ -3956,13 +3946,11 @@ void runner_gpu_clean(struct runner *r) {
   gpu->substreams = NULL;
   gpu->nstreams = 0;
   
-  #ifdef WITH_CUDA
   runner_gpu_hydro_clean(r);
-  #endif
 }
 
 
-#ifdef WITH_CUDA
+
 void runner_gpu_hydro_clean(struct runner *r) {
 
   struct gpu_hydro_state *hydro = &r->gpu.hydro;
@@ -3987,7 +3975,7 @@ void runner_gpu_hydro_clean(struct runner *r) {
   hydro->nstreams = 0;
   hydro->initialised = 0;
 }
-#endif
+
 
 /**
  * @brief Flush any leftover packed self-gravity work owned by a runner.
@@ -4057,52 +4045,52 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
 
     GPUMemcpyAsync(substream->self_counts_d, substream->self_counts_h,
                    nslots * sizeof(int),
-                   GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
+                   GPUMemcpyHostToDevice, substream->stream);
 
     GPUMemcpyAsync(substream->self_offsets_d, substream->self_offsets_h,
                    nslots * sizeof(int),
-                   GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
+                   GPUMemcpyHostToDevice, substream->stream);
 
     GPUMemcpyAsync(substream->self_active_counts_d, substream->self_active_counts_h,
                    nslots * sizeof(int),
-                   GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
+                   GPUMemcpyHostToDevice, substream->stream);
 
     GPUMemcpyAsync(substream->self_active_offsets_d,
                substream->self_active_offsets_h,
                nslots * sizeof(int),
-               GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
+               GPUMemcpyHostToDevice, substream->stream);
 
     GPUMemcpyAsync(substream->self_active_index_d,
                substream->self_active_index_h,
                (size_t)substream->self_total_active_count * sizeof(int),
-               GPU_MEMCPY_HOST_TO_DEVICE, substream->stream);
+               GPUMemcpyHostToDevice, substream->stream);
 
     GPUMemcpyAsync(
 	    substream->self_cell_flags_d,
 	    substream->self_cell_flags_h,
 	    nslots * sizeof(int),
-	    GPU_MEMCPY_HOST_TO_DEVICE,
+	    GPUMemcpyHostToDevice,
 	    substream->stream);
 
 	GPUMemcpyAsync(
 	    substream->self_use_full_d,
 	    substream->self_use_full_h,
 	    nslots * sizeof(int),
-	    GPU_MEMCPY_HOST_TO_DEVICE,
+	    GPUMemcpyHostToDevice,
 	    substream->stream);
 
 	GPUMemcpyAsync(
 	    substream->send_self_pos_mass_d,
 	    substream->send_self_pos_mass,
 	    total * sizeof(float4),
-	    GPU_MEMCPY_HOST_TO_DEVICE,
+	    GPUMemcpyHostToDevice,
 	    substream->stream);
 
 	GPUMemcpyAsync(
 	    substream->send_self_h_d,
 	    substream->send_self_h,
 	    total * sizeof(float),
-	    GPU_MEMCPY_HOST_TO_DEVICE,
+	    GPUMemcpyHostToDevice,
 	    substream->stream);
 
     GPUMemsetAsync(
@@ -4141,7 +4129,7 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
         substream->recv_self_active_d,
         (size_t)substream->self_total_active_count *
             sizeof(struct gravity_gpu_values_recv),
-        GPU_MEMCPY_DEVICE_TO_HOST,
+        GPUMemcpyDeviceToHost,
         substream->stream);
 
     #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS) 

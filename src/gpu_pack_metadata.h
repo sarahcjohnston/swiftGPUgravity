@@ -32,7 +32,6 @@ extern "C" {
 
 #include "config.h"
 #include "gpu_pack_params.h"
-#include <cuda_runtime.h>
 #include <stddef.h>
 
 /* Hash table entry. TODO: Move declaration to a separate file maybe?
@@ -45,6 +44,12 @@ struct hash_entry {
     /*Is this index occupied by another hash?*/
     int occupied;
 };
+
+/* Backend-independent pair of integer indices */
+typedef struct {
+    int x;
+    int y;
+} gpu_index_pair;
 
 /*! struct holding bookkeeping meta-data required for offloading;
  * does not depend on cuda/hip et al. */
@@ -62,7 +67,7 @@ struct gpu_pack_metadata {
 
   /*For a cell stored in unique_cells, where do its particles start/end
    * in the particle data buffer array offloaded to GPU*/
-  int2 *unique_start_end;
+  gpu_index_pair *unique_start_end;
 
   /*Hash table used to find unique cells*/
   struct hash_table{
@@ -74,7 +79,7 @@ struct gpu_pack_metadata {
   /*Array to guide each leaf computation to it's cell's/s' index in the
    * array of unique cells. my_index.x -> ci, my_index.y -> cj
    * For self computations, ci==cj*/
-  int2 *my_index;
+  gpu_index_pair *my_index;
 
   /*number of unique cells we find*/
   int n_unique;

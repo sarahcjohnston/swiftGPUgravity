@@ -30,8 +30,7 @@
 #include "runner.h"
 #include "gpu_part_structs.h"
 
-#include <cuda.h>
-#include <cuda_runtime.h>
+#include "gpu_mapping.h"
 
 /**
  * @brief Initialize the GPU context for each thread. This should be
@@ -43,24 +42,24 @@ void gpu_init_thread(struct engine *e, const int cpuid) {
 
   /* Find and print GPU name(s) */
   int dev_id = 0; /* gpu device name */
-  struct cudaDeviceProp prop;
+  struct GPUDeviceProp prop;
   int n_devices;
   int max_blocks_SM;
   int n_SMs;
 
-  cudaError_t cu_error = cudaGetDeviceCount(&n_devices);
-  assert(cu_error == cudaSuccess);
+  GPUError_t cu_error = GPUGetDeviceCount(&n_devices);
+  assert(cu_error == GPUSuccess);
 
   /* A. Nasar: If running on MPI we set code to use one MPI rank per GPU
    * This was found to work very well and simplifies writing slurm scipts */
   if (n_devices == 1) {
-    cu_error = cudaSetDevice(dev_id);
-    assert(cu_error == cudaSuccess);
+    cu_error = GPUSetDevice(dev_id);
+    assert(cu_error == GPUSuccess);
   }
 #ifdef WITH_MPI
   else {
-    cu_error = cudaSetDevice(engine_rank % n_devices);
-    assert(cu_error == cudaSuccess);
+    cu_error = GPUSetDevice(engine_rank % n_devices);
+    assert(cu_error == GPUSuccess);
 
     dev_id = engine_rank % n_devices;
     message("engine_rank %i got GPU %i", engine_rank, dev_id);
@@ -68,22 +67,22 @@ void gpu_init_thread(struct engine *e, const int cpuid) {
 #endif
 
   /* Now tell me some info about my device */
-  cu_error = cudaGetDeviceProperties(&prop, dev_id);
-  assert(cu_error == cudaSuccess);
+  cu_error = GPUGetDeviceProperties(&prop, dev_id);
+  assert(cu_error == GPUSuccess);
 
-  cu_error = cudaDeviceGetAttribute(
-      &max_blocks_SM, cudaDevAttrMaxBlocksPerMultiprocessor, dev_id);
-  assert(cu_error == cudaSuccess);
+  cu_error = GPUDeviceGetAttribute(
+      &max_blocks_SM, GPUDevAttrMaxBlocksPerMultiprocessor, dev_id);
+  assert(cu_error == GPUSuccess);
 
   cu_error =
-      cudaDeviceGetAttribute(&n_SMs, cudaDevAttrMultiProcessorCount, dev_id);
-  assert(cu_error == cudaSuccess);
+      GPUDeviceGetAttribute(&n_SMs, GPUDevAttrMultiProcessorCount, dev_id);
+  assert(cu_error == GPUSuccess);
 
   size_t free_mem;
   size_t total_mem;
   const struct space *space = e->s;
-  cu_error = cudaMemGetInfo(&free_mem, &total_mem);
-  assert(cu_error == cudaSuccess);
+  cu_error = GPUMemGetInfo(&free_mem, &total_mem);
+  assert(cu_error == GPUSuccess);
 
   int nPartsPerCell = space->nr_parts / space->tot_cells;
   if (cpuid == 0 && engine_rank == 0) {
@@ -213,8 +212,8 @@ void gpu_print_free_mem(const struct engine *e, const int cpuid) {
   /* Find and print GPU name(s) */
   int dev_id = 0;
   int n_devices;
-  cudaError_t cu_error = cudaGetDeviceCount(&n_devices);
-  assert(cu_error == cudaSuccess);
+  GPUError_t cu_error = GPUGetDeviceCount(&n_devices);
+  assert(cu_error == GPUSuccess);
 
 #ifdef WITH_MPI
   if (n_devices != 1) {
@@ -222,16 +221,16 @@ void gpu_print_free_mem(const struct engine *e, const int cpuid) {
   }
 #endif
 
-  struct cudaDeviceProp prop;
+  struct GPUDeviceProp prop;
 
   /* Now tell me some info about my device */
-  cu_error = cudaGetDeviceProperties(&prop, dev_id);
-  assert(cu_error == cudaSuccess);
+  cu_error = GPUGetDeviceProperties(&prop, dev_id);
+  assert(cu_error == GPUSuccess);
 
   size_t free_mem;
   size_t total_mem;
-  cu_error = cudaMemGetInfo(&free_mem, &total_mem);
-  assert(cu_error == cudaSuccess);
+  cu_error = GPUMemGetInfo(&free_mem, &total_mem);
+  assert(cu_error == GPUSuccess);
 
   if (cpuid == 0) {
 #ifdef SWIFT_DEBUG_CHECKS

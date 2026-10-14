@@ -27,20 +27,10 @@
 #include "runner.h"
 #include "timers.h"
 
-/* Temporary warning during dev works. */
-#if !(defined(HAVE_CUDA) || defined(HAVE_HIP))
-#pragma warning "Don't have CUDA nor HIP"
-#endif
-
-#ifdef WITH_CUDA
 #include "cuda/gpu_offload_data.h"
 #include "cuda/gpu_part_pack_functions.h"
 #include "cuda/gpu_part_structs.h"
-#endif
 
-#ifdef WITH_HIP
-#pragma error "Header inclusions missing"
-#endif
 
 /**
  * @brief Generic function to unpack data received from the GPU depending on

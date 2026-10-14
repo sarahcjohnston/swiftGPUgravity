@@ -141,9 +141,6 @@
 
 #ifdef WITH_GPU
 #include "gpu_functions.h"
-#endif
-
-#ifdef WITH_CUDA
 #include "runner_doiact_functions_hydro_gpu.h"
 #endif
 
@@ -190,7 +187,7 @@ void *runner_main(void *data) {
     /* Can we go home yet? */
     if (e->step_props & engine_step_prop_done) break;
     
-    #if defined(WITH_GPU) && defined(WITH_CUDA)
+    #if defined(WITH_GPU)
     /*
      * Decide whether this timestep contains enough hydro work to make
      * GPU offloading worthwhile.
@@ -237,7 +234,7 @@ void *runner_main(void *data) {
       continue;
     }
     
-    #if defined(WITH_GPU) && defined(WITH_CUDA)
+    #if defined(WITH_GPU)
   /*
    * Flush any partially filled hydro GPU batch.
    *
@@ -373,7 +370,7 @@ void *runner_main(void *data) {
           } else if (t->subtype == task_subtype_external_grav){
             runner_do_grav_external(r, ci, 1);}
           else if (t->subtype == task_subtype_density){
-            #if defined(WITH_GPU) && defined(WITH_CUDA) && defined(GPUOFFLOAD_DENSITY)
+            #if defined(WITH_GPU) && defined(GPUOFFLOAD_DENSITY)
             if (offload) {
               runner_gpu_count_hydro_task(r, sched, t);
               
@@ -396,7 +393,7 @@ void *runner_main(void *data) {
 #ifdef EXTRA_HYDRO_LOOP
           } else if (t->subtype == task_subtype_gradient) {
 
-#if defined(WITH_GPU) && defined(WITH_CUDA) && defined(GPUOFFLOAD_GRADIENT)
+#if defined(WITH_GPU) && defined(GPUOFFLOAD_GRADIENT)
             if (offload) {
               runner_gpu_count_hydro_task(r, sched, t);
 
@@ -421,7 +418,7 @@ void *runner_main(void *data) {
 
           } else if (t->subtype == task_subtype_force) {
 
-#if defined(WITH_GPU) && defined(WITH_CUDA) && defined(GPUOFFLOAD_FORCE)
+#if defined(WITH_GPU) && defined(GPUOFFLOAD_FORCE)
             if (offload) {
               runner_gpu_count_hydro_task(r, sched, t);
 
@@ -496,7 +493,7 @@ void *runner_main(void *data) {
     	  #endif
           } else if (t->subtype == task_subtype_density) {
 
-#if defined(WITH_GPU) && defined(WITH_CUDA) && defined(GPUOFFLOAD_DENSITY)
+#if defined(WITH_GPU) && defined(GPUOFFLOAD_DENSITY)
             if (offload) {
               runner_gpu_count_hydro_task(r, sched, t);
 
@@ -516,7 +513,7 @@ void *runner_main(void *data) {
 #ifdef EXTRA_HYDRO_LOOP
           } else if (t->subtype == task_subtype_gradient) {
 
-#if defined(WITH_GPU) && defined(WITH_CUDA) && defined(GPUOFFLOAD_GRADIENT)
+#if defined(WITH_GPU) && defined(GPUOFFLOAD_GRADIENT)
             if (offload) {
               runner_gpu_count_hydro_task(r, sched, t);
 
@@ -543,7 +540,7 @@ void *runner_main(void *data) {
 
           } else if (t->subtype == task_subtype_force) {
 
-#if defined(WITH_GPU) && defined(WITH_CUDA) && defined(GPUOFFLOAD_FORCE)
+#if defined(WITH_GPU) && defined(GPUOFFLOAD_FORCE)
             if (offload) {
               runner_gpu_count_hydro_task(r, sched, t);
 

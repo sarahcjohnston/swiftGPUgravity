@@ -73,7 +73,7 @@ extern "C" void self_pp_offload_gpu(
       ncells);
 
   GPUError err = GPUGetLastError();
-  if (err != GPU_SUCCESS)
+  if (err != GPUSuccess)
     printf("Error - self_pp: %s\n", GPUGetErrorString(err));
 }
 

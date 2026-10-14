@@ -34,8 +34,7 @@ extern "C" {
 
 #include "task.h"
 
-#include <cuda.h>
-#include <cuda_runtime.h>
+#include "gpu_mapping.h"
 
 #include "error.h"
 
@@ -64,31 +63,31 @@ void gpu_data_buffers_init(struct gpu_offload_data *buf,
   gpu_pack_metadata_init(md, params);
 
   /* Now allocate arrays */
-  cudaError_t cu_error;
+  GPUError cu_error;
 
   /* Now allocate memory for Buffer and GPU particle arrays */
-  cu_error = cudaMalloc((void **)&buf->d_parts_send_d,
+  cu_error = GPUMalloc((void **)&buf->d_parts_send_d,
                         part_buffer_size * send_struct_size);
-  assert(cu_error == cudaSuccess);
+  assert(cu_error == GPUSuccess);
 
-  cu_error = cudaMalloc((void **)&buf->d_parts_recv_d,
+  cu_error = GPUMalloc((void **)&buf->d_parts_recv_d,
                         part_buffer_size * recv_struct_size);
-  assert(cu_error == cudaSuccess);
+  assert(cu_error == GPUSuccess);
 
-  cu_error = cudaMallocHost((void **)&buf->parts_send_d,
+  cu_error = GPUHostMalloc((void **)&buf->parts_send_d,
                             part_buffer_size * send_struct_size);
-  assert(cu_error == cudaSuccess);
+  assert(cu_error == GPUSuccess);
 
-  cu_error = cudaMallocHost((void **)&buf->parts_recv_d,
+  cu_error = GPUHostMalloc((void **)&buf->parts_recv_d,
                             part_buffer_size * recv_struct_size);
-  assert(cu_error == cudaSuccess);
+  assert(cu_error == GPUSuccess);
 
   /* Create space for cuda events */
-  buf->event_end = (cudaEvent_t *)malloc(n_bundles * sizeof(cudaEvent_t));
+  buf->event_end = (GPUEvent *)malloc(n_bundles * sizeof(GPUEvent));
 
   for (size_t i = 0; i < n_bundles; i++) {
-    cu_error = cudaEventCreate(&(buf->event_end[i]));
-    assert(cu_error == cudaSuccess);
+    cu_error = GPUEventCreate(&(buf->event_end[i]));
+    assert(cu_error == GPUSuccess);
   }
 
 #ifdef SWIFT_DEBUG_CHECKS
@@ -102,14 +101,14 @@ void gpu_data_buffers_init(struct gpu_offload_data *buf,
   int size_of_cell_start_end = sizeof(int4) * params->cell_start_end_buffer_size;
 
   /*Allocate memory for cell start and end data on host*/
-  cu_error = cudaMallocHost((void **)&buf->gpu_md.cell_i_j_start_end,
+  cu_error = GPUHostMalloc((void **)&buf->gpu_md.cell_i_j_start_end,
                             size_of_cell_start_end);
-  assert(cu_error == cudaSuccess);
+  assert(cu_error == GPUSuccess);
 
   /*Allocate memory for cell start and end data on device*/
-  cu_error = cudaMalloc((void **)&buf->gpu_md.d_cell_i_j_start_end,
+  cu_error = GPUMalloc((void **)&buf->gpu_md.d_cell_i_j_start_end,
                             size_of_cell_start_end);
-  assert(cu_error == cudaSuccess);
+  assert(cu_error == GPUSuccess);
 
   /*Since we have unique sorting this should be quite a bit less than
    * the space needed to store enough blocks to work on part_buffer_size
@@ -118,14 +117,14 @@ void gpu_data_buffers_init(struct gpu_offload_data *buf,
 
   /*Allocate memory for array containing
    * leaf_computation_id for each cuda block*/
-  cu_error = cudaMallocHost((void **)&buf->gpu_md.block_leaf_id,
+  cu_error = GPUHostMalloc((void **)&buf->gpu_md.block_leaf_id,
                             n_blocks * sizeof(int2));
-  assert(cu_error == cudaSuccess);
+  assert(cu_error == GPUSuccess);
 
   /*Repeat for device copy*/
-  cu_error = cudaMalloc((void **)&buf->gpu_md.d_block_leaf_id,
+  cu_error = GPUMalloc((void **)&buf->gpu_md.d_block_leaf_id,
                             n_blocks * sizeof(int2));
-  assert(cu_error == cudaSuccess);
+  assert(cu_error == GPUSuccess);
 
 }
 
@@ -182,19 +181,19 @@ void gpu_data_buffers_free(struct gpu_offload_data *buf) {
   struct gpu_pack_metadata *md = &(buf->md);
   gpu_pack_metadata_free(md);
 
-  cudaError_t cu_error = cudaErrorMemoryAllocation;
+  GPUError cu_error = GPUSuccess;
 
-  cu_error = cudaFree(buf->d_parts_send_d);
-  assert(cu_error == cudaSuccess);
+  cu_error = GPUFree(buf->d_parts_send_d);
+  assert(cu_error == GPUSuccess);
 
-  cu_error = cudaFree(buf->d_parts_recv_d);
-  assert(cu_error == cudaSuccess);
+  cu_error = GPUFree(buf->d_parts_recv_d);
+  assert(cu_error == GPUSuccess);
 
-  cu_error = cudaFreeHost(buf->parts_send_d);
-  assert(cu_error == cudaSuccess);
+  cu_error = GPUFreeHost(buf->parts_send_d);
+  assert(cu_error == GPUSuccess);
 
-  cu_error = cudaFreeHost(buf->parts_recv_d);
-  assert(cu_error == cudaSuccess);
+  cu_error = GPUFreeHost(buf->parts_recv_d);
+  assert(cu_error == GPUSuccess);
 
   free((void *)buf->event_end);
 }

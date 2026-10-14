@@ -261,11 +261,12 @@ __attribute__((always_inline)) INLINE static void gpu_pack_part_density(
   /* Grab handles */
   const int count = c->hydro.count;
   const struct part *parts = c->hydro.parts;
-  struct gpu_part_data_d *ps = &parts_buffer[pack_ind].p_data;
 
   for (int i = 0; i < count; i++) {
 
     const struct part *p = &parts[i];
+    
+    struct gpu_part_data_d *ps = &parts_buffer[pack_ind + i].p_data;
 
     const double *x = part_get_const_x(p);
     ps[i].x_y.x = x[0];
@@ -307,11 +308,12 @@ __attribute__((always_inline)) INLINE static void gpu_pack_part_gradient(
   /* Grab handles */
   const int count = c->hydro.count;
   const struct part *parts = c->hydro.parts;
-  struct gpu_part_data_g *ps = &parts_buffer[pack_ind].p_data;
 
   for (int i = 0; i < count; i++) {
 
     const struct part *p = &parts[i];
+    
+    struct gpu_part_data_g *ps = &parts_buffer[pack_ind + i].p_data;
 
     const double *x = part_get_const_x(p);
     ps[i].x_y.x = x[0];
@@ -359,11 +361,12 @@ __attribute__((always_inline)) INLINE static void gpu_pack_part_force(
 
   const int count = ci->hydro.count;
   const struct part *parts = ci->hydro.parts;
-  struct gpu_part_data_f *ps = &parts_buffer[pack_ind].p_data;
 
   for (int i = 0; i < count; i++) {
 
     const struct part *p = &parts[i];
+    
+    struct gpu_part_data_f *ps = &parts_buffer[pack_ind].p_data;
 
     const double *x = part_get_const_x(p);
     ps[i].x_y.x = x[0];

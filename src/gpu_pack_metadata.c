@@ -61,7 +61,7 @@ void gpu_pack_metadata_init(struct gpu_pack_metadata *md,
   for (size_t i = 0; i < 2 * leaf_buffer_size; i++) md->unique_cells[i] = 0;
 
   md->unique_start_end =
-      (int2 *)malloc(2* leaf_buffer_size * sizeof(int2)); //MY COMMENT, fixing memory allocation
+      malloc(2* leaf_buffer_size * sizeof(*md->unique_start_end)); //MY COMMENT, fixing memory allocation
   for (size_t i = 0; i < 2*leaf_buffer_size; i++){ //MY COMMENT added 2
     md->unique_start_end[i].x = 0;
     md->unique_start_end[i].y = 0;
@@ -78,7 +78,7 @@ void gpu_pack_metadata_init(struct gpu_pack_metadata *md,
   }
 
   /*This is used to tell each cell in a pair where it's index is in the uniquely sorted array*/
-  md->my_index = (int2 *)malloc(sizeof(int2) * params->pack_size);
+  md->my_index = malloc(params->pack_size * sizeof(*md->my_index));
 
   md->task_list = (struct task **)malloc(pack_size * sizeof(struct task *));
   for (size_t i = 0; i < pack_size; i++) md->task_list[i] = NULL;

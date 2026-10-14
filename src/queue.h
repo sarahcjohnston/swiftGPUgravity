@@ -81,9 +81,7 @@ struct queue {
 
   /*! Number of pair-gravity scheduler tasks awaiting GPU completion. */
   int gpu_pair_tasks_left;
-#endif
 
-#ifdef WITH_CUDA
   /*! Hydro density tasks awaiting GPU completion. */
   int gpu_hydro_density_tasks_left;
 
