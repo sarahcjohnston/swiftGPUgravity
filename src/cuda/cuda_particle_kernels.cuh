@@ -38,6 +38,10 @@ extern "C" {
 #include <config.h>
 #include <stdio.h>
 
+#ifdef WITH_HIP
+__device__ int gpu_force_nan_reported = 0;
+#endif
+
 /**
  * @brief Naive kernel computing the density interactions of a single particle
  * assigning one CUDA thread to each particle in cell i and looping over cell j
@@ -58,7 +62,7 @@ __device__ __forceinline__ void neighbour_interactions_density(
     int b_id_local, int tid) {
 
   /*Declare a variable to use up allocated shared memory*/
-  extern __shared__ unsigned char smem[];
+  extern __shared__ __align__(16) unsigned char smem[];
   /*Assign range of memory to use for x, y, z and h*/
   double2 *s_x_y = reinterpret_cast<double2 *>(smem);
   double2 *s_z_h =
@@ -1592,6 +1596,33 @@ __device__ __forceinline__ void neighbour_interactions_force(
         const float cj = pj_b_c_av_ad.y;
         const float aviscj = pj_b_c_av_ad.z;
         const float adiffj = pj_b_c_av_ad.w;
+        
+        #ifdef WITH_HIP
+if (!(hj > 0.f) || !(mj > 0.f) || !(rhoj > 0.f) ||
+    !isfinite(hj) || !isfinite(mj) || !isfinite(rhoj)) {
+
+    const struct gpu_part_data_f raw =
+        d_parts_send[j_idx].p_data;
+
+    if (atomicCAS(&gpu_force_nan_reported, 0, 1) == 0) {
+        printf(
+            "BAD HIP SOURCE:\n"
+            "i=%d j=%d j_start=%d j_end=%d\n"
+            "shared: h=%e m=%e rho=%e\n"
+            "global: h=%e m=%e rho=%e\n"
+            "source_pos=(%e,%e,%e)\n",
+            i_id, j_idx, j_start, j_end,
+            hj, mj, rhoj,
+            raw.z_h.y,
+            raw.vx_m.w,
+            raw.u_rho_f_p.y,
+            pj_x_y.x, pj_x_y.y, pj_z_h.x);
+    }
+
+    /* Diagnostic only: do not calculate forces from invalid data. */
+    continue;
+}
+#endif
 
         /*second condition is a fix for if min_ngb_tbi is zero.
          * Unsure why that would be but hey ho*/
@@ -1599,8 +1630,11 @@ __device__ __forceinline__ void neighbour_interactions_force(
         if (pj_tb_min_ngb_tb.x > 0)
           min_ngb_tbi = min(pj_tb_min_ngb_tb.x, min_ngb_tbi);
 
-        const float inv_r = rsqrtf(r2);
-        const float r = r2 * inv_r;
+        //const float inv_r = rsqrtf(r2); MYCOMMENT
+        //const float r = r2 * inv_r;
+        /* Match the CPU SPHENIX zero-separation safeguard. */
+	const float inv_r = (r2 > 0.f) ? rsqrtf(r2) : 0.f;
+	const float r = (r2 > 0.f) ? r2 * inv_r : 0.f;
 
         /* Get the kernel for hj */
         float wi, wi_dx, wj, wj_dx;
@@ -1901,9 +1935,12 @@ __device__ __forceinline__ void neighbour_interactions_force_j_parallel(
 
         if (timebin_j > 0) local.min_ngb_tb = timebin_j;
 
-        const float inv_r = rsqrtf(r2);
+        //const float inv_r = rsqrtf(r2); MYCOMMENT
         /* Recover some data */
-        const float r = r2 * inv_r;
+        //const float r = r2 * inv_r;
+        /* Match the CPU SPHENIX zero-separation safeguard. */
+	const float inv_r = (r2 > 0.f) ? rsqrtf(r2) : 0.f;
+	const float r = (r2 > 0.f) ? r2 * inv_r : 0.f;
         /* Get the kernel for hi */
         float wi, wi_dx;
         float wj, wj_dx;

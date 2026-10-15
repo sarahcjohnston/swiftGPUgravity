@@ -751,6 +751,35 @@ __attribute__((always_inline)) INLINE static void runner_gpu_launch(
           "GPU memset: GPU error '%s' for task_subtype %s: cpuid=%i ",
           GPUGetErrorString(cu_error), subtaskID_names[task_subtype], r->cpuid);
     }
+    
+    #ifdef WITH_HIP
+for (int u = 0; u < md->n_unique; ++u) {
+
+    const int start = md->unique_start_end[u].x;
+    const int end = md->unique_start_end[u].y;
+
+    /* The last entry is the cell-position marker. */
+    for (int k = start; k < end - 1; ++k) {
+
+        const struct gpu_part_data_f *p =
+            &buf->parts_send_f[k].p_data;
+
+        if (!(p->z_h.y > 0.0) ||
+            !(p->vx_m.w > 0.f) ||
+            !(p->u_rho_f_p.y > 0.f)) {
+
+            error(
+                "BAD FORCE PACKING: "
+                "cell=%d index=%d range=[%d,%d) "
+                "h=%e mass=%e rho=%e",
+                u, k, start, end,
+                p->z_h.y,
+                p->vx_m.w,
+                p->u_rho_f_p.y);
+        }
+    }
+}
+#endif
 
     /*"Give to a gracious message a host of tongues"
      *Copy the unique particle data to the GPU*/

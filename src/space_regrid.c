@@ -29,6 +29,8 @@
 #include "cell.h"
 #include "engine.h"
 #include "scheduler.h"
+#include <float.h>
+#include <math.h>
 
 /**
  * @brief Re-build the top-level cell grid.
@@ -48,13 +50,46 @@ void space_regrid(struct space *s, int verbose) {
   /* Run through the cells and get the current h_max. */
   // tic = getticks();
   float h_max = s->cell_min / kernel_gamma / space_stretch;
+  
+  fprintf(stderr,
+        "REGRID ENTRY: cells_top=%p nr_cells=%d "
+        "local_cells=%p nr_local=%d "
+        "parts=%p nr_parts=%zu\n",
+        (void *)s->cells_top,
+        s->nr_cells,
+        (void *)s->local_cells_with_particles_top,
+        s->nr_local_cells_with_particles,
+        (void *)s->parts,
+        nr_parts);
+
+fflush(stderr);
+
   if (nr_parts > 0) {
 
     /* Can we use the list of local non-empty top-level cells? */
     if (s->local_cells_with_particles_top != NULL) {
-      for (int k = 0; k < s->nr_local_cells_with_particles; ++k) {
-        const struct cell *c =
-            &s->cells_top[s->local_cells_with_particles_top[k]];
+  for (int k = 0; k < s->nr_local_cells_with_particles; ++k) {
+
+    const int cid = s->local_cells_with_particles_top[k];
+
+    if (cid < 0 || cid >= s->nr_cells) {
+      error("Invalid local cell index: k=%d cid=%d nr_cells=%d",
+            k, cid, s->nr_cells);
+    }
+
+    const struct cell *c = &s->cells_top[cid];
+
+    fprintf(stderr,
+            "REGRID CELL: k=%d cid=%d "
+            "gas_count=%d hydro=%e "
+            "stars=%e bh=%e sinks=%e\n",
+            k, cid,
+            c->hydro.count,
+            c->hydro.h_max,
+            c->stars.h_max,
+            c->black_holes.h_max,
+            c->sinks.h_max);
+    fflush(stderr);
         if (c->hydro.h_max > h_max) {
           h_max = c->hydro.h_max;
         }
@@ -118,6 +153,20 @@ void space_regrid(struct space *s, int verbose) {
   if (verbose) message("h_max is %.3e (cell_min=%.3e).", h_max, s->cell_min);
 
   /* Get the new putative cell dimensions. */
+  fprintf(stderr, "REGRID FINAL: h_max=%e\n", h_max);
+  fflush(stderr);
+  message(
+    "REGRID DEBUG: h_max=%e cell_min=%e "
+    "kernel_gamma=%e space_stretch=%e "
+    "box=(%e,%e,%e)",
+    h_max,
+    s->cell_min,
+    (double)kernel_gamma,
+    (double)space_stretch,
+    s->dim[0],
+    s->dim[1],
+    s->dim[2]);
+    
   const int cdim[3] = {
       (int)floor(s->dim[0] /
                  fmax(h_max * kernel_gamma * space_stretch, s->cell_min)),

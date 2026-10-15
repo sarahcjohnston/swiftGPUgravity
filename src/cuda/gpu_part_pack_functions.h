@@ -83,6 +83,23 @@ __attribute__((always_inline)) INLINE static void gpu_unpack_part_density(
 #endif
 
     struct gpu_part_recv_d pr = parts_recv[i];
+    
+    static int density_debug_count = 0;
+
+if (i == 0 &&
+    __sync_fetch_and_add(&density_debug_count, 1) < 12) {
+
+  fprintf(stderr,
+          "GPU DENSITY OUTPUT: id=%lld h=%e "
+          "rho_add=%e wcount_add=%e "
+          "rho_dh_add=%e wcount_dh_add=%e\n",
+          (long long)p->id,
+          p->h,
+          pr.rho_rhodh_wcount_wcount_dh.x,
+          pr.rho_rhodh_wcount_wcount_dh.z,
+          pr.rho_rhodh_wcount_wcount_dh.y,
+          pr.rho_rhodh_wcount_wcount_dh.w);
+}
 
     float rho = part_get_rho(p) + pr.rho_rhodh_wcount_wcount_dh.x;
     part_set_rho(p, rho);
@@ -223,6 +240,36 @@ __attribute__((always_inline)) INLINE static void gpu_unpack_part_force(
 #endif
 
     struct gpu_part_recv_f pr = parts_recv[i];
+    
+    static int force_debug_count = 0;
+
+const int interesting =
+    !isfinite(pr.udt_hdt.x) ||
+    !isfinite(pr.udt_hdt.y) ||
+    !isfinite(pr.a_hydro.x) ||
+    !isfinite(pr.a_hydro.y) ||
+    !isfinite(pr.a_hydro.z) ||
+    pr.udt_hdt.y != 0.f;
+
+if (interesting &&
+    __sync_fetch_and_add(&force_debug_count, 1) < 20) {
+
+  fprintf(stderr,
+          "HIP FORCE: id=%lld h=%e rho=%e "
+          "hdt_before=%e hdt_add=%e udt_add=%e "
+          "acc=(%e,%e,%e)\n",
+          (long long)p->id,
+          p->h,
+          p->rho,
+          part_get_h_dt(p),
+          pr.udt_hdt.y,
+          pr.udt_hdt.x,
+          pr.a_hydro.x,
+          pr.a_hydro.y,
+          pr.a_hydro.z);
+
+  fflush(stderr);
+}
 
     float *a = part_get_a_hydro(p);
     a[0] += pr.a_hydro.x;
@@ -269,16 +316,16 @@ __attribute__((always_inline)) INLINE static void gpu_pack_part_density(
     struct gpu_part_data_d *ps = &parts_buffer[pack_ind + i].p_data;
 
     const double *x = part_get_const_x(p);
-    ps[i].x_y.x = x[0];
-    ps[i].x_y.y = x[1];
-    ps[i].z_h.x = x[2];
-    ps[i].z_h.y = part_get_h(p);
+    ps->x_y.x = x[0];
+    ps->x_y.y = x[1];
+    ps->z_h.x = x[2];
+    ps->z_h.y = part_get_h(p);
 
     const float *v = part_get_const_v(p);
-    ps[i].vx_m.x = v[0];
-    ps[i].vx_m.y = v[1];
-    ps[i].vx_m.z = v[2];
-    ps[i].vx_m.w = part_get_mass(p);
+    ps->vx_m.x = v[0];
+    ps->vx_m.y = v[1];
+    ps->vx_m.z = v[2];
+    ps->vx_m.w = part_get_mass(p);
 
   }
   /*We've packed all the particles. Now insert the cell position
@@ -316,24 +363,24 @@ __attribute__((always_inline)) INLINE static void gpu_pack_part_gradient(
     struct gpu_part_data_g *ps = &parts_buffer[pack_ind + i].p_data;
 
     const double *x = part_get_const_x(p);
-    ps[i].x_y.x = x[0];
-    ps[i].x_y.y = x[1];
-    ps[i].z_h.x = x[2];
-    ps[i].z_h.y = part_get_h(p);
+    ps->x_y.x = x[0];
+    ps->x_y.y = x[1];
+    ps->z_h.x = x[2];
+    ps->z_h.y = part_get_h(p);
 
     const float *v = part_get_const_v(p);
-    ps[i].vx_m.x = v[0];
-    ps[i].vx_m.y = v[1];
-    ps[i].vx_m.z = v[2];
-    ps[i].vx_m.w = part_get_mass(p);
+    ps->vx_m.x = v[0];
+    ps->vx_m.y = v[1];
+    ps->vx_m.z = v[2];
+    ps->vx_m.w = part_get_mass(p);
 
-    ps[i].u_rho_c_aviscmax.x = part_get_u(p);
-    ps[i].u_rho_c_aviscmax.y = part_get_rho(p);
-    ps[i].u_rho_c_aviscmax.z = part_get_soundspeed(p);
-    ps[i].u_rho_c_aviscmax.w = part_get_alpha_visc_max_ngb(p);
+    ps->u_rho_c_aviscmax.x = part_get_u(p);
+    ps->u_rho_c_aviscmax.y = part_get_rho(p);
+    ps->u_rho_c_aviscmax.z = part_get_soundspeed(p);
+    ps->u_rho_c_aviscmax.w = part_get_alpha_visc_max_ngb(p);
 
-    ps[i].avisc_vsig.x = part_get_alpha_av(p);
-    ps[i].avisc_vsig.y = part_get_v_sig(p);
+    ps->avisc_vsig.x = part_get_alpha_av(p);
+    ps->avisc_vsig.y = part_get_v_sig(p);
 
   }
   /*We've packed all the particles. Now insert the cell position into the count index*/
@@ -369,29 +416,29 @@ __attribute__((always_inline)) INLINE static void gpu_pack_part_force(
     struct gpu_part_data_f *ps = &parts_buffer[pack_ind].p_data;
 
     const double *x = part_get_const_x(p);
-    ps[i].x_y.x = x[0];
-    ps[i].x_y.y = x[1];
-    ps[i].z_h.x = x[2];
-    ps[i].z_h.y = part_get_h(p);
+    ps->x_y.x = x[0];
+    ps->x_y.y = x[1];
+    ps->z_h.x = x[2];
+    ps->z_h.y = part_get_h(p);
 
     const float *v = part_get_const_v(p);
-    ps[i].vx_m.x = v[0];
-    ps[i].vx_m.y = v[1];
-    ps[i].vx_m.z = v[2];
-    ps[i].vx_m.w = part_get_mass(p);
+    ps->vx_m.x = v[0];
+    ps->vx_m.y = v[1];
+    ps->vx_m.z = v[2];
+    ps->vx_m.w = part_get_mass(p);
 
-    ps[i].u_rho_f_p.x = part_get_u(p);
-    ps[i].u_rho_f_p.y = part_get_rho(p);
-    ps[i].u_rho_f_p.z = part_get_f_gradh(p);
-    ps[i].u_rho_f_p.w = part_get_pressure(p);
+    ps->u_rho_f_p.x = part_get_u(p);
+    ps->u_rho_f_p.y = part_get_rho(p);
+    ps->u_rho_f_p.z = part_get_f_gradh(p);
+    ps->u_rho_f_p.w = part_get_pressure(p);
 
-    ps[i].bals_c_avisc_adiff.x = part_get_balsara(p);
-    ps[i].bals_c_avisc_adiff.y = part_get_soundspeed(p);
-    ps[i].bals_c_avisc_adiff.z = part_get_alpha_av(p);
-    ps[i].bals_c_avisc_adiff.w = part_get_alpha_diff(p);
+    ps->bals_c_avisc_adiff.x = part_get_balsara(p);
+    ps->bals_c_avisc_adiff.y = part_get_soundspeed(p);
+    ps->bals_c_avisc_adiff.z = part_get_alpha_av(p);
+    ps->bals_c_avisc_adiff.w = part_get_alpha_diff(p);
 
-    ps[i].timebin_minngbtimebin.x = part_get_time_bin(p);
-    ps[i].timebin_minngbtimebin.y = part_get_timestep_limiter_min_ngb_time_bin(p);
+    ps->timebin_minngbtimebin.x = part_get_time_bin(p);
+    ps->timebin_minngbtimebin.y = part_get_timestep_limiter_min_ngb_time_bin(p);
     if(part_get_timestep_limiter_min_ngb_time_bin(p) == 0)
     	error("Zero min timebin");
 
