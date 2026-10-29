@@ -37,17 +37,17 @@ The configure interface also accepts backend-specific extra flags:
 - `--with-hip-flags="..."` appends extra HIP compiler flags to the default
   HIP flags.
 
-Recommended CUDA (works without root):
+Recommended CUDA:
 
 ```bash
-./configure --with-cuda --enable-ipo --with-tbbmalloc
+./configure --with-cuda="root/to/cuda" --enable-ipo --with-tbbmalloc --disable-hand-vec
 make -j
 ```
 
 Recommended HIP (requires extra flags and warnings to be enabled):
 
 ```bash
-./configure --with-hip=/opt/rocm-7.2.0   --with-hip-flags="--offload-arch=gfx942 -fgpu-default-stream=per-thread -munsafe-fp-atomics" --enable-ipo --with-tbbmalloc --enable-compiler-warnings
+./configure --with-hip="root/to/hip"   --with-hip-flags="--offload-arch=gfxXXX -fgpu-default-stream=per-thread -munsafe-fp-atomics" --enable-ipo --with-tbbmalloc --enable-compiler-warnings
 make -j
 ```
 
