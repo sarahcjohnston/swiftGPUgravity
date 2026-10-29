@@ -1293,10 +1293,8 @@ static inline ticks task_get_plot_toc(const struct task *t) {
       t->gpu_host_toc > t->tic) {
     return t->gpu_host_toc;
   }
-
-  return t->toc;
-  
   #endif
+  return t->toc;
 }
 #endif
 

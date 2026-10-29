@@ -156,34 +156,6 @@ void runner_gpu_bind_device(struct runner *r) {
 }
 
 /**
- * @brief Record debugging information when a GPU task is completed.
- *
- * Increments the GPU completion counter for the task and records the runner,
- * queue, MPI rank, and code location responsible for the completion. An error
- * is raised if the task has already been marked as completed previously.
- *
- * @param r The #runner completing the task.
- * @param t The #task being marked as complete.
- * @param where String identifying the code location performing the completion.
- */
-static void runner_gpu_mark_done_debug(
-    struct runner *r,
-    struct task *t,
-    const char *where) {
-
-  if (t == NULL)
-    error("%s: NULL task passed to GPU completion marker.", where);
-
-#ifdef WITH_MPI
-  int rank = -1;
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-#else
-  int rank = 0;
-#endif
-
-}
-
-/**
  * @brief GPU error check
  *
  * @param where	The string for the function that causes the error
@@ -811,8 +783,6 @@ static void runner_gpu_complete_self_task(struct runner *r,
 
 	t->gpu_counted = 0;
 
-  runner_gpu_mark_done_debug(r, t, "runner_gpu_complete_self_task");
-
   scheduler_done(sched, t);
 }
 
@@ -886,8 +856,6 @@ void runner_gpu_complete_pair_task(struct runner *r, struct scheduler *sched,
   (void)lock_unlock(&sched->queues[r->qid].lock);
 
   t->gpu_counted = 0;
-
-  runner_gpu_mark_done_debug(r, t, "runner_gpu_complete_pair_task");
 
   scheduler_done(sched, t);
 }
@@ -970,55 +938,6 @@ void runner_gpu_complete_self_batch(struct runner *r, struct scheduler *sched,
   runner_gpu_check_queue_counters(r, sched,
                                   "runner_gpu_complete_self_batch:end");
 }
-
-/**
- * @brief Complete all non-internal pair-gravity tasks in the current GPU batch.
- *
- * Marks each scheduler pair task in the batch as complete, excluding pair
- * interactions generated internally from self-gravity walks. The function
- * then clears the pair task and cell pointers and resets the pair-gravity
- * packing metadata for the substream.
- *
- * @param r The #runner owning the batch.
- * @param sched The scheduler tracking the tasks.
- * @param substream The GPU substream containing the completed pair-gravity
- *                  batch.
- */
-void runner_gpu_complete_pair_batch(struct runner *r, struct scheduler *sched,
-                                    struct gpu_runner_substream *substream) {
-  const int count = substream->grav_batch_pair_count;
-
-  for (int pair_id = 0; pair_id < count; pair_id++) {
-    struct task *task = substream->grav_tasks_pair[pair_id];
-    const int internal = substream->grav_pair_internal_from_self[pair_id];
-
-    if (!internal && task != NULL)
-      runner_gpu_complete_pair_task(r, sched, task);
-
-    substream->grav_cells_pair[2 * pair_id] = NULL;
-    substream->grav_cells_pair[2 * pair_id + 1] = NULL;
-    substream->grav_tasks_pair[pair_id] = NULL;
-    substream->grav_pair_internal_from_self[pair_id] = 0;
-  }
-
-  substream->grav_batch_pair_count = 0;
-  substream->busy = 0;
-
-  for (int i = 0; i < count; i++) {
-    substream->pair_counts_h[i] = 0;
-    substream->pair_offsets_h[i] = 0;
-    substream->pair_active_counts_h[i] = 0;
-    substream->pair_active_offsets_h[i] = 0;
-    substream->pair_cell_flags_h[i] = 0;
-  }
-
-  substream->pair_total_count = 0;
-  substream->pair_unique_cell_count = 0;
-  substream->pair_total_active_count = 0;
-  substream->pair_max_active_count = 0;
-  substream->pair_total_pair_active_count = 0;
-}
-
 
 /**
  * @brief Pack one leaf pair-gravity interaction into a GPU batch.
@@ -1715,7 +1634,36 @@ runner_gpu_write_timeline_row(
           grav_cells_pair[2 * pair_id + 1],
           slot_j,
           recv_j);
+          
+      #ifdef SWIFT_DEBUG_CHECKS
+/* Account for direct particle-particle interactions processed on the GPU. */
+struct cell *ci_pair = grav_cells_pair[2 * pair_id];
+struct cell *cj_pair = grav_cells_pair[2 * pair_id + 1];
+
+const int count_i = ci_pair->grav.count;
+const int count_j = cj_pair->grav.count;
+
+/* Only local, active cells receive force contributions. */
+if (ci_pair->nodeID == e->nodeID &&
+    cell_is_active_gravity(ci_pair, e)) {
+
+  for (int i = 0; i < count_i; i++) {
+    accumulate_add_ll(
+        &ci_pair->grav.parts[i].num_interacted, count_j);
+  }
+}
+
+if (cj_pair->nodeID == e->nodeID &&
+    cell_is_active_gravity(cj_pair, e)) {
+
+  for (int j = 0; j < count_j; j++) {
+    accumulate_add_ll(
+        &cj_pair->grav.parts[j].num_interacted, count_i);
+  }
+}
+#endif
     }
+    
 
     TIMER_TOC(timer_dopair_grav_pp);
 
@@ -2663,10 +2611,13 @@ static int runner_gpu_choose_batch_ncells(const struct engine *e,
   const int nstreams = parser_get_opt_param_int(
       e->parameter_file, "GPU:nstreams", 1);
 
+  /* Estimate memory for self and pair gravity buffers. */
+  const size_t bytes_per_particle =
+    2 * (sizeof(float4) + sizeof(float)) +
+    2 * sizeof(struct gravity_gpu_values_recv);
+
   const size_t bytes_per_cell_per_substream =
-      (size_t)max_cell_size *
-      (2 * sizeof(struct gravity_gpu_values_send) +
-       2 * sizeof(struct gravity_gpu_values_recv));
+    (size_t)max_cell_size * bytes_per_particle;
 
   const size_t bytes_per_cell_per_runner =
       (size_t)nstreams * bytes_per_cell_per_substream;
@@ -2944,18 +2895,22 @@ void runner_gpu_init(struct runner *r) {
   if (gpu->substreams == NULL)
     error("Failed to allocate GPU substreams");
 
-  const size_t send_bytes =
-      (size_t)gpu->grav_batch_ncells *
-      (size_t)gpu->grav_max_cell_size *
-      sizeof(struct gravity_gpu_values_send);
+  const size_t nparticles =
+    (size_t)gpu->grav_batch_ncells *
+    (size_t)gpu->grav_max_cell_size;
+
+  const size_t pos_mass_bytes =
+    nparticles * sizeof(float4);
+
+  const size_t h_bytes =
+    nparticles * sizeof(float);
 
   const size_t recv_bytes =
-      (size_t)gpu->grav_batch_ncells *
-      (size_t)gpu->grav_max_cell_size *
-      sizeof(struct gravity_gpu_values_recv);
+    nparticles * sizeof(struct gravity_gpu_values_recv);
 
+  /* Conservative estimate for self and pair gravity buffers. */
   const size_t bytes_per_substream =
-      2 * send_bytes + 2 * recv_bytes; /* self + pair */
+    2 * (pos_mass_bytes + h_bytes + recv_bytes);
 
   size_t free_bytes = 0, total_bytes = 0;
   GPUMemGetInfo(&free_bytes, &total_bytes);
@@ -3108,9 +3063,6 @@ void runner_gpu_init(struct runner *r) {
 
     GPUMalloc((void **)&substream->send_self_h_d, h_bytes);
     GPUHostMalloc((void **)&substream->send_self_h, h_bytes);
-
-    GPUMalloc((void **)&substream->recv_self_d, recv_bytes);
-    GPUHostMalloc((void **)&substream->recv_self, recv_bytes);
     
     GPUMalloc((void **)&substream->recv_self_active_d, active_recv_bytes);
     GPUHostMalloc((void **)&substream->recv_self_active, active_recv_bytes);
@@ -3138,8 +3090,6 @@ void runner_gpu_init(struct runner *r) {
     substream->self_rmax_h =
         malloc((size_t)gpu->grav_batch_ncells * sizeof(float));
 
-    GPUMalloc((void **)&substream->self_rmax_d,
-              (size_t)gpu->grav_batch_ncells * sizeof(float));
     GPUMalloc((void **)&substream->self_counts_d,
               (size_t)gpu->grav_batch_ncells * sizeof(int));
     GPUMalloc((void **)&substream->self_offsets_d,
@@ -3331,9 +3281,6 @@ void runner_gpu_clean(struct runner *r) {
 
     free(substream->self_use_full_h);
     GPUFree(substream->self_use_full_d);
-    
-    GPUFreeHost(substream->recv_self);
-    GPUFree(substream->recv_self_d);
 
     free(substream->grav_cells_self);
     free(substream->grav_tasks_self);
@@ -3356,7 +3303,6 @@ void runner_gpu_clean(struct runner *r) {
     GPUFree(substream->recv_self_active_d);
     
     free(substream->self_rmax_h);
-    GPUFree(substream->self_rmax_d);
 
     /* Stream/event */
     GPUEventDestroy(substream->done);
@@ -3379,8 +3325,6 @@ void runner_gpu_clean(struct runner *r) {
     substream->send_self_pos_mass_d = NULL;
     substream->send_self_h = NULL;
     substream->send_self_h_d = NULL;
-    substream->recv_self = NULL;
-    substream->recv_self_d = NULL;
     substream->grav_cells_self = NULL;
     substream->grav_tasks_self = NULL;
     substream->grav_batch_self_count = 0;
@@ -3390,7 +3334,6 @@ void runner_gpu_clean(struct runner *r) {
     substream->self_offsets_d = NULL;
     substream->self_total_count = 0;
     substream->self_rmax_h = NULL;
-    substream->self_rmax_d = NULL;
 
     substream->busy = 0;
   }
@@ -3845,8 +3788,11 @@ enum runner_gpu_task_type runner_doself_recursive_grav_gpu(
   }
   
   #ifdef SWIFT_DEBUG_CHECKS
-  if (gettimer && substream->grav_batch_self_count != 0)
-    error("Top-level self task returned with leftover packed self work.");
+  if (gettimer && final_type == packed_task) {
+    if (!t->gpu_counted || t->gpu_completed) {
+      error("Self task deferred without valid GPU bookkeeping.");
+    }
+  }
   #endif
 
   if (gettimer) TIMER_TOC(timer_dosub_self_grav);
