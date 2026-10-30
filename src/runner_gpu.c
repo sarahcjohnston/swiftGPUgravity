@@ -3054,32 +3054,28 @@ static void runner_gpu_hydro_set_params(struct runner *r) {
   const int pack_size =
       parser_get_param_int(
           e->parameter_file,
-          "Scheduler:gpu_pack_size");
+          "GPU:hydro_pack_size");
 
-  /*
-   * Preserve the behaviour of the hydro GPU branch for now:
-   * bundle_size is currently read from the same parameter.
-   */
   const int bundle_size =
       parser_get_param_int(
           e->parameter_file,
-          "Scheduler:gpu_pack_size");
+          "GPU:hydro_bundle_size");
 
   const int tester_var =
       parser_get_param_int(
           e->parameter_file,
-          "Scheduler:gpu_tester_param");
+          "GPU:hydro_tester_param");
 
   const int gpu_recursion_max_depth =
       parser_get_opt_param_int(
           e->parameter_file,
-          "Scheduler:gpu_recursion_max_depth",
+          "GPU:hydro_recursion_max_depth",
           4);
 
   const int gpu_part_buffer_size =
       parser_get_opt_param_int(
           e->parameter_file,
-          "Scheduler:gpu_part_buffer_size",
+          "Scheduler:hydro_part_buffer_size",
           -1);
 
   if (e->s->maxdepth > gpu_recursion_max_depth) {
