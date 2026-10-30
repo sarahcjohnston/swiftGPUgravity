@@ -31,6 +31,7 @@ tumbler of 16yrs old Lagavulin.
    GettingStarted/index
    CommandLineOptions/index
    ParameterFiles/index
+   GPU/index
    InitialConditions/index
    Snapshots/index
    HydroSchemes/index
