@@ -446,7 +446,10 @@ static void runner_gpu_write_timing_row(
     double h2d_s,
     double kernel_s,
     double d2h_s,
-    double unpack_s) {
+    double unpack_s,
+    int npairs,
+    const char *flush_reason,
+    double sync_wait_s) {
 
 	#ifdef SWIFT_USE_TIMERS
 	const ticks io_tic = getticks();
@@ -465,26 +468,31 @@ static void runner_gpu_write_timing_row(
   fseek(fp, 0, SEEK_END);
 
   if (ftell(fp) == 0) {
-  fprintf(fp,
-          "kind,step,runner,stream,nslots,nparticles,h2d_bytes,"
-          "pack_s,h2d_s,kernel_s,d2h_s,unpack_s\n");
-	}
+    fprintf(fp,
+        "kind,step,runner,stream,nslots,nparticles,h2d_bytes,"
+        "pack_s,h2d_s,kernel_s,d2h_s,unpack_s,"
+        "npairs,flush_reason,sync_wait_s\n");
+}
 
-  fprintf(fp,
-        "%s,%lld,%d,%d,%d,%d,%zu,"
-        "%.9e,%.9e,%.9e,%.9e,%.9e\n",
-        kind,
-        step,
-        runner_id,
-        stream_id,
-        nslots,
-        nparts,
-        h2d_bytes,
-        pack_s,
-        h2d_s,
-        kernel_s,
-        d2h_s,
-        unpack_s);
+fprintf(fp,
+    "%s,%lld,%d,%d,%d,%d,%zu,"
+    "%.9e,%.9e,%.9e,%.9e,%.9e,"
+    "%d,%s,%.9e\n",
+    kind,
+    step,
+    runner_id,
+    stream_id,
+    nslots,
+    nparts,
+    h2d_bytes,
+    pack_s,
+    h2d_s,
+    kernel_s,
+    d2h_s,
+    unpack_s,
+    npairs,
+    flush_reason,
+    sync_wait_s);
 
   fclose(fp);
 
@@ -1281,7 +1289,8 @@ static void runner_dopair_grav_pp_flush(
     struct task *current_task,
     int ncells,
     int max_cell_size,
-    GPUStream stream) {
+    GPUStream stream,
+    const char *flush_reason) {
 
   runner_gpu_bind_device(r);
 
@@ -1344,6 +1353,7 @@ static void runner_dopair_grav_pp_flush(
   double kernel_s = 0.0;
   double d2h_s = 0.0;
   double unpack_s = 0.0;
+  double sync_wait_s = 0.0;
   #endif
 
   const struct engine *e = r->e;
@@ -1542,16 +1552,39 @@ GPUEventRecord(h2d_start, stream);
     #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
     GPUEventRecord(d2h_stop, stream);
     #endif 
-    GPUEventRecord(substream->done, stream);
-    #ifdef SWIFT_USE_TIMERS
-    const ticks gpu_wait_tic = getticks();
-    #endif
+    fprintf(stderr,
+        "PAIR GPU WAIT: step=%lld runner=%d "
+        "npairs=%d nslots=%d\n",
+        (long long)e->step, r->id,
+        npairs, nslots);
+fflush(stderr);
 
-    GPUEventSynchronize(substream->done);
+GPUError err = GPUEventRecord(substream->done, stream);
+if (err != GPU_SUCCESS)
+  error("Pair event record: %s", GPUGetErrorString(err));
 
-    #ifdef SWIFT_USE_TIMERS
-    timers_toc(timer_gpu_grav_wait, gpu_wait_tic);
-    #endif
+#ifdef SWIFT_GPU_TIMING
+const double sync_t0 = runner_gpu_walltime_s();
+#endif
+
+#ifdef SWIFT_USE_TIMERS
+const ticks gpu_wait_tic = getticks();
+#endif
+
+err = GPUEventSynchronize(substream->done);
+if (err != GPU_SUCCESS)
+  error("Pair event sync: %s", GPUGetErrorString(err));
+
+fprintf(stderr, "PAIR GPU DONE: runner=%d\n", r->id);
+fflush(stderr);
+
+#ifdef SWIFT_USE_TIMERS
+timers_toc(timer_gpu_grav_wait, gpu_wait_tic);
+#endif
+
+#ifdef SWIFT_GPU_TIMING
+sync_wait_s = runner_gpu_walltime_s() - sync_t0;
+#endif
     
     #ifdef SWIFT_DEBUG_TASKS
   gpu_sync_toc = getticks();
@@ -1752,7 +1785,10 @@ runner_gpu_write_timing_row(
     h2d_s,
     kernel_s,
     d2h_s,
-    unpack_s);
+    unpack_s,
+    npairs,
+    flush_reason,
+    sync_wait_s);
 
 #endif
       
@@ -1846,7 +1882,7 @@ enum runner_gpu_task_type runner_dopair_grav_pp_gpu(
     runner_dopair_grav_pp_flush(
         r, substream,
         grav_cells_pair, grav_tasks_pair,
-        t, ncells, max_cell_size, stream);
+        t, ncells, max_cell_size, stream, "capacity");
 
     result = flushed_pair_task;
   }
@@ -1866,7 +1902,7 @@ enum runner_gpu_task_type runner_dopair_grav_pp_gpu(
     runner_dopair_grav_pp_flush(
         r, substream,
         grav_cells_pair, grav_tasks_pair,
-        t, ncells, max_cell_size, stream);
+        t, ncells, max_cell_size, stream, "full");
 
     return flushed_pair_task;
   }
@@ -2084,6 +2120,7 @@ static void runner_doself_grav_pp_flush(
   double kernel_s = 0.0;
   double d2h_s = 0.0;
   double unpack_s = 0.0;
+  double sync_wait_s = 0.0;
 
 #endif
 
@@ -2329,7 +2366,10 @@ static void runner_doself_grav_pp_flush(
 	    h2d_s,
 	    kernel_s,
 	    d2h_s,
-	    unpack_s);
+	    unpack_s,
+	    0,
+    	    "self_full",
+    	    sync_wait_s);
     #endif
     
     #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
@@ -3463,6 +3503,7 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
   double kernel_s = 0.0;
   double d2h_s = 0.0;
   double unpack_s = 0.0;
+  double sync_wait_s = 0.0;
 
 #endif
 
@@ -3704,7 +3745,10 @@ enum runner_gpu_task_type runner_gpu_flush_leftover_self(struct runner *r) {
 	    h2d_s,
 	    kernel_s,
 	    d2h_s,
-	    unpack_s);
+	    unpack_s,
+    	    0,
+    	    "self_idle",
+    	    sync_wait_s);
     #endif 
     
     #if defined(SWIFT_GPU_TIMING) || defined(SWIFT_DEBUG_TASKS)
@@ -3752,7 +3796,8 @@ for (int l = 0; l < r->gpu.nstreams; l++) {
         NULL,
         r->gpu.grav_batch_ncells,
         r->gpu.grav_max_cell_size,
-        ss->stream);
+        ss->stream,
+    	"idle");
 
     result = flushed_pair_task;
   }
@@ -3856,7 +3901,8 @@ enum runner_gpu_task_type runner_doself_recursive_grav_gpu(
 	      t,  /* current parent self task */
 	      ncells,
 	      max_cell_size,
-	      substream->stream);
+	      substream->stream,
+    	      "self_boundary");
 	}
       
 
